@@ -1,0 +1,3 @@
+// Controllers directory
+// Create your route controllers here
+// Example: exports.getUsers = async (req, res, next) => { ... };
