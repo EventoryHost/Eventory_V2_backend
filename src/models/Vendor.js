@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
 const VendorSchema = new mongoose.Schema({
   id: {
@@ -7,18 +7,54 @@ const VendorSchema = new mongoose.Schema({
     required: true,
   },
 
-  name: String,
-
-  vendorType: {
-    type: String,
-    enum: ["caterer", "decorator", "venue", "photographer", "makeup", "dj"],
+  businessName: String,
+  isIndividual: {
+    type: Boolean,
+    default: false,
   },
+  pocName: String,
+
+  vendorType: String,
+  eventCategories: [String],
 
   email: String,
   phone: String,
 
   city: String,
   state: String,
+  serviceAreas: [String],
+
+  teamSize: String,
+  bookingsPerYear: String,
+  experience: String,
+
+  profilePicture: String,
+  description: String,
+  businessPhotos: [String],
+  coverImage: String,
+
+  aadharNumber: String,
+  isAadharVerified: {
+    type: Boolean,
+    default: false,
+  },
+  panNumber: String,
+  isPanVerified: {
+    type: Boolean,
+    default: false,
+  },
+  gstNumber: String,
+  isGstVerified: {
+    type: Boolean,
+    default: false,
+  },
+
+  bankDetails: {
+    accountNumber: String,
+    ifscCode: String,
+    bankName: String,
+    branchName: String,
+  },
 
   isVerified: {
     type: Boolean,
@@ -31,4 +67,4 @@ const VendorSchema = new mongoose.Schema({
   },
 });
 
-module.exports = mongoose.model("Vendor", VendorSchema);
+export default mongoose.model("Vendor", VendorSchema);

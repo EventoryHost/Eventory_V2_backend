@@ -1,6 +1,34 @@
-const express = require("express");
+import express from "express";
 const router = express.Router();
-
+import vendorRoutes from "./vendorRoutes.js";
+import authRoutes from "./authRoutes.js";
+import verificationRoutes from "./verificationRoutes.js";
+/**
+ * @swagger
+ * /api/health:
+ *   get:
+ *     summary: API Health Check
+ *     description: Returns the status of the API server.
+ *     tags:
+ *       - System
+ *     responses:
+ *       200:
+ *         description: Server is running successfully.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Server is running
+ *                 timestamp:
+ *                   type: string
+ *                   format: date-time
+ */
 // Health check
 router.get("/health", (req, res) => {
   res.status(200).json({
@@ -11,6 +39,8 @@ router.get("/health", (req, res) => {
 });
 
 // Mount feature routes below
-// Example: router.use("/users", require("./userRoutes"));
+router.use("/vendors", vendorRoutes);
+router.use("/auth", authRoutes);
+router.use("/verification", verificationRoutes);
 
-module.exports = router;
+export default router;

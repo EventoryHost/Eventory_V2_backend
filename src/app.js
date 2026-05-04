@@ -1,9 +1,10 @@
-const express = require("express");
-const cors = require("cors");
-const morgan = require("morgan");
-const routes = require("./routes");
-const errorHandler = require("./middlewares/errorHandler");
-
+import express from "express";
+import cors from "cors";
+import morgan from "morgan";
+import routes from "./routes/index.js";
+import errorHandler from "./middlewares/errorHandler.js";
+import swaggerUi from "swagger-ui-express";
+import swaggerSpec from "./config/swagger.js";
 const app = express();
 
 // --------------- Middleware ---------------
@@ -22,8 +23,11 @@ app.use(express.urlencoded({ extended: true }));
 
 app.use("/api", routes);
 
+// Swagger Documentation
+app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
+
 // --------------- Error Handling ---------------
 
 app.use(errorHandler);
 
-module.exports = app;
+export default app;
