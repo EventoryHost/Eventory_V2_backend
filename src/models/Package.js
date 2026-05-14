@@ -1,118 +1,119 @@
-const mongoose = require("mongoose");
+import mongoose from "mongoose";
 
-// ---- Sub-schemas (embedded documents) ----
+const packageOptions = {
+  discriminatorKey: "vendorType", // This will store the vendor type (e.g., 'Caterer')
+  timestamps: true,
+};
 
-const MediaSchema = new mongoose.Schema({
-  id: String,
+const PackageSchema = new mongoose.Schema(
+  {
+    vendorId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Vendor",
+      required: true,
+    },
+    packageStatus: {
+      type: String,
+      enum: ["Draft", "Under Review", "Live", "Deleted"],
+      default: "Draft",
+    },
+    bookingType: {
+      type: String,
+      enum: ["Ready-to-Book", "Enquiry/Quote"],
+      required: true,
+    },
+    availabilityCalendar: [
+      {
+        date: { type: Date },
+        status: { type: String, enum: ["Available", "Blocked", "Booked"] },
+      },
+    ],
+    variantType: {
+      type: String,
+      enum: ["Premium", "Standard", "Custom"],
+      default: "Standard",
+    },
+    completedSteps: [{ type: Number }], // Track which steps (1, 2, 3, 4) are finished
 
-  url: String,
+    // -- Step 1: Event & Crew (Mostly Shared) --
+    step1_eventAndCrew: {
+      packageName: { type: String, required: true },
+      eventCategories: [{ type: String }],
+      poc: { type: String },
+      duration: {
+        minHours: { type: Number },
+        maxHours: { type: Number },
+      },
+      crewSize: {
+        minPeople: { type: Number },
+        maxPeople: { type: Number },
+        roles: [{ type: String }],
+      },
+      capacity: {
+        minGuests: { type: Number },
+        maxGuests: { type: Number },
+      },
+      venueNeeds: {
+        power: { type: Boolean, default: false },
+        ac: { type: Boolean, default: false },
+        stage: { type: Boolean, default: false },
+        lighting: { type: Boolean, default: false },
+        security: { type: Boolean, default: false },
+        customText: { type: String },
+      },
+      tastingSession: { type: Boolean, default: false },
+    },
 
-  type: {
-    type: String,
-    enum: ["image", "video", "pdf"],
+    // -- Step 3: Policies & Charges (Mostly Shared) --
+    step3_policiesAndCharges: {
+      teamAndEquipment: {
+        price: { type: Number },
+        billingUnit: { type: String },
+      },
+      lastMinuteChargesDocUrl: { type: String },
+      guestTiers: [
+        {
+          maxGuests: { type: Number },
+          price: { type: Number },
+        },
+      ],
+      dynamicPricing: {
+        weekends: {
+          enabled: { type: Boolean, default: false },
+          price: { type: Number },
+          percentage: { type: Number },
+        },
+        weddingSeason: {
+          enabled: { type: Boolean, default: false },
+          percentage: { type: Number },
+        },
+        festivals: {
+          enabled: { type: Boolean, default: false },
+          percentage: { type: Number },
+        },
+        customDates: {
+          enabled: { type: Boolean, default: false },
+          percentage: { type: Number },
+        },
+      },
+      policiesDocUrl: { type: String },
+    },
+
+    // -- Step 4: Sample Media (Shared) --
+    step4_sampleMedia: {
+      media: [
+        {
+          url: { type: String },
+          type: { type: String, enum: ["image", "video"] },
+          fileName: { type: String },
+          size: { type: Number },
+        },
+      ],
+    },
   },
+  packageOptions
+);
 
-  name: String,
-});
+const Package = mongoose.model("Package", PackageSchema);
 
-const ItemSchema = new mongoose.Schema({
-  id: String,
-
-  name: String,
-
-  category: String,
-
-  description: String,
-
-  quantity: Number,
-
-  price: Number,
-
-  specifications: mongoose.Schema.Types.Mixed,
-});
-
-const AddonSchema = new mongoose.Schema({
-  id: String,
-
-  name: String,
-
-  type: {
-    type: String,
-    enum: ["service", "product"],
-  },
-
-  description: String,
-
-  quantity: Number,
-
-  pricingModel: String,
-
-  price: Number,
-
-  specifications: mongoose.Schema.Types.Mixed,
-
-  media: [MediaSchema],
-});
-
-const PricingSchema = new mongoose.Schema({
-  model: {
-    type: String,
-    enum: ["per_head", "per_plate", "per_hour", "per_product", "per_event"],
-  },
-
-  price: Number,
-
-  additionalCharges: Number,
-});
-
-const PolicySchema = new mongoose.Schema({
-  lastMinuteCharges: String,
-
-  laborEquipmentCharges: Number,
-
-  scalingAllowed: Boolean,
-
-  documents: [MediaSchema],
-});
-
-// ---- Main Package schema ----
-
-const PackageSchema = new mongoose.Schema({
-  id: {
-    type: String,
-    unique: true,
-  },
-
-  serviceId: String,
-
-  name: String,
-
-  eventCategory: String,
-
-  setupDuration: Number,
-
-  crew: {
-    supervisors: Number,
-    workers: Number,
-  },
-
-  requirementsFromVenue: String,
-
-  items: [ItemSchema],
-
-  addons: [AddonSchema],
-
-  pricing: PricingSchema,
-
-  policies: PolicySchema,
-
-  media: [MediaSchema],
-
-  status: {
-    type: String,
-    enum: ["draft", "published"],
-    default: "draft",
-  },
-});
-
-module.exports = mongoose.model("Package", PackageSchema);
+export default Package;

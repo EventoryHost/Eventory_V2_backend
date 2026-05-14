@@ -3,6 +3,7 @@ const router = express.Router();
 import vendorRoutes from "./vendorRoutes.js";
 import authRoutes from "./authRoutes.js";
 import verificationRoutes from "./verificationRoutes.js";
+import packageRoutes from "./packageRoutes.js";
 /**
  * @swagger
  * /api/health:
@@ -42,5 +43,6 @@ router.get("/health", (req, res) => {
 router.use("/vendors", vendorRoutes);
 router.use("/auth", authRoutes);
 router.use("/verification", verificationRoutes);
+router.use("/packages", packageRoutes);
 
 export default router;
