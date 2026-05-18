@@ -7,9 +7,47 @@ dotenv.config();
 
 const verifyGSTIN = async (req, res) => {
   const { gstIn } = req.params;
+  const vendor_id = req.query.vendor_id; // Get vendor_id from query params if provided
 
   if (!gstIn) {
     return res.status(400).json({ message: "Please provide a GSTIN number" });
+  }
+
+  // 🔥 Dummy Bypass Block
+  const isDummyGst = gstIn.toUpperCase() === "07AABCA1906H1Z4" || 
+                    gstIn.toUpperCase() === "06AABCA1906H1Z6" || 
+                    gstIn.toUpperCase() === "DUMMYDUMMY" || 
+                    /^0+$/.test(gstIn);
+
+  if (isDummyGst) {
+    console.log("🟡 Dummy GSTIN detected → Bypassing Cashfree API");
+    
+    if (vendor_id) {
+      try {
+        const vendor = await Vendor.findOne({ id: vendor_id });
+        if (vendor) {
+          vendor.gstNumber = gstIn;
+          vendor.isGstVerified = true;
+          await vendor.save();
+          console.log(`Updated Vendor ${vendor_id} with Dummy GSTIN`);
+        }
+      } catch (err) {
+        console.error("Error updating vendor with dummy GSTIN:", err);
+      }
+    }
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      legal_name: "Dummy Business Private Limited",
+      message: "GSTIN verified successfully (Dummy Mode)",
+      originalResponse: {
+        legal_name_of_business: "Dummy Business Private Limited",
+        trade_name_of_business: "Dummy Business Store",
+        pan: "AABCA1906H",
+        constitution_of_business: "Private Limited Company",
+        principal_place_of_business_address: "123 Dummy Street, Dummy City, 110001"
+      },
+    });
   }
 
   const gstinPattern =
@@ -56,6 +94,16 @@ const verifyGSTIN = async (req, res) => {
 
     // Format the response to include the legal name in a standardized way
     if (response.data && response.data.legal_name_of_business) {
+      if (vendor_id) {
+        try {
+          const vendor = await Vendor.findOne({ id: vendor_id });
+          if (vendor) {
+            vendor.gstNumber = gstIn;
+            vendor.isGstVerified = true;
+            await vendor.save();
+          }
+        } catch (vErr) { console.error("DB Update Error:", vErr); }
+      }
       return res.status(200).json({
         status: "SUCCESS",
         legal_name: response.data.legal_name_of_business,
@@ -63,6 +111,16 @@ const verifyGSTIN = async (req, res) => {
         originalResponse: response.data,
       });
     } else if (response.data) {
+      if (vendor_id) {
+        try {
+          const vendor = await Vendor.findOne({ id: vendor_id });
+          if (vendor) {
+            vendor.gstNumber = gstIn;
+            vendor.isGstVerified = true;
+            await vendor.save();
+          }
+        } catch (vErr) { console.error("DB Update Error:", vErr); }
+      }
       // If we have response data but not the expected field, return what we have
       return res.status(200).json({
         status: "SUCCESS",
@@ -115,9 +173,21 @@ const verifyPAN = async (req, res) => {
   }
 
   // 🔥 Dummy Bypass Block
-  if (panNo.toUpperCase() === "DUMMYDUMMY") {
-    console.log("🟡 Dummy PAN detected → Bypassing Cashfree API");
-
+  const isDummyPan = panNo.toUpperCase() === "DUMMYDUMMY" || /^0+$/.test(panNo);
+  if (isDummyPan) {
+    if (vendor_id) {
+      try {
+        const vendor = await Vendor.findOne({ id: vendor_id });
+        if (vendor) {
+          vendor.panNumber = panNo;
+          vendor.isPanVerified = true;
+          await vendor.save();
+          console.log(`Updated Vendor ${vendor_id} with Dummy PAN`);
+        }
+      } catch (err) {
+        console.error("Error updating vendor with dummy PAN:", err);
+      }
+    }
     return res.status(200).json({
       status: "SUCCESS",
       name: "Dummy User",
@@ -291,18 +361,36 @@ export const verifyBankDetails = async (req, res) => {
   const cleanedAcc = String(bank_account).trim().replace(/\s+/g, "");
   const cleanedIfsc = String(ifsc).trim().toUpperCase();
 
-  // 🔹 Dummy bypass: skip Cashfree, return success immediately
-  if (cleanedAcc === DUMMY_ACCOUNT_NO && cleanedIfsc === DUMMY_IFSC) {
+  // 🔹 Dummy bypass: skip Cashfree for specific test numbers or 'DUMMY' inputs
+  if (cleanedAcc === DUMMY_ACCOUNT_NO || cleanedAcc === "29280100016529" || cleanedIfsc === DUMMY_IFSC || cleanedIfsc === "BARB0MUNIRK") {
+    const vendor_id = req.query.vendor_id || req.body?.vendor_id;
+    if (vendor_id) {
+      try {
+        const vendor = await Vendor.findOne({ id: vendor_id });
+        if (vendor) {
+          vendor.bankDetails = {
+            accountNumber: cleanedAcc,
+            ifscCode: cleanedIfsc,
+            bankName: "Test Bank",
+            branchName: "Munirka",
+          };
+          await vendor.save();
+          console.log(`Updated Vendor ${vendor_id} with Dummy Bank Details`);
+        }
+      } catch (err) {
+        console.error("Error updating vendor with dummy bank:", err);
+      }
+    }
     return res.status(200).json({
       status: "SUCCESS",
-      message: "Bank account verified successfully (dummy bypass)",
+      message: "Bank account verified successfully (Dummy/Test Bypass)",
       accountDetails: {
         account_status: "VALID",
         name_match_result: "EXACT",
-        name_at_bank: name || "DUMMY ACCOUNT",
+        name_at_bank: name || "Test User",
         match_score: 100,
-        bank_name: "Dummy Bank",
-        branch: "Dummy Branch",
+        bank_name: "Test Bank",
+        branch: "Munirka",
         utr: "DUMMYUTR0001",
       },
       originalResponse: {
@@ -341,6 +429,21 @@ export const verifyBankDetails = async (req, res) => {
     const data = response.data;
 
     if (data.account_status === "VALID") {
+      const vendor_id = req.query.vendor_id || req.body?.vendor_id;
+      if (vendor_id) {
+        try {
+          const vendor = await Vendor.findOne({ id: vendor_id });
+          if (vendor) {
+            vendor.bankDetails = {
+              accountNumber: cleanedAcc,
+              ifscCode: cleanedIfsc,
+              bankName: data.bank_name,
+              branchName: data.branch,
+            };
+            await vendor.save();
+          }
+        } catch (vErr) { console.error("DB Update Error:", vErr); }
+      }
       return res.status(200).json({
         status: "SUCCESS",
         message: "Bank account verified successfully",
@@ -398,11 +501,34 @@ export const generateDigilockerUrl = async (req, res) => {
         ? "https://sandbox.cashfree.com/verification/digilocker"
         : "https://api.cashfree.com/verification/digilocker";
 
-    const verification_id = `eventory_dl_${Date.now()}`;
+    const { redirect_url, return_url, aadhaar_number } = req.body;
+
+    // 🔥 Dummy Bypass for Aadhaar
+    if (aadhaar_number === "000000000000") {
+      return res.status(200).json({
+        status: "SUCCESS",
+        message: "Aadhaar verified successfully (Dummy Mode)",
+        url: `${redirect_url || return_url || "http://localhost:3000/dashboard/documents/aadhaar"}?status=SUCCESS&verification_id=dummy_v_id`,
+        verification_id: "dummy_v_id"
+      });
+    }
+
+    const verification_id = `event_dl_${Date.now()}`;
+    const targetUrl = redirect_url || return_url || "http://localhost:3000/dashboard/documents/aadhaar";
+    
     const payload = {
       verification_id: verification_id,
       document_requested: ["AADHAAR"],
+      documents_requested: ["AADHAAR"]
     };
+
+    // Cashfree requires HTTPS for redirects
+    if (targetUrl.startsWith('https')) {
+      payload.redirect_url = targetUrl;
+      payload.return_url = targetUrl;
+    }
+
+    console.log("Sending payload to Cashfree:", payload);
 
     const response = await axios.post(url, payload, { headers });
 
@@ -430,8 +556,25 @@ export const getDigilockerDocument = async (req, res) => {
   const vendor_id = req.query.vendor_id || req.body?.vendor_id;
   const originalAadhar = req.query.aadhar_number || req.body?.aadhar_number;
 
-  if (!verificationId) {
-    return res.status(400).json({ message: "verificationId is required" });
+  if (verificationId === "dummy_v_id") {
+    if (vendor_id) {
+      try {
+        const vendor = await Vendor.findOne({ id: vendor_id });
+        if (vendor) {
+          if (originalAadhar) vendor.aadharNumber = originalAadhar;
+          vendor.isAadharVerified = true;
+          await vendor.save();
+          console.log(`Updated Vendor ${vendor_id} with Dummy Aadhaar`);
+        }
+      } catch (err) {
+        console.error("Error updating vendor with dummy Aadhaar:", err);
+      }
+    }
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Fetched DigiLocker Document successfully (Dummy Mode)",
+      originalResponse: { status: "SUCCESS" }
+    });
   }
 
   try {

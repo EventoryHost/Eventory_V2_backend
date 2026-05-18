@@ -31,7 +31,7 @@ const isNewUser = async (mobile) => {
 
 // Sign Up / Login Initiation (OTP Send)
 export const loginOrSignUp = async (req, res, next) => {
-  const { mobile } = req.body;
+  const { mobile, isSignup } = req.body;
 
   if (!mobile) {
     return res.status(400).json({ success: false, message: "Mobile number is required" });
@@ -39,6 +39,15 @@ export const loginOrSignUp = async (req, res, next) => {
 
   try {
     const isNew = await isNewUser(mobile);
+    const existingVendor = await Vendor.findOne({ phone: `+91${mobile}` });
+
+    if (isSignup && (!isNew || existingVendor)) {
+      return res.status(400).json({
+        success: false,
+        code: "USER_ALREADY_EXISTS",
+        message: "You are already a registered user. Please log in instead.",
+      });
+    }
 
     if (isNew) {
       // Sign Up in Cognito
