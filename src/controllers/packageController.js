@@ -1,6 +1,14 @@
 import Package from "../models/Package.js";
+import Vendor from "../models/Vendor.js";
 import { getModelForVendor } from "../utils/modelRegistry.js";
 import { validatePackageSubmission } from "../validators/packageValidators.js";
+
+const resolveVendorObjectId = async (incomingVendorId) => {
+  if (!incomingVendorId) return null;
+
+  const vendor = await Vendor.findOne({ id: incomingVendorId }).select("_id");
+  return vendor ? vendor._id : null;
+};
 
 /**
  * @desc Initialize a new package draft
@@ -16,13 +24,23 @@ export const initializePackage = async (req, res) => {
       });
     }
 
+    const resolvedVendorId = await resolveVendorObjectId(vendorId);
+    if (!resolvedVendorId) {
+      return res.status(404).json({
+        status: "FAILED",
+        message: "Vendor not found for provided vendorId",
+      });
+    }
+
     const Model = getModelForVendor(vendorType);
     const newPackage = new Model({
-      vendorId,
+      vendorId: resolvedVendorId,
       vendorType,
       bookingType,
       availabilityCalendar,
       packageStatus: "Draft",
+       step1_eventAndCrew: {
+      packageName: "New Package"},
     });
 
     await newPackage.save();
@@ -67,7 +85,7 @@ export const updatePackageStep = async (req, res) => {
   try {
     const { packageId, stepNumber } = req.params;
     const stepData = req.body;
-
+    console.log(`Updating package ${packageId}, step ${stepNumber} with data:`, stepData);
     const stepMap = {
       1: "step1_eventAndCrew",
       2: "step2_productsAndPricing",
@@ -80,6 +98,13 @@ export const updatePackageStep = async (req, res) => {
       return res.status(400).json({ status: "FAILED", message: "Invalid step number" });
     }
 
+    const existingPackage = await Package.findById(packageId).select("vendorType");
+    if (!existingPackage) {
+      return res.status(404).json({ status: "FAILED", message: "Package not found" });
+    }
+
+    const Model = getModelForVendor(existingPackage.vendorType);
+
     // Convert stepData into flat dot-notation updates to prevent full-object replacement
     const flatUpdates = {};
     Object.keys(stepData).forEach((key) => {
@@ -87,13 +112,13 @@ export const updatePackageStep = async (req, res) => {
     });
 
     // Also update completedSteps if not already there
-    const updatedPackage = await Package.findByIdAndUpdate(
+    const updatedPackage = await Model.findByIdAndUpdate(
       packageId,
       { 
         $set: flatUpdates,
         $addToSet: { completedSteps: parseInt(stepNumber) }
       },
-      { new: true, runValidators: true }
+      { returnDocument: "after", runValidators: true }
     );
 
     if (!updatedPackage) {
@@ -117,8 +142,16 @@ export const getVendorPackages = async (req, res) => {
   try {
     const { vendorId } = req.params;
     const { status } = req.query;
-    
-    const query = { vendorId };
+
+    const resolvedVendorId = await resolveVendorObjectId(vendorId);
+    if (!resolvedVendorId) {
+      return res.status(404).json({
+        status: "FAILED",
+        message: "Vendor not found",
+      });
+    }
+
+    const query = { vendorId: resolvedVendorId };
     if (status) query.packageStatus = status;
 
     const packages = await Package.find(query);
@@ -164,7 +197,7 @@ export const deletePackage = async (req, res) => {
     const updatedPackage = await Package.findByIdAndUpdate(
       packageId,
       { packageStatus: "Deleted" },
-      { new: true }
+      { returnDocument: "after" }
     );
 
     if (!updatedPackage) {
@@ -224,7 +257,7 @@ export const addNestedItem = async (req, res) => {
     const updatedPackage = await Package.findByIdAndUpdate(
       packageId,
       { $push: { [updatePath]: item } },
-      { new: true, runValidators: true }
+      { returnDocument: "after", runValidators: true }
     );
 
     return res.status(200).json({ status: "SUCCESS", package: updatedPackage });
@@ -271,7 +304,7 @@ export const removeNestedItem = async (req, res) => {
     const updatedPackage = await Package.findByIdAndUpdate(
       packageId,
       { $pull: { [updatePath]: { _id: itemId } } },
-      { new: true }
+      { returnDocument: "after" }
     );
 
     return res.status(200).json({ status: "SUCCESS", package: updatedPackage });

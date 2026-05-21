@@ -15,6 +15,10 @@ const PAVPackage = Package.discriminator(
     },
     step2_productsAndPricing: pavStep2Schema,
     step3_policiesAndCharges: {
+      packagePricing: {
+        price: { type: Number },
+        billingUnit: { type: String },
+      },
       dateRangeDynamicPricing: [
         {
           fromDate: { type: Date },

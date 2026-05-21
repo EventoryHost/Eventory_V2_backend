@@ -115,7 +115,7 @@ const verifyPAN = async (req, res) => {
   }
 
   // 🔥 Dummy Bypass Block
-  if (panNo.toUpperCase() === "DUMMYDUMMY") {
+  if (panNo.toUpperCase() === "CRFPJ6229J") {
     console.log("🟡 Dummy PAN detected → Bypassing Cashfree API");
 
     return res.status(200).json({

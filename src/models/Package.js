@@ -55,6 +55,7 @@ const PackageSchema = new mongoose.Schema(
       },
       venueNeeds: {
         power: { type: Boolean, default: false },
+        camera: { type: Boolean, default: false },
         ac: { type: Boolean, default: false },
         stage: { type: Boolean, default: false },
         lighting: { type: Boolean, default: false },
