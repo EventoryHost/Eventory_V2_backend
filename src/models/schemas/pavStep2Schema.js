@@ -55,6 +55,8 @@ const pavStep2Schema = new mongoose.Schema({
       mediaUrls: [{ type: String }],
     },
   ],
+  included: [{ type: String }],
+  notIncluded: [{ type: String }],
 }, { _id: false });
 
 export default pavStep2Schema;

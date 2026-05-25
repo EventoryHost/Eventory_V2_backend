@@ -56,6 +56,8 @@ const djArtistStep2Schema = new mongoose.Schema({
       mediaUrls: [{ type: String }],
     },
   ],
+  included: [{ type: String }],
+  notIncluded: [{ type: String }],
 }, { _id: false });
 
 export default djArtistStep2Schema;

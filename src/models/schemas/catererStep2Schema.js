@@ -1,7 +1,10 @@
 import mongoose from "mongoose";
 
 const catererStep2Schema = new mongoose.Schema({
-  crockery: { included: Boolean, type: String },
+  crockery: {
+    included: Boolean,
+    type: { type: String }
+  },
   menus: [
     {
       name: String,
@@ -34,6 +37,8 @@ const catererStep2Schema = new mongoose.Schema({
       mediaUrls: [String],
     },
   ],
+  included: [{ type: String }],
+  notIncluded: [{ type: String }],
 }, { _id: false });
 
 export default catererStep2Schema;

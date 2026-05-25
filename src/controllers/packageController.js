@@ -1,4 +1,5 @@
 import Package from "../models/Package.js";
+import Vendor from "../models/Vendor.js";
 import { getModelForVendor } from "../utils/modelRegistry.js";
 import { validatePackageSubmission } from "../validators/packageValidators.js";
 
@@ -16,13 +17,42 @@ export const initializePackage = async (req, res) => {
       });
     }
 
+    // Resolve human-readable custom vendor ID (e.g., "VEN...") to MongoDB ObjectId
+    let actualVendorId = vendorId;
+    if (typeof vendorId === "string" && vendorId.startsWith("VEN")) {
+      const vendorDoc = await Vendor.findOne({ id: vendorId });
+      if (vendorDoc) {
+        actualVendorId = vendorDoc._id;
+      } else {
+        return res.status(404).json({
+          status: "FAILED",
+          message: `Vendor with ID ${vendorId} not found in database`,
+        });
+      }
+    }
+
     const Model = getModelForVendor(vendorType);
+
+    // Dynamic Idempotency Lock: If a draft already exists for this vendor, reuse it instead of creating duplicates
+    const existingDraft = await Model.findOne({ vendorId: actualVendorId, packageStatus: "Draft" });
+    if (existingDraft) {
+      return res.status(200).json({
+        status: "SUCCESS",
+        message: "Existing draft package retrieved",
+        packageId: existingDraft._id,
+      });
+    }
+
     const newPackage = new Model({
-      vendorId,
+      vendorId: actualVendorId,
       vendorType,
       bookingType,
       availabilityCalendar,
       packageStatus: "Draft",
+      step1_eventAndCrew: {
+        packageName: "Untitled Package",
+        eventCategories: []
+      }
     });
 
     await newPackage.save();
@@ -68,6 +98,14 @@ export const updatePackageStep = async (req, res) => {
     const { packageId, stepNumber } = req.params;
     const stepData = req.body;
 
+    const basePkg = await Package.findById(packageId);
+    if (!basePkg) {
+      return res.status(404).json({ status: "FAILED", message: "Package not found" });
+    }
+
+    // Solve discriminator gotcha by using the subclass Model so subclass-specific fields like step2 are kept
+    const Model = getModelForVendor(basePkg.vendorType);
+
     const stepMap = {
       1: "step1_eventAndCrew",
       2: "step2_productsAndPricing",
@@ -87,7 +125,7 @@ export const updatePackageStep = async (req, res) => {
     });
 
     // Also update completedSteps if not already there
-    const updatedPackage = await Package.findByIdAndUpdate(
+    const updatedPackage = await Model.findByIdAndUpdate(
       packageId,
       { 
         $set: flatUpdates,
@@ -118,7 +156,18 @@ export const getVendorPackages = async (req, res) => {
     const { vendorId } = req.params;
     const { status } = req.query;
     
-    const query = { vendorId };
+    // Resolve human-readable custom vendor ID (e.g., "VEN...") to MongoDB ObjectId
+    let actualVendorId = vendorId;
+    if (typeof vendorId === "string" && vendorId.startsWith("VEN")) {
+      const vendorDoc = await Vendor.findOne({ id: vendorId });
+      if (vendorDoc) {
+        actualVendorId = vendorDoc._id;
+      } else {
+        return res.status(200).json({ status: "SUCCESS", count: 0, packages: [] });
+      }
+    }
+    
+    const query = { vendorId: actualVendorId };
     if (status) query.packageStatus = status;
 
     const packages = await Package.find(query);

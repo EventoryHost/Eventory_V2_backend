@@ -47,6 +47,8 @@ const decoratorStep2Schema = new mongoose.Schema({
       mediaUrls: [String],
     },
   ],
+  included: [{ type: String }],
+  notIncluded: [{ type: String }],
 }, { _id: false });
 
 export default decoratorStep2Schema;

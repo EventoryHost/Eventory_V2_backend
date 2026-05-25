@@ -62,6 +62,11 @@ const PackageSchema = new mongoose.Schema(
         customText: { type: String },
       },
       tastingSession: { type: Boolean, default: false },
+      // Makeup Artist specific
+      durationPerPerson: { type: Number },
+      durationOfSetup: { type: Number },
+      trialOffered: { type: Boolean, default: false },
+      parallelServicingPossible: { type: Boolean, default: false },
     },
 
     // -- Step 3: Policies & Charges (Mostly Shared) --
@@ -69,6 +74,15 @@ const PackageSchema = new mongoose.Schema(
       teamAndEquipment: {
         price: { type: Number },
         billingUnit: { type: String },
+      },
+      overtimeCharges: {
+        price: { type: Number },
+        billingUnit: { type: String },
+      },
+      packagePricing: {
+        price: { type: Number },
+        billingUnit: { type: String },
+        noOfPeople: { type: String },
       },
       lastMinuteChargesDocUrl: { type: String },
       guestTiers: [
@@ -85,15 +99,20 @@ const PackageSchema = new mongoose.Schema(
         },
         weddingSeason: {
           enabled: { type: Boolean, default: false },
+          price: { type: Number },
           percentage: { type: Number },
         },
         festivals: {
           enabled: { type: Boolean, default: false },
           percentage: { type: Number },
+          details: { type: mongoose.Schema.Types.Mixed },
         },
         customDates: {
           enabled: { type: Boolean, default: false },
+          price: { type: Number },
           percentage: { type: Number },
+          startDate: { type: String },
+          endDate: { type: String },
         },
       },
       policiesDocUrl: { type: String },
