@@ -1,0 +1,108 @@
+name: Deploy V2 Backend
+
+on:
+  push:
+    branches:
+      - dev
+      - prod
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Environment to deploy"
+        required: true
+        default: "dev"
+        type: choice
+        options:
+          - dev
+          - prod
+
+jobs:
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Select target
+        id: target
+        shell: bash
+        run: |
+          BRANCH="${GITHUB_REF_NAME}"
+          ENVIRONMENT="${{ github.event.inputs.environment }}"
+
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            BRANCH="${ENVIRONMENT}"
+          fi
+
+          if [ "${BRANCH}" = "dev" ]; then
+            echo "app_name=v2-dev" >> "$GITHUB_OUTPUT"
+            echo "app_dir=/home/ubuntu/v2-dev" >> "$GITHUB_OUTPUT"
+            echo "port=5000" >> "$GITHUB_OUTPUT"
+            echo "node_env=development" >> "$GITHUB_OUTPUT"
+            echo "branch=dev" >> "$GITHUB_OUTPUT"
+          elif [ "${BRANCH}" = "prod" ]; then
+            echo "app_name=v2-prod" >> "$GITHUB_OUTPUT"
+            echo "app_dir=/home/ubuntu/v2-prod" >> "$GITHUB_OUTPUT"
+            echo "port=6000" >> "$GITHUB_OUTPUT"
+            echo "node_env=production" >> "$GITHUB_OUTPUT"
+            echo "branch=prod" >> "$GITHUB_OUTPUT"
+          else
+            echo "Unsupported branch: ${BRANCH}"
+            exit 1
+          fi
+
+      - name: Install SSH key
+        shell: bash
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.EC2_SSH_PRIVATE_KEY }}" > ~/.ssh/ec2_key
+          chmod 600 ~/.ssh/ec2_key
+          ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Deploy
+        shell: bash
+        run: |
+          ssh -i ~/.ssh/ec2_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" << 'EOF'
+            set -e
+
+            APP_NAME="${{ steps.target.outputs.app_name }}"
+            APP_DIR="${{ steps.target.outputs.app_dir }}"
+            PORT="${{ steps.target.outputs.port }}"
+            NODE_ENV="${{ steps.target.outputs.node_env }}"
+            BRANCH="${{ steps.target.outputs.branch }}"
+            REPO_URL="https://github.com/EventoryHost/Eventory_V2_backend.git"
+
+            if [ ! -d "$APP_DIR/.git" ]; then
+              git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
+            fi
+
+            cd "$APP_DIR"
+            git fetch origin "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+            npm ci
+
+            if [ ! -f ".env" ]; then
+              echo "Missing $APP_DIR/.env"
+              exit 1
+            fi
+
+            if grep -q '^PORT=' .env; then
+              sed -i "s/^PORT=.*/PORT=$PORT/" .env
+            else
+              printf '\nPORT=%s\n' "$PORT" >> .env
+            fi
+
+            if grep -q '^NODE_ENV=' .env; then
+              sed -i "s/^NODE_ENV=.*/NODE_ENV=$NODE_ENV/" .env
+            else
+              printf 'NODE_ENV=%s\n' "$NODE_ENV" >> .env
+            fi
+
+            if pm2 describe "$APP_NAME" >/dev/null 2>&1; then
+              pm2 restart "$APP_NAME" --update-env
+            else
+              pm2 start npm --name "$APP_NAME" -- start
+            fi
+
+            pm2 save
+            pm2 status "$APP_NAME"
+          EOF
