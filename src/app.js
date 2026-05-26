@@ -26,6 +26,7 @@ app.get("/", (req, res) => {
     success: true,
     message: "Eventory Backend API is running",
     version: "2.0.0",
+    deploymentCheck: "pipeline-smoke-test-2026-05-26",
     docs: "/api-docs"
   });
 });
