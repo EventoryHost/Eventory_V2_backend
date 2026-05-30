@@ -27,6 +27,7 @@ const djArtistStep2Schema = new mongoose.Schema({
           name: { type: String },
           artist: { type: String },
           duration: { type: String },
+          url: { type: String },
         },
       ],
       customerPlaylistAllowed: { type: Boolean, default: false },
