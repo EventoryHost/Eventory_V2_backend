@@ -18,6 +18,7 @@ const VenueProviderPackage = Package.discriminator(
   new mongoose.Schema({
     step1_eventAndCrew: {
       venueAddress: { type: String },
+      tourAvailable:{type: Boolean},
     },
 
     step2_productsAndPricing: {
