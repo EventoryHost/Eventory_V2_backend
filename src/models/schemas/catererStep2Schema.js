@@ -8,7 +8,7 @@ const catererStep2Schema = new mongoose.Schema({
   menus: [
     {
       name: String,
-      type: { type: String, enum: ["Breakfast", "Lunch", "Dinner"] },
+      type: [{ type: String, enum: ["Breakfast", "Lunch", "Dinner"] }],
       serviceStyle: {
         type: String,
         enum: ["Buffet", "Table", "Live Counter", "Family"],
