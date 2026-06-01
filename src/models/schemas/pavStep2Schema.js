@@ -35,6 +35,7 @@ const pavStep2Schema = new mongoose.Schema({
       category: { type: String },
       subCategory: { type: String },
       quantity: { type: Number },
+      crewSize: { type: Number },
       description: { type: String },
       productSpecific: {
         pageCount: Number,

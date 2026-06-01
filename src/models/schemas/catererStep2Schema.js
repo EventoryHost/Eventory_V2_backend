@@ -13,8 +13,7 @@ const catererStep2Schema = new mongoose.Schema({
         type: String,
         enum: ["Buffet", "Table", "Live Counter", "Family"],
       },
-      priceModel: String,
-      billingUnit: String,
+      perPlatePrice: Number,
       items: {
         starters: [{ name: String, price: Number }],
         mainCourse: [{ name: String, price: Number }],
