@@ -3,16 +3,16 @@ import mongoose from "mongoose";
 const catererStep2Schema = new mongoose.Schema({
   crockery: {
     included: Boolean,
-    type: { type: String }
+    type: { type: [String] }
   },
   menus: [
     {
       name: String,
-      type: [{ type: String, enum: ["Breakfast", "Lunch", "Dinner"] }],
-      serviceStyle: {
+      type: { type: String, enum: ["Breakfast", "Lunch", "Dinner"] },
+      serviceStyle: [{
         type: String,
         enum: ["Buffet", "Table", "Live Counter", "Family"],
-      },
+      }],
       perPlatePrice: Number,
       items: {
         starters: [{ name: String, price: Number }],
@@ -24,6 +24,7 @@ const catererStep2Schema = new mongoose.Schema({
   ],
   addOns: [
     {
+      addOnType: { type: String, enum: ["Service", "Product"] },
       name: String,
       type: { type: String, enum: ["Food", "Drinks", "Other"] },
       category: String,
