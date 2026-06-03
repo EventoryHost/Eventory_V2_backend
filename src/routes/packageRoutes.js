@@ -3,6 +3,7 @@ const router = express.Router();
 import {
   initializePackage,
   getPackageById,
+  updatePackage,
   updatePackageStep,
   getVendorPackages,
   submitPackage,
@@ -220,6 +221,43 @@ router.post("/initialize", initializePackage);
  *         description: Server error
  */
 router.get("/:packageId", getPackageById);
+
+/**
+ * @swagger
+ * /api/packages/{packageId}:
+ *   put:
+ *     summary: Update top-level package fields (e.g. rename variant)
+ *     description: |
+ *       Sets whitelisted top-level fields on the package. Currently supports
+ *       `variantType` (used to rename a variant).
+ *     tags: [Packages]
+ *     parameters:
+ *       - in: path
+ *         name: packageId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               variantType:
+ *                 type: string
+ *                 example: "Deluxe"
+ *     responses:
+ *       200:
+ *         description: Package updated
+ *       400:
+ *         description: No updatable fields provided
+ *       404:
+ *         description: Package not found
+ *       500:
+ *         description: Server error
+ */
+router.put("/:packageId", updatePackage);
 
 /**
  * @swagger
