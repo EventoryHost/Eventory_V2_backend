@@ -8,7 +8,14 @@ import { validatePackageSubmission } from "../validators/packageValidators.js";
  */
 export const initializePackage = async (req, res) => {
   try {
-    const { vendorId, vendorType, bookingType, availabilityCalendar } = req.body;
+    const {
+      vendorId,
+      vendorType,
+      bookingType,
+      availabilityCalendar,
+      packageName,
+      variantType,
+    } = req.body;
 
     if (!vendorId || !vendorType || !bookingType) {
       return res.status(400).json({
@@ -33,8 +40,21 @@ export const initializePackage = async (req, res) => {
 
     const Model = getModelForVendor(vendorType);
 
-    // Dynamic Idempotency Lock: If a draft already exists for this vendor, reuse it instead of creating duplicates
-    const existingDraft = await Model.findOne({ vendorId: actualVendorId, packageStatus: "Draft" });
+    // A logical package can have multiple variants — each is its own document
+    // sharing vendorId + packageName and distinguished by variantType.
+    const resolvedName =
+      packageName && packageName.trim() ? packageName.trim() : "Untitled Package";
+    const resolvedVariant =
+      variantType && variantType.trim() ? variantType.trim() : "Premium";
+
+    // Idempotency: reuse an existing draft for the SAME variant of this package
+    // (scoped to variantType + packageName so sibling variants are not collapsed).
+    const existingDraft = await Model.findOne({
+      vendorId: actualVendorId,
+      packageStatus: "Draft",
+      variantType: resolvedVariant,
+      "step1_eventAndCrew.packageName": resolvedName,
+    });
     if (existingDraft) {
       return res.status(200).json({
         status: "SUCCESS",
@@ -49,8 +69,9 @@ export const initializePackage = async (req, res) => {
       bookingType,
       availabilityCalendar,
       packageStatus: "Draft",
+      variantType: resolvedVariant,
       step1_eventAndCrew: {
-        packageName: "Untitled Package",
+        packageName: resolvedName,
         eventCategories: []
       }
     });
@@ -145,6 +166,51 @@ export const updatePackageStep = async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to update step", error: error.message });
+  }
+};
+
+/**
+ * @desc Update top-level package fields (e.g. variantType for rename).
+ * Body: { variantType?: string }
+ */
+export const updatePackage = async (req, res) => {
+  try {
+    const { packageId } = req.params;
+
+    // Whitelist the top-level fields that may be updated this way.
+    const allowedFields = ["variantType"];
+    const updates = {};
+    for (const field of allowedFields) {
+      if (req.body[field] !== undefined) updates[field] = req.body[field];
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({
+        status: "FAILED",
+        message: "No updatable fields provided",
+      });
+    }
+
+    const basePkg = await Package.findById(packageId);
+    if (!basePkg) {
+      return res.status(404).json({ status: "FAILED", message: "Package not found" });
+    }
+
+    // Use the subclass model so discriminator-specific fields are preserved.
+    const Model = getModelForVendor(basePkg.vendorType);
+    const updatedPackage = await Model.findByIdAndUpdate(
+      packageId,
+      { $set: updates },
+      { new: true, runValidators: true }
+    );
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Package updated successfully",
+      package: updatedPackage,
+    });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to update package", error: error.message });
   }
 };
 

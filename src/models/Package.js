@@ -30,8 +30,7 @@ const PackageSchema = new mongoose.Schema(
     ],
     variantType: {
       type: String,
-      enum: ["Premium", "Standard", "Custom"],
-      default: "Standard",
+      default: "Premium",
     },
     completedSteps: [{ type: Number }], // Track which steps (1, 2, 3, 4) are finished
 
