@@ -66,6 +66,22 @@ const PackageSchema = new mongoose.Schema(
       durationOfSetup: { type: Number },
       trialOffered: { type: Boolean, default: false },
       parallelServicingPossible: { type: Boolean, default: false },
+      // DJ Artist specific
+      audienceCapacity: {
+        min: { type: Number },
+        max: { type: Number },
+      },
+      performers: {
+        count: { type: Number },
+        performingArtists: [
+          {
+            name: { type: String },
+            size: { type: Number },
+          },
+        ],
+      },
+      supportingCrew: { type: Number },
+      visitingIncluded: { type: Boolean, default: false },
     },
 
     // -- Step 3: Policies & Charges (Mostly Shared) --
@@ -127,6 +143,14 @@ const PackageSchema = new mongoose.Schema(
           size: { type: Number },
         },
       ],
+      socialMediaLinks: {
+        youtube: { type: String },
+        instagram: { type: String },
+        spotify: { type: String },
+        facebook: { type: String },
+        twitter: { type: String },
+        other: { type: String },
+      },
     },
   },
   packageOptions

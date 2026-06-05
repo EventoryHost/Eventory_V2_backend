@@ -6,6 +6,33 @@ const DJArtistPackage = Package.discriminator(
   "DJArtist",
   new mongoose.Schema({
     step1_eventAndCrew: {
+      // Base inherited fields that must be re-declared to prevent Mongoose from dropping them
+      packageName: { type: String, required: true },
+      eventCategories: [{ type: String }],
+      poc: { type: String },
+      duration: {
+        minHours: { type: Number },
+        maxHours: { type: Number },
+      },
+      crewSize: {
+        minPeople: { type: Number },
+        maxPeople: { type: Number },
+        roles: [{ type: String }],
+      },
+      capacity: {
+        minGuests: { type: Number },
+        maxGuests: { type: Number },
+      },
+      venueNeeds: {
+        power: { type: Boolean, default: false },
+        ac: { type: Boolean, default: false },
+        stage: { type: Boolean, default: false },
+        lighting: { type: Boolean, default: false },
+        security: { type: Boolean, default: false },
+        customText: { type: String },
+      },
+      
+      // DJ Artist specific fields
       audienceCapacity: {
         min: { type: Number },
         max: { type: Number },
@@ -22,14 +49,72 @@ const DJArtistPackage = Package.discriminator(
       supportingCrew: { type: Number },
       visitingIncluded: { type: Boolean, default: false },
     },
+    
     step2_productsAndPricing: djArtistStep2Schema,
+    
     step3_policiesAndCharges: {
+      // Base fields
+      teamAndEquipment: {
+        price: { type: Number },
+        billingUnit: { type: String },
+      },
+      packagePricing: {
+        price: { type: Number },
+        billingUnit: { type: String },
+        noOfPeople: { type: String },
+      },
+      lastMinuteChargesDocUrl: { type: String },
+      guestTiers: [
+        {
+          maxGuests: { type: Number },
+          price: { type: Number },
+        },
+      ],
+      dynamicPricing: {
+        weekends: {
+          enabled: { type: Boolean, default: false },
+          price: { type: Number },
+          percentage: { type: Number },
+        },
+        weddingSeason: {
+          enabled: { type: Boolean, default: false },
+          price: { type: Number },
+          percentage: { type: Number },
+        },
+        festivals: {
+          enabled: { type: Boolean, default: false },
+          percentage: { type: Number },
+          details: { type: mongoose.Schema.Types.Mixed },
+        },
+        customDates: {
+          enabled: { type: Boolean, default: false },
+          price: { type: Number },
+          percentage: { type: Number },
+          startDate: { type: String },
+          endDate: { type: String },
+        },
+      },
+      policiesDocUrl: { type: String },
+      
+      // DJ Specific
       overtimeCharges: {
         price: { type: Number },
         billingUnit: { type: String },
       },
     },
+    
     step4_sampleMedia: {
+      // Base fields
+      media: [
+        {
+          url: { type: String },
+          type: { type: String, enum: ["image", "video"] },
+          fileName: { type: String },
+          size: { type: Number },
+        },
+      ],
+      
+      // DJ Specific
       socialMediaLinks: {
         youtube: { type: String },
         instagram: { type: String },
