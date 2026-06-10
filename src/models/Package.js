@@ -82,6 +82,13 @@ const PackageSchema = new mongoose.Schema(
       },
       supportingCrew: { type: Number },
       visitingIncluded: { type: Boolean, default: false },
+      // PAV specific
+      crewBreakdown: {
+        photographers: { type: Number, default: 0 },
+        videographers: { type: Number, default: 0 },
+        otherAssistants: { type: Number, default: 0 },
+        editors: { type: Number, default: 0 },
+      },
     },
 
     // -- Step 3: Policies & Charges (Mostly Shared) --
@@ -131,6 +138,14 @@ const PackageSchema = new mongoose.Schema(
         },
       },
       policiesDocUrl: { type: String },
+      // PAV Specific
+      dateRangeDynamicPricing: [
+        {
+          fromDate: { type: Date },
+          toDate: { type: Date },
+          price: { type: Number },
+        },
+      ],
     },
 
     // -- Step 4: Sample Media (Shared) --

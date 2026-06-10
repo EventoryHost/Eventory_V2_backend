@@ -5,24 +5,9 @@ import pavStep2Schema from "./schemas/pavStep2Schema.js";
 const PAVPackage = Package.discriminator(
   "PAV",
   new mongoose.Schema({
-    step1_eventAndCrew: {
-      crewBreakdown: {
-        photographers: { type: Number, default: 0 },
-        videographers: { type: Number, default: 0 },
-        otherAssistants: { type: Number, default: 0 },
-        editors: { type: Number, default: 0 },
-      },
-    },
+    // step1_eventAndCrew uses base schema + crewBreakdown defined in base
     step2_productsAndPricing: pavStep2Schema,
-    step3_policiesAndCharges: {
-      dateRangeDynamicPricing: [
-        {
-          fromDate: { type: Date },
-          toDate: { type: Date },
-          price: { type: Number },
-        },
-      ],
-    },
+    // step3_policiesAndCharges uses base schema + dateRangeDynamicPricing defined in base
   })
 );
 
