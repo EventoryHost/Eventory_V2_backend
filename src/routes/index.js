@@ -5,6 +5,9 @@ import authRoutes from "./authRoutes.js";
 import verificationRoutes from "./verificationRoutes.js";
 import packageRoutes from "./packageRoutes.js";
 import calendarRoutes from "./calendarRoutes.js";
+import bookingRoutes from "./bookingRoutes.js";
+import enquiryRoutes from "./enquiryRoutes.js";
+import transactionRoutes from "./transactionRoutes.js";
 
 /**
  * @swagger
@@ -47,5 +50,9 @@ router.use("/auth", authRoutes);
 router.use("/verification", verificationRoutes);
 router.use("/packages", packageRoutes);
 router.use("/calendar", calendarRoutes);
+router.use("/bookings", bookingRoutes);
+router.use("/enquiries", enquiryRoutes);
+router.use("/transactions", transactionRoutes);
 
 export default router;
+
