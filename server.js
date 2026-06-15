@@ -1,11 +1,19 @@
 import app from "./src/app.js";
 import connectDB from "./src/config/db.js";
 import dotenv from "dotenv";
+import os from "os";
 
 // Load environment variables
 dotenv.config();
 
 const PORT = process.env.PORT || 5000;
+
+// Resolve local network IP for dev convenience logging
+const nets = os.networkInterfaces();
+const localIp =
+  Object.values(nets)
+    .flat()
+    .find((n) => n?.family === "IPv4" && !n.internal)?.address || "localhost";
 
 // Connect to MongoDB and start server
 connectDB()
@@ -14,9 +22,6 @@ connectDB()
       console.log(
         `🚀 Server running in ${process.env.NODE_ENV || "development"} mode on port ${PORT}`
       );
-      const os = await import('os');
-      const nets = os.default.networkInterfaces();
-      const localIp = Object.values(nets).flat().find(n => n?.family === 'IPv4' && !n.internal)?.address || 'localhost';
       console.log(`📱 Local network: http://${localIp}:${PORT}`);
     });
   })
