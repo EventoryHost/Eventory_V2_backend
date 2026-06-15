@@ -4,6 +4,8 @@ import vendorRoutes from "./vendorRoutes.js";
 import authRoutes from "./authRoutes.js";
 import verificationRoutes from "./verificationRoutes.js";
 import packageRoutes from "./packageRoutes.js";
+import calendarRoutes from "./calendarRoutes.js";
+
 /**
  * @swagger
  * /api/health:
@@ -44,5 +46,6 @@ router.use("/vendors", vendorRoutes);
 router.use("/auth", authRoutes);
 router.use("/verification", verificationRoutes);
 router.use("/packages", packageRoutes);
+router.use("/calendar", calendarRoutes);
 
 export default router;
