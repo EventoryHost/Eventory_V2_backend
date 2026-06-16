@@ -21,3 +21,6 @@ Thumbs.db
 
 .docx
 .txt
+
+# Dev-only scripts (may contain prod credentials)
+scripts/
