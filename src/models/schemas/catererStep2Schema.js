@@ -8,17 +8,24 @@ const catererStep2Schema = new mongoose.Schema({
   menus: [
     {
       name: String,
-      type: { type: String, enum: ["Breakfast", "Lunch", "Dinner"] },
+      type: { type: String, enum: ["Breakfast", "Lunch", "Dinner", "Snacks"] },
       serviceStyle: [{
         type: String,
         enum: ["Buffet", "Table", "Live Counter", "Family"],
       }],
       perPlatePrice: Number,
       items: {
-        starters: [{ name: String, price: Number }],
-        mainCourse: [{ name: String, price: Number }],
-        dessert: [{ name: String, price: Number }],
-        drinks: [{ name: String, price: Number }],
+        salads: [{ name: String, price: Number, foodType: { type: String, enum: ["Veg", "Non-veg", "Egg"], default: "Veg" } }],
+        breads: [{ name: String, price: Number, foodType: { type: String, enum: ["Veg", "Non-veg", "Egg"], default: "Veg" } }],
+        rice: [{ name: String, price: Number, foodType: { type: String, enum: ["Veg", "Non-veg", "Egg"], default: "Veg" } }],
+        starters: [{ name: String, price: Number, foodType: { type: String, enum: ["Veg", "Non-veg", "Egg"], default: "Veg" } }],
+        mainCourse: [{ name: String, price: Number, foodType: { type: String, enum: ["Veg", "Non-veg", "Egg"], default: "Veg" } }],
+        dessert: [{ name: String, price: Number, foodType: { type: String, enum: ["Veg", "Non-veg", "Egg"], default: "Veg" } }],
+        beverages: [{ name: String, price: Number, foodType: { type: String, enum: ["Veg", "Non-veg", "Egg"], default: "Veg" } }],
+        desserts: [{ name: String, price: Number, foodType: { type: String, enum: ["Veg", "Non-veg", "Egg"], default: "Veg" } }],
+        chats: [{ name: String, price: Number, foodType: { type: String, enum: ["Veg", "Non-veg", "Egg"], default: "Veg" } }],
+        miscillenous: [{ name: String, price: Number, foodType: { type: String, enum: ["Veg", "Non-veg", "Egg"], default: "Veg" } }],
+        drinks: [{ name: String, price: Number, foodType: { type: String, enum: ["Veg", "Non-veg", "Egg"], default: "Veg" } }]
       },
     },
   ],
