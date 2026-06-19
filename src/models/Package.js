@@ -17,10 +17,97 @@ const PackageSchema = new mongoose.Schema(
       enum: ["Draft", "Under Review", "Live", "Deleted"],
       default: "Draft",
     },
-    bookingType: {
-      type: String,
-      enum: ["Ready-to-Book", "Enquiry/Quote"],
-      required: true,
+    bookingSettings: {
+      bookingType: {
+        type: String,
+        enum: ["Ready-to-Book", "Enquiry/Quote"],
+        required: true,
+      },
+
+      paymentType: {
+        type: String,
+        enum: ["Free", "Token"],
+        required: true,
+      },
+
+      token: {
+        tokenType: {
+          type: String,
+          enum: ["Percentage", "Fixed"],
+        },
+
+        value: {
+          type: Number,
+          min: 0,
+        },
+      },
+    },
+    availabilitySettings: {
+      weeklyAvailability: {
+        type: [String],
+        enum: [
+          "Monday",
+          "Tuesday",
+          "Wednesday",
+          "Thursday",
+          "Friday",
+          "Saturday",
+          "Sunday",
+        ],
+        default: [],
+      },
+
+      repeatType: {
+        type: String,
+        enum: ["30 DAYS", "3 MONTHS", "CUSTOM"],
+      },
+
+      customDateRange: {
+        startDate: Date,
+        endDate: Date,
+      },
+
+      workMode: {
+        type: String,
+        enum: ["FULL_DAY", "TIME_SLOTS"],
+        default: "FULL_DAY",
+      },
+
+      timeSlots: [
+        {
+          startTime: String, // "10:00 AM"
+          endTime: String,   // "02:00 PM"
+        },
+      ],
+    },
+    paymentMilestones: {
+      milestones: [
+        {
+          title: {
+            type: String,
+            required: true,
+          },
+          percentage: {
+            type: Number,
+            required: true,
+            min: 0,
+            max: 100,
+          },
+          dueDays: {
+            type: String,
+          },
+        },
+      ],
+    },
+    bookingCapacity: {
+      dailyCapacity: {
+        type: Number,
+        default: 1,
+      },
+      simultaneousBookings: {
+        type: Number,
+        default: 1,
+      }
     },
     availabilityCalendar: [
       {
@@ -171,6 +258,26 @@ const PackageSchema = new mongoose.Schema(
   },
   packageOptions
 );
+
+PackageSchema.pre("save", function (next) {
+  const milestones =
+    this.paymentMilestones?.milestones || [];
+
+  const total = milestones.reduce(
+    (sum, milestone) => sum + milestone.percentage,
+    0
+  );
+
+  if (total !== 100) {
+    return next(
+      new Error(
+        `Total milestone percentage must equal 100%. Current total: ${total}%`
+      )
+    );
+  }
+
+  next();
+});
 
 const Package = mongoose.model("Package", PackageSchema);
 
