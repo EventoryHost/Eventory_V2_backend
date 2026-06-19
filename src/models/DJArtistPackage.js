@@ -64,6 +64,7 @@ const DJArtistPackage = Package.discriminator(
         noOfPeople: { type: String },
       },
       lastMinuteChargesDocUrl: { type: String },
+      lastMinuteChargesDescription: { type: String },
       guestTiers: [
         {
           maxGuests: { type: Number },

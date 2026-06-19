@@ -107,6 +107,7 @@ const PackageSchema = new mongoose.Schema(
         noOfPeople: { type: String },
       },
       lastMinuteChargesDocUrl: { type: String },
+      lastMinuteChargesDescription: { type: String },
       guestTiers: [
         {
           maxGuests: { type: Number },
