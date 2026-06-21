@@ -49,12 +49,12 @@ const VendorSchema = new mongoose.Schema({
     default: false,
   },
 
-  bankDetails: {
+  bankDetails: [{
     accountNumber: String,
     ifscCode: String,
     bankName: String,
     branchName: String,
-  },
+  }],
 
   isVerified: {
     type: Boolean,
