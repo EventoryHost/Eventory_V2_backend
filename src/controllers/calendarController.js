@@ -16,7 +16,7 @@ const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
  */
 const resolveVendorId = async (vendorId) => {
   if (typeof vendorId === "string" && vendorId.startsWith("VEN")) {
-    const vendorDoc = await Vendor.findOne({ id: vendorId });
+    const vendorDoc = await Vendor.findOne({ id: vendorId }).select('_id');
     if (!vendorDoc) return null;
     return vendorDoc._id;
   }
