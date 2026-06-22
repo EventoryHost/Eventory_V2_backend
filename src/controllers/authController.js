@@ -41,6 +41,14 @@ export const loginOrSignUp = async (req, res, next) => {
     const isNew = await isNewUser(mobile);
     const existingVendor = await Vendor.findOne({ phone: `+91${mobile}` });
 
+    if (existingVendor && existingVendor.isDeactivated) {
+      return res.status(403).json({
+        success: false,
+        code: "ACCOUNT_DEACTIVATED",
+        message: "This account has been deactivated. Please contact support.",
+      });
+    }
+
     if (isSignup && (!isNew || existingVendor)) {
       return res.status(400).json({
         success: false,
@@ -110,6 +118,14 @@ export const verifyOtp = async (req, res, next) => {
 
     // Check if vendor exists in local DB
     let vendor = await Vendor.findOne({ phone: `+91${mobile}` });
+
+    if (vendor && vendor.isDeactivated) {
+      return res.status(403).json({
+        success: false,
+        code: "ACCOUNT_DEACTIVATED",
+        message: "This account has been deactivated. Please contact support.",
+      });
+    }
 
     if (!vendor) {
       // Create new vendor profile if not exists

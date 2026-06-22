@@ -136,3 +136,49 @@ export const deleteVendor = async (req, res, next) => {
     next(error);
   }
 };
+
+export const deactivateVendor = async (req, res, next) => {
+  try {
+    const vendor = await Vendor.findOneAndUpdate(
+      { id: req.params.id },
+      { isDeactivated: true },
+      { new: true, runValidators: true }
+    );
+    if (!vendor) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor not found",
+      });
+    }
+    res.status(200).json({
+      success: true,
+      message: "Vendor account has been deactivated",
+      data: vendor,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+export const reactivateVendor = async (req, res, next) => {
+  try {
+    const vendor = await Vendor.findOneAndUpdate(
+      { id: req.params.id },
+      { isDeactivated: false },
+      { new: true, runValidators: true }
+    );
+    if (!vendor) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor not found",
+      });
+    }
+    res.status(200).json({
+      success: true,
+      message: "Vendor account has been reactivated",
+      data: vendor,
+    });
+  } catch (error) {
+    next(error);
+  }
+};

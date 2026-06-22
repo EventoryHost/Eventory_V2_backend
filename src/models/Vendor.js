@@ -61,6 +61,11 @@ const VendorSchema = new mongoose.Schema({
     default: false,
   },
 
+  isDeactivated: {
+    type: Boolean,
+    default: false,
+  },
+
   createdAt: {
     type: Date,
     default: Date.now,
