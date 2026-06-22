@@ -27,7 +27,7 @@ export const initializePackage = async (req, res) => {
     // Resolve human-readable custom vendor ID (e.g., "VEN...") to MongoDB ObjectId
     let actualVendorId = vendorId;
     if (typeof vendorId === "string" && vendorId.startsWith("VEN")) {
-      const vendorDoc = await Vendor.findOne({ id: vendorId });
+      const vendorDoc = await Vendor.findOne({ id: vendorId }).select('_id');
       if (vendorDoc) {
         actualVendorId = vendorDoc._id;
       } else {
@@ -225,7 +225,7 @@ export const getVendorPackages = async (req, res) => {
     // Resolve human-readable custom vendor ID (e.g., "VEN...") to MongoDB ObjectId
     let actualVendorId = vendorId;
     if (typeof vendorId === "string" && vendorId.startsWith("VEN")) {
-      const vendorDoc = await Vendor.findOne({ id: vendorId });
+      const vendorDoc = await Vendor.findOne({ id: vendorId }).select('_id');
       if (vendorDoc) {
         actualVendorId = vendorDoc._id;
       } else {

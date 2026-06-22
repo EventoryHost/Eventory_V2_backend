@@ -6,7 +6,7 @@ import Vendor from "../models/Vendor.js";
 
 const resolveVendorId = async (vendorId) => {
   if (typeof vendorId === "string" && vendorId.startsWith("VEN")) {
-    const vendorDoc = await Vendor.findOne({ id: vendorId });
+    const vendorDoc = await Vendor.findOne({ id: vendorId }).select('_id');
     if (!vendorDoc) return null;
     return vendorDoc._id;
   }
@@ -128,7 +128,7 @@ export const getEarningsOverview = async (req, res) => {
     }
 
     // Fetch vendor bank details
-    const vendor = await Vendor.findById(actualVendorId);
+    const vendor = await Vendor.findById(actualVendorId).select('bankDetails');
 
     return res.status(200).json({
       status: "SUCCESS",
