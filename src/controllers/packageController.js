@@ -11,13 +11,11 @@ export const initializePackage = async (req, res) => {
     const {
       vendorId,
       vendorType,
-      bookingType,
-      availabilityCalendar,
       packageName,
       variantType,
     } = req.body;
 
-    if (!vendorId || !vendorType || !bookingType) {
+    if (!vendorId || !vendorType) {
       return res.status(400).json({
         status: "FAILED",
         message: "Missing required fields: vendorId, vendorType, or bookingType",
@@ -66,8 +64,6 @@ export const initializePackage = async (req, res) => {
     const newPackage = new Model({
       vendorId: actualVendorId,
       vendorType,
-      bookingType,
-      availabilityCalendar,
       packageStatus: "Draft",
       variantType: resolvedVariant,
       step1_eventAndCrew: {

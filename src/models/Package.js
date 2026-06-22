@@ -21,13 +21,11 @@ const PackageSchema = new mongoose.Schema(
       bookingType: {
         type: String,
         enum: ["Ready-to-Book", "Enquiry/Quote"],
-        required: true,
       },
 
       paymentType: {
         type: String,
         enum: ["Free", "Token"],
-        required: true,
       },
 
       token: {
@@ -258,26 +256,6 @@ const PackageSchema = new mongoose.Schema(
   },
   packageOptions
 );
-
-PackageSchema.pre("save", function (next) {
-  const milestones =
-    this.paymentMilestones?.milestones || [];
-
-  const total = milestones.reduce(
-    (sum, milestone) => sum + milestone.percentage,
-    0
-  );
-
-  if (total !== 100) {
-    return next(
-      new Error(
-        `Total milestone percentage must equal 100%. Current total: ${total}%`
-      )
-    );
-  }
-
-  next();
-});
 
 const Package = mongoose.model("Package", PackageSchema);
 
