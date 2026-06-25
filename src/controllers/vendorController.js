@@ -1,10 +1,36 @@
 import Vendor from "../models/Vendor.js";
 import { generateISTId } from "../utils/idGenerator.js";
 
+/**
+ * Strip any base64 / data URI values from an update payload.
+ * These should never be stored in MongoDB — images must use S3 URLs.
+ * Handles top-level strings and arrays of strings (e.g. businessPhotos).
+ */
+function sanitizeBase64Fields(payload) {
+  const sanitized = { ...payload };
+  for (const [key, value] of Object.entries(sanitized)) {
+    if (typeof value === "string" && value.startsWith("data:")) {
+      console.warn(`[vendorController] Blocked base64 write on field: ${key}`);
+      delete sanitized[key];
+    } else if (Array.isArray(value)) {
+      const filtered = value.filter((v) => {
+        if (typeof v === "string" && v.startsWith("data:")) {
+          console.warn(`[vendorController] Stripped base64 entry from array field: ${key}`);
+          return false;
+        }
+        return true;
+      });
+      sanitized[key] = filtered;
+    }
+  }
+  return sanitized;
+}
+
+
 // Create a new vendor
 export const createVendor = async (req, res, next) => {
   try {
-    const vendorData = { ...req.body };
+    const vendorData = sanitizeBase64Fields({ ...req.body });
     if (!vendorData.id) {
       vendorData.id = generateISTId("VEN");
     }
@@ -60,9 +86,10 @@ export const getVendorById = async (req, res, next) => {
 // Update vendor
 export const updateVendor = async (req, res, next) => {
   try {
+    const cleanBody = sanitizeBase64Fields(req.body);
     const vendor = await Vendor.findOneAndUpdate(
       { id: req.params.id },
-      req.body,
+      cleanBody,
       {
         new: true,
         runValidators: true,
