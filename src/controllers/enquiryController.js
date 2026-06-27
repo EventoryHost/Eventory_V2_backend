@@ -418,3 +418,68 @@ export const declineEnquiry = async (req, res) => {
     });
   }
 };
+
+/**
+ * @desc    Send proposal details for an enquiry
+ * @route   PUT /api/enquiries/:enquiryId/proposal
+ */
+export const sendProposal = async (req, res) => {
+  try {
+    const { enquiryId } = req.params;
+    const { customPrice, paymentMilestones, lineItems, vendorNotes, attachments, mediaUrls } = req.body;
+
+    let enquiry;
+    if (enquiryId.startsWith("ENQ")) {
+      enquiry = await Enquiry.findOne({ enquiryId });
+    } else {
+      enquiry = await Enquiry.findById(enquiryId);
+    }
+
+    if (!enquiry) {
+      return res
+        .status(404)
+        .json({ status: "FAILED", message: "Enquiry not found" });
+    }
+
+    if (enquiry.status === "Converted") {
+      return res.status(400).json({
+        status: "FAILED",
+        message: "Cannot send proposal for a converted enquiry",
+      });
+    }
+
+    if (enquiry.status === "Declined") {
+      return res.status(400).json({
+        status: "FAILED",
+        message: "Cannot send proposal for a declined enquiry",
+      });
+    }
+
+    // Update proposal fields and status
+    enquiry.proposal = {
+      customPrice,
+      paymentMilestones,
+      lineItems,
+      vendorNotes,
+      attachments: attachments || [],
+      mediaUrls: mediaUrls || [],
+      submittedAt: new Date(),
+    };
+    enquiry.status = "ProposalSent";
+
+    await enquiry.save();
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Proposal sent successfully",
+      enquiry,
+    });
+  } catch (error) {
+    console.error("Send Proposal Error:", error);
+    return res.status(500).json({
+      status: "ERROR",
+      message: "Failed to send proposal",
+      error: error.message,
+    });
+  }
+};

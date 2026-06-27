@@ -7,6 +7,7 @@ import {
   updateEnquiryStatus,
   convertEnquiryToBooking,
   declineEnquiry,
+  sendProposal,
 } from "../controllers/enquiryController.js";
 
 /**
@@ -71,6 +72,65 @@ import {
  *         receivedAt:
  *           type: string
  *           format: date-time
+ *         venueName:
+ *           type: string
+ *         guestCountMin:
+ *           type: number
+ *         guestCountMax:
+ *           type: number
+ *         mealType:
+ *           type: string
+ *         specialInstructions:
+ *           type: array
+ *           items:
+ *             type: string
+ *         customerMessage:
+ *           type: string
+ *         primaryPackage:
+ *           type: object
+ *           properties:
+ *             name:
+ *               type: string
+ *             price:
+ *               type: number
+ *             image:
+ *               type: string
+ *         attachments:
+ *           type: array
+ *           items:
+ *             type: string
+ *         priority:
+ *           type: string
+ *           enum: [High, Medium, Low]
+ *         eventImageUrl:
+ *           type: string
+ *         conflictDetected:
+ *           type: boolean
+ *         proposal:
+ *           type: object
+ *           properties:
+ *             customPrice:
+ *               type: number
+ *             paymentMilestones:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   title:
+ *                     type: string
+ *                   percentage:
+ *                     type: number
+ *                   amount:
+ *                     type: number
+ *             lineItems:
+ *               type: array
+ *               items:
+ *                 type: string
+ *             vendorNotes:
+ *               type: string
+ *             submittedAt:
+ *               type: string
+ *               format: date-time
  */
 
 // ============================================================
@@ -254,6 +314,64 @@ router.get("/:enquiryId", getEnquiryById);
  *         description: Server error
  */
 router.put("/:enquiryId/status", updateEnquiryStatus);
+
+/**
+ * @swagger
+ * /api/enquiries/{enquiryId}/proposal:
+ *   put:
+ *     summary: Send proposal details for an enquiry
+ *     description: |
+ *       Saves custom price, payment milestones, line items, and vendor notes,
+ *       and sets status to "ProposalSent".
+ *     tags: [Enquiries]
+ *     parameters:
+ *       - in: path
+ *         name: enquiryId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [customPrice, paymentMilestones, lineItems]
+ *             properties:
+ *               customPrice:
+ *                 type: number
+ *                 example: 300000
+ *               paymentMilestones:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   required: [title, percentage, amount]
+ *                   properties:
+ *                     title:
+ *                       type: string
+ *                     percentage:
+ *                       type: number
+ *                     amount:
+ *                       type: number
+ *               lineItems:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 example: ["Starter: Paneer Tikka", "Main: Dal Makhani"]
+ *               vendorNotes:
+ *                 type: string
+ *                 example: "Taxes extra as applicable..."
+ *     responses:
+ *       200:
+ *         description: Proposal sent successfully
+ *       400:
+ *         description: Invalid input or enquiry is in a terminal status
+ *       404:
+ *         description: Enquiry not found
+ *       500:
+ *         description: Server error
+ */
+router.put("/:enquiryId/proposal", sendProposal);
 
 /**
  * @swagger
