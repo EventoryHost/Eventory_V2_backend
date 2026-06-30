@@ -8,6 +8,7 @@ import {
   declineBooking,
   cancelBooking,
   updateMilestoneStatus,
+  updateCalendarNote,
 } from "../controllers/bookingController.js";
 
 /**
@@ -50,6 +51,18 @@ import {
  *         eventDate:
  *           type: string
  *           format: date
+ *         guestRange:
+ *           type: object
+ *           properties:
+ *             min:
+ *               type: number
+ *             max:
+ *               type: number
+ *         location:
+ *           type: string
+ *         mapLink:
+ *           type: string
+ *           description: "Map deep-link backing the 'See on map' action"
  *         startTime:
  *           type: string
  *         endTime:
@@ -92,11 +105,25 @@ import {
  *               receivedDate:
  *                 type: string
  *                 format: date-time
+ *         charges:
+ *           type: array
+ *           items:
+ *             type: object
+ *             properties:
+ *               label:
+ *                 type: string
+ *               amount:
+ *                 type: number
+ *               type:
+ *                 type: string
+ *                 enum: [Base, Fee, Discount, Tax]
  *         totalAmount:
  *           type: number
  *         totalReceived:
  *           type: number
  *         notes:
+ *           type: string
+ *         calendarNote:
  *           type: string
  *         createdAt:
  *           type: string
@@ -156,6 +183,21 @@ import {
  *                 type: string
  *                 format: date
  *                 example: "2026-10-16"
+ *               guestRange:
+ *                 type: object
+ *                 properties:
+ *                   min:
+ *                     type: number
+ *                     example: 240
+ *                   max:
+ *                     type: number
+ *                     example: 300
+ *               location:
+ *                 type: string
+ *                 example: "Grand Hyatt Ballroom"
+ *               mapLink:
+ *                 type: string
+ *                 example: "https://maps.google.com/?q=Grand+Hyatt+Ballroom"
  *               startTime:
  *                 type: string
  *                 example: "4:00 PM"
@@ -182,7 +224,25 @@ import {
  *                     dueDate:
  *                       type: string
  *                       format: date
+ *               charges:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   required: [label, amount]
+ *                   properties:
+ *                     label:
+ *                       type: string
+ *                       example: "₹500 x 240 guests"
+ *                     amount:
+ *                       type: number
+ *                       example: 120000
+ *                     type:
+ *                       type: string
+ *                       enum: [Base, Fee, Discount, Tax]
+ *                       example: "Base"
  *               notes:
+ *                 type: string
+ *               calendarNote:
  *                 type: string
  *     responses:
  *       201:
@@ -399,5 +459,43 @@ router.put("/:bookingId/cancel", cancelBooking);
  *         description: Server error
  */
 router.put("/:bookingId/milestone", updateMilestoneStatus);
+
+/**
+ * @swagger
+ * /api/bookings/{bookingId}/note:
+ *   put:
+ *     summary: Save the vendor's calendar note on a booking
+ *     description: |
+ *       Saves/updates the vendor-private calendar note shown in the
+ *       "Calendar Note" section of the booking details screen.
+ *     tags: [Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [calendarNote]
+ *             properties:
+ *               calendarNote:
+ *                 type: string
+ *                 example: "Confirm parking access with the venue."
+ *     responses:
+ *       200:
+ *         description: Calendar note saved
+ *       400:
+ *         description: calendarNote is required
+ *       404:
+ *         description: Booking not found
+ *       500:
+ *         description: Server error
+ */
+router.put("/:bookingId/note", updateCalendarNote);
 
 export default router;

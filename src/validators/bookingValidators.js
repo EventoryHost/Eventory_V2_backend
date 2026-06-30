@@ -37,6 +37,30 @@ export const validateCreateBooking = (body) => {
     );
   }
 
+  // Guest range (optional)
+  if (body.guestRange) {
+    const { min, max } = body.guestRange;
+    if (min !== undefined && max !== undefined && Number(min) > Number(max)) {
+      errors.push("guestRange.min must be less than or equal to guestRange.max");
+    }
+  }
+
+  // Charges breakdown (optional)
+  if (body.charges !== undefined) {
+    if (!Array.isArray(body.charges)) {
+      errors.push("charges must be an array");
+    } else {
+      body.charges.forEach((charge, i) => {
+        if (!charge || typeof charge.label !== "string" || !charge.label.trim()) {
+          errors.push(`charges[${i}].label is required`);
+        }
+        if (charge && typeof charge.amount !== "number") {
+          errors.push(`charges[${i}].amount must be a number`);
+        }
+      });
+    }
+  }
+
   return { valid: errors.length === 0, errors };
 };
 

@@ -1,5 +1,25 @@
 import mongoose from "mongoose";
 
+const ChargeSchema = new mongoose.Schema(
+  {
+    label: {
+      type: String,
+      required: true,
+    },
+    amount: {
+      type: Number,
+      required: true,
+    },
+    // "Base" = per-guest/package line, "Fee" = additional charge (cleaning, etc.)
+    type: {
+      type: String,
+      enum: ["Base", "Fee", "Discount", "Tax"],
+      default: "Fee",
+    },
+  },
+  { _id: true }
+);
+
 const PaymentMilestoneSchema = new mongoose.Schema(
   {
     type: {
@@ -64,6 +84,19 @@ const BookingSchema = new mongoose.Schema(
       type: Date,
       required: true,
     },
+    guestRange:{
+      min:{ type: Number },
+      max:{ type: Number }
+    },
+    location: {
+      type: String,
+      default: null,
+    },
+    // Map link / deep-link backing the "See on map" action in the UI
+    mapLink: {
+      type: String,
+      default: null,
+    },
     startTime: {
       type: String,
       default: null,
@@ -97,6 +130,10 @@ const BookingSchema = new mongoose.Schema(
     // Payment milestones
     paymentMilestones: [PaymentMilestoneSchema],
 
+    // Itemized payment breakdown (per-guest base + additional fees) shown in
+    // the "Payment Details" section.
+    charges: [ChargeSchema],
+
     totalAmount: {
       type: Number,
       default: 0,
@@ -107,6 +144,11 @@ const BookingSchema = new mongoose.Schema(
     },
 
     notes: {
+      type: String,
+      default: null,
+    },
+    // Vendor-private note attached to the booking from the "Calendar Note" section
+    calendarNote: {
       type: String,
       default: null,
     },
