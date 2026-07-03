@@ -318,6 +318,39 @@ export const convertEnquiryToBooking = async (req, res) => {
         .json({ status: "FAILED", message: "Package not found" });
     }
 
+    // Use customized proposal fields if available
+    const hasProposal = enquiry.proposal && enquiry.proposal.customPrice != null;
+    const finalAmount = req.body.totalAmount || 
+                        (hasProposal ? enquiry.proposal.customPrice : null) || 
+                        pkg.step3_policiesAndCharges?.packagePricing?.price || 0;
+
+    const mapMilestones = (enqMilestones) => {
+      return enqMilestones.map((m, index) => {
+        let type = "Advanced1";
+        if (index === 0) type = "Token";
+        else if (index === enqMilestones.length - 1) type = "FinalClearance";
+        else if (index === 2) type = "Advanced2";
+
+        return {
+          type,
+          amount: m.amount,
+          status: "Pending",
+          dueDate: null,
+        };
+      });
+    };
+
+    let finalMilestones = [];
+    if (req.body.paymentMilestones && req.body.paymentMilestones.length > 0) {
+      finalMilestones = req.body.paymentMilestones;
+    } else if (hasProposal && enquiry.proposal.paymentMilestones && enquiry.proposal.paymentMilestones.length > 0) {
+      finalMilestones = mapMilestones(enquiry.proposal.paymentMilestones);
+    }
+
+    const finalNotes = req.body.notes || 
+                       (hasProposal ? enquiry.proposal.vendorNotes : null) || 
+                       enquiry.notes || null;
+
     // Create the booking from enquiry data
     const booking = new Booking({
       bookingId: generateISTId("EVT"),
@@ -337,10 +370,10 @@ export const convertEnquiryToBooking = async (req, res) => {
       },
       paymentType: req.body.paymentType || "AdvancePaid",
       status: "Pending",
-      paymentMilestones: req.body.paymentMilestones || [],
-      totalAmount: req.body.totalAmount || pkg.step3_policiesAndCharges?.packagePricing?.price || 0,
+      paymentMilestones: finalMilestones,
+      totalAmount: finalAmount,
       totalReceived: 0,
-      notes: req.body.notes || enquiry.notes || null,
+      notes: finalNotes,
     });
 
     await booking.save();
@@ -414,6 +447,71 @@ export const declineEnquiry = async (req, res) => {
     return res.status(500).json({
       status: "ERROR",
       message: "Failed to decline enquiry",
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @desc    Send proposal details for an enquiry
+ * @route   PUT /api/enquiries/:enquiryId/proposal
+ */
+export const sendProposal = async (req, res) => {
+  try {
+    const { enquiryId } = req.params;
+    const { customPrice, paymentMilestones, lineItems, vendorNotes, attachments, mediaUrls } = req.body;
+
+    let enquiry;
+    if (enquiryId.startsWith("ENQ")) {
+      enquiry = await Enquiry.findOne({ enquiryId });
+    } else {
+      enquiry = await Enquiry.findById(enquiryId);
+    }
+
+    if (!enquiry) {
+      return res
+        .status(404)
+        .json({ status: "FAILED", message: "Enquiry not found" });
+    }
+
+    if (enquiry.status === "Converted") {
+      return res.status(400).json({
+        status: "FAILED",
+        message: "Cannot send proposal for a converted enquiry",
+      });
+    }
+
+    if (enquiry.status === "Declined") {
+      return res.status(400).json({
+        status: "FAILED",
+        message: "Cannot send proposal for a declined enquiry",
+      });
+    }
+
+    // Update proposal fields and status
+    enquiry.proposal = {
+      customPrice,
+      paymentMilestones,
+      lineItems,
+      vendorNotes,
+      attachments: attachments || [],
+      mediaUrls: mediaUrls || [],
+      submittedAt: new Date(),
+    };
+    enquiry.status = "ProposalSent";
+
+    await enquiry.save();
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Proposal sent successfully",
+      enquiry,
+    });
+  } catch (error) {
+    console.error("Send Proposal Error:", error);
+    return res.status(500).json({
+      status: "ERROR",
+      message: "Failed to send proposal",
       error: error.message,
     });
   }
