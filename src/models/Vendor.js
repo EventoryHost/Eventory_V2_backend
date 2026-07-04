@@ -70,6 +70,15 @@ const VendorSchema = new mongoose.Schema({
     default: false,
   },
 
+  rating: {
+    type: Number,
+    default: 0,
+  },
+  reviewsCount: {
+    type: Number,
+    default: 0,
+  },
+
   createdAt: {
     type: Date,
     default: Date.now,
