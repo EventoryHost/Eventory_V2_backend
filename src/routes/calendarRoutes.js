@@ -399,11 +399,27 @@ router.post("/vendor/:vendorId/block/holiday", createHoliday);
  * @swagger
  * /api/calendar/block/{blockId}/unblock:
  *   put:
- *     summary: Set a blocked date as available
+ *     summary: Unblock a date — fully, or for a specific time range
  *     description: |
- *       Deactivates a calendar block (`isActive: false`) and reverts the
- *       affected packages' `availabilityCalendar` entries back to "Available"
- *       — but only for dates not covered by another active block.
+ *       Deactivates a calendar block (`isActive: false`). The still-blocked
+ *       remainder is re-created as new active block(s).
+ *
+ *       **Legacy / full removal**: send an empty body to deactivate the entire
+ *       block and revert affected packages back to "Available" (only for dates
+ *       not covered by another active block).
+ *
+ *       **Single-day full unblock**: send `{ date, fullDay: true }` to free just
+ *       that day. A multi-day block is split so the days before/after `date`
+ *       stay blocked.
+ *
+ *       **Partial (time-range) unblock**: send `{ date, startTime, endTime }` to
+ *       free only that slice of the day. The remaining blocked time is stored as
+ *       new block(s) on the same date — a mid-day unblock splits the day into
+ *       **two** blocks (same date, different times).
+ *
+ *       Package availability is per-date: a day only reverts to "Available" when
+ *       no active block covers it anymore, so a partial-day holiday still blocks
+ *       online bookings for that date.
  *     tags: [Calendar]
  *     parameters:
  *       - in: path
@@ -412,6 +428,27 @@ router.post("/vendor/:vendorId/block/holiday", createHoliday);
  *         schema:
  *           type: string
  *         description: "The CalendarBlock ObjectId"
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               date:
+ *                 type: string
+ *                 format: date
+ *                 description: "The single day to modify (must fall within the block)."
+ *                 example: "2026-04-12"
+ *               fullDay:
+ *                 type: boolean
+ *                 description: "Free the whole day (ignores startTime/endTime)."
+ *               startTime:
+ *                 type: string
+ *                 description: "Begin of the range to free, e.g. '02:00 PM'."
+ *               endTime:
+ *                 type: string
+ *                 description: "End of the range to free, e.g. '04:00 PM'."
  *     responses:
  *       200:
  *         description: Date set as available

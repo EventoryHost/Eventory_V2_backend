@@ -5,6 +5,13 @@ import {
   validateOfflineBooking,
   validateHoliday,
 } from "../validators/calendarValidators.js";
+import {
+  MINUTES_IN_DAY,
+  parseTimeToMinutes,
+  minutesToTime,
+  blockCoverageMinutes,
+  subtractRange,
+} from "../utils/calendarTime.js";
 
 // ─── Helpers ────────────────────────────────────────────────
 
@@ -353,7 +360,8 @@ export const createOfflineBooking = async (req, res) => {
 export const createHoliday = async (req, res) => {
   try {
     const { vendorId } = req.params;
-    const { startDate, endDate, reason, recurringDays } = req.body;
+    const { startDate, endDate, reason, recurringDays, startTime, endTime } =
+      req.body;
 
     // Validate
     const validation = validateHoliday(req.body);
@@ -363,6 +371,32 @@ export const createHoliday = async (req, res) => {
         message: "Validation failed",
         errors: validation.errors,
       });
+    }
+
+    // Optional time range (partial-day holiday). Both-or-neither, end > start.
+    const hasStart = startTime != null && startTime !== "";
+    const hasEnd = endTime != null && endTime !== "";
+    let holidayStartTime = null;
+    let holidayEndTime = null;
+    if (hasStart || hasEnd) {
+      const sMin = parseTimeToMinutes(startTime);
+      const eMin = parseTimeToMinutes(endTime);
+      if (sMin === null || eMin === null) {
+        return res.status(400).json({
+          status: "FAILED",
+          message: "Validation failed",
+          errors: ["startTime and endTime must both be valid times"],
+        });
+      }
+      if (eMin <= sMin) {
+        return res.status(400).json({
+          status: "FAILED",
+          message: "Validation failed",
+          errors: ["endTime must be after startTime"],
+        });
+      }
+      holidayStartTime = startTime;
+      holidayEndTime = endTime;
     }
 
     const actualVendorId = await resolveVendorId(vendorId);
@@ -387,6 +421,8 @@ export const createHoliday = async (req, res) => {
             blockType: "Holiday",
             startDate: date,
             endDate: date,
+            startTime: holidayStartTime,
+            endTime: holidayEndTime,
             reason: reason ? reason.trim() : null,
           });
           await block.save();
@@ -400,6 +436,8 @@ export const createHoliday = async (req, res) => {
         blockType: "Holiday",
         startDate: start,
         endDate: end,
+        startTime: holidayStartTime,
+        endTime: holidayEndTime,
         reason: reason ? reason.trim() : null,
       });
       await block.save();
@@ -438,12 +476,45 @@ export const createHoliday = async (req, res) => {
 };
 
 /**
- * @desc    Unblock a date (set block as inactive, revert package availability)
+ * Clone the reusable fields of a block into a plain object for re-creation,
+ * overriding date range and time range. New blocks are always active.
+ */
+const cloneBlockFields = (block, { startDate, endDate, startTime, endTime }) => ({
+  vendorId: block.vendorId,
+  blockType: block.blockType,
+  startDate,
+  endDate,
+  startTime: startTime ?? null,
+  endTime: endTime ?? null,
+  eventName: block.eventName ?? null,
+  serviceType: block.serviceType ?? null,
+  description: block.description ?? null,
+  reason: block.reason ?? null,
+  isActive: true,
+});
+
+/**
+ * @desc    Unblock a date — fully, or for a specific time range on a single day.
  * @route   PUT /api/calendar/block/:blockId/unblock
+ *
+ * Body (all optional; empty body = legacy full-block removal):
+ *   - date      "YYYY-MM-DD"  the single day to modify (must fall in the block)
+ *   - fullDay   boolean       free the whole day (ignores start/endTime)
+ *   - startTime "hh:mm AM/PM" begin of the range to free
+ *   - endTime   "hh:mm AM/PM" end of the range to free
+ *
+ * The original block is always deactivated. The still-blocked remainder is
+ * re-created as new block(s):
+ *   - the days before `date` (if the block started earlier),
+ *   - the days after `date` (if the block ended later),
+ *   - and, unless the day is fully freed, the 1–2 time ranges left on `date`
+ *     after subtracting the unblocked range (a mid-day unblock splits the day
+ *     into two blocks with the same date and different times).
  */
 export const setDateAvailable = async (req, res) => {
   try {
     const { blockId } = req.params;
+    const { date, startTime, endTime, fullDay } = req.body || {};
 
     const block = await CalendarBlock.findById(blockId);
     if (!block) {
@@ -458,27 +529,157 @@ export const setDateAvailable = async (req, res) => {
         .json({ status: "FAILED", message: "Block is already inactive" });
     }
 
+    // ── Legacy path: no target date → remove the whole block ──────────────
+    if (!date) {
+      block.isActive = false;
+      await block.save();
+
+      const allDates = enumerateDates(block.startDate, block.endDate);
+      const freeDates = await filterFreeDates(
+        block.vendorId,
+        allDates,
+        block._id
+      );
+      let affectedPackages = 0;
+      if (freeDates.length > 0) {
+        affectedPackages = await syncPackageAvailability(
+          block.vendorId,
+          freeDates,
+          "Available",
+          block.serviceType
+        );
+      }
+
+      return res.status(200).json({
+        status: "SUCCESS",
+        message: "Date set as available",
+        block,
+        blocks: [],
+        affectedPackages,
+      });
+    }
+
+    // ── Partial / single-day path ────────────────────────────────────────
+    const target = new Date(date);
+    if (isNaN(target.getTime())) {
+      return res
+        .status(400)
+        .json({ status: "FAILED", message: "date is not a valid date" });
+    }
+    target.setUTCHours(0, 0, 0, 0);
+
+    const blockStart = new Date(block.startDate);
+    blockStart.setUTCHours(0, 0, 0, 0);
+    const blockEnd = new Date(block.endDate);
+    blockEnd.setUTCHours(0, 0, 0, 0);
+
+    if (target < blockStart || target > blockEnd) {
+      return res.status(400).json({
+        status: "FAILED",
+        message: "date does not fall within this block's range",
+      });
+    }
+
+    // Resolve the range to free on the target day.
+    let remainingRanges;
+    if (fullDay) {
+      remainingRanges = []; // whole day freed
+    } else {
+      const uStart = parseTimeToMinutes(startTime);
+      const uEnd = parseTimeToMinutes(endTime);
+      if (uStart === null || uEnd === null) {
+        return res.status(400).json({
+          status: "FAILED",
+          message:
+            "Provide fullDay: true, or a valid startTime and endTime to unblock",
+        });
+      }
+      if (uEnd <= uStart) {
+        return res.status(400).json({
+          status: "FAILED",
+          message: "endTime must be after startTime",
+        });
+      }
+      const coverage = blockCoverageMinutes(block);
+      remainingRanges = subtractRange(
+        coverage.start,
+        coverage.end,
+        uStart,
+        uEnd
+      );
+    }
+
+    // Deactivate the original block; rebuild the still-blocked remainder.
     block.isActive = false;
     await block.save();
 
-    // Revert package availability — only for dates not covered by other active blocks
-    const allDates = enumerateDates(block.startDate, block.endDate);
-    const freeDates = await filterFreeDates(block.vendorId, allDates, block._id);
+    const oneDay = 24 * 60 * 60 * 1000;
+    const toCreate = [];
 
-    let affectedPackages = 0;
-    if (freeDates.length > 0) {
-      affectedPackages = await syncPackageAvailability(
-        block.vendorId,
-        freeDates,
-        "Available",
-        block.serviceType
+    // Days strictly before the target keep the original (full) coverage.
+    if (blockStart < target) {
+      const beforeEnd = new Date(target.getTime() - oneDay);
+      toCreate.push(
+        cloneBlockFields(block, {
+          startDate: blockStart,
+          endDate: beforeEnd,
+          startTime: block.startTime,
+          endTime: block.endTime,
+        })
       );
+    }
+    // Days strictly after the target keep the original (full) coverage.
+    if (blockEnd > target) {
+      const afterStart = new Date(target.getTime() + oneDay);
+      toCreate.push(
+        cloneBlockFields(block, {
+          startDate: afterStart,
+          endDate: blockEnd,
+          startTime: block.startTime,
+          endTime: block.endTime,
+        })
+      );
+    }
+    // The target day: one block per remaining (still-blocked) time range.
+    const fullyFreed = remainingRanges.length === 0;
+    for (const range of remainingRanges) {
+      const isFullDay =
+        range.start <= 0 && range.end >= MINUTES_IN_DAY;
+      toCreate.push(
+        cloneBlockFields(block, {
+          startDate: target,
+          endDate: target,
+          // Preserve "full day" as null times when nothing was actually cut.
+          startTime: isFullDay ? null : minutesToTime(range.start),
+          endTime: isFullDay ? null : minutesToTime(range.end),
+        })
+      );
+    }
+
+    const createdBlocks = await CalendarBlock.insertMany(toCreate);
+
+    // Package availability is per-date (no time granularity): the target day
+    // only reverts to Available when no active block covers it anymore.
+    let affectedPackages = 0;
+    if (fullyFreed) {
+      const freeDates = await filterFreeDates(block.vendorId, [target], block._id);
+      if (freeDates.length > 0) {
+        affectedPackages = await syncPackageAvailability(
+          block.vendorId,
+          freeDates,
+          "Available",
+          block.serviceType
+        );
+      }
     }
 
     return res.status(200).json({
       status: "SUCCESS",
-      message: "Date set as available",
+      message: fullyFreed
+        ? "Date set as available"
+        : "Time range unblocked",
       block,
+      blocks: createdBlocks,
       affectedPackages,
     });
   } catch (error) {

@@ -143,6 +143,14 @@ export const createBooking = async (req, res) => {
       },
       eventType: req.body.eventType || null,
       eventDate: new Date(req.body.eventDate),
+      guestRange: req.body.guestRange
+        ? {
+            min: req.body.guestRange.min,
+            max: req.body.guestRange.max,
+          }
+        : undefined,
+      location: req.body.location || null,
+      mapLink: req.body.mapLink || null,
       startTime: req.body.startTime,
       endTime: req.body.endTime,
       packageSnapshot: {
@@ -155,9 +163,11 @@ export const createBooking = async (req, res) => {
       paymentType: req.body.paymentType,
       status: "Pending",
       paymentMilestones: req.body.paymentMilestones || [],
+      charges: req.body.charges || [],
       totalAmount: req.body.totalAmount || pkg.step3_policiesAndCharges?.packagePricing?.price || 0,
       totalReceived: 0,
       notes: req.body.notes || null,
+      calendarNote: req.body.calendarNote || null,
     });
 
     await booking.save();
@@ -512,6 +522,54 @@ export const updateMilestoneStatus = async (req, res) => {
     return res.status(500).json({
       status: "ERROR",
       message: "Failed to update milestone",
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @desc    Save/update the vendor's calendar note on a booking
+ * @route   PUT /api/bookings/:bookingId/note
+ * @body    { calendarNote: "Bring backup generator" }
+ */
+export const updateCalendarNote = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const { calendarNote } = req.body;
+
+    if (calendarNote === undefined) {
+      return res.status(400).json({
+        status: "FAILED",
+        message: "calendarNote is required",
+      });
+    }
+
+    let booking;
+    if (bookingId.startsWith("EVT")) {
+      booking = await Booking.findOne({ bookingId });
+    } else {
+      booking = await Booking.findById(bookingId);
+    }
+
+    if (!booking) {
+      return res
+        .status(404)
+        .json({ status: "FAILED", message: "Booking not found" });
+    }
+
+    booking.calendarNote = calendarNote || null;
+    await booking.save();
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Calendar note saved",
+      booking,
+    });
+  } catch (error) {
+    console.error("Update Calendar Note Error:", error);
+    return res.status(500).json({
+      status: "ERROR",
+      message: "Failed to save calendar note",
       error: error.message,
     });
   }

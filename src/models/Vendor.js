@@ -49,6 +49,7 @@ const VendorSchema = new mongoose.Schema({
     default: false,
   },
 
+  //business documents
   fssaiLicense: String,
   tradeLicense: String,
   gstCertificate: String,
