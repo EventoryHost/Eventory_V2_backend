@@ -24,7 +24,9 @@ const CalendarBlockSchema = new mongoose.Schema(
       required: true,
     },
 
-    // Time range (OfflineBooking only; null for Holiday = full-day block)
+    // Time range. Always set for OfflineBooking. For Holiday it is optional:
+    // null = full-day block; set = partial-day block (from a timed "mark as
+    // holiday" or the remainder left after a time-range unblock).
     startTime: {
       type: String,
       default: null,
