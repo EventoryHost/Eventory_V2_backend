@@ -54,7 +54,6 @@ const VendorSchema = new mongoose.Schema({
   tradeLicense: String,
   gstCertificate: String,
 
-  
   bankDetails: [{
     accountNumber: String,
     ifscCode: String,
@@ -70,6 +69,15 @@ const VendorSchema = new mongoose.Schema({
   isDeactivated: {
     type: Boolean,
     default: false,
+  },
+
+  rating: {
+    type: Number,
+    default: 0,
+  },
+  reviewsCount: {
+    type: Number,
+    default: 0,
   },
 
   createdAt: {
