@@ -4,6 +4,7 @@ const djArtistStep2Schema = new mongoose.Schema({
   items: [
     {
       name: { type: String },
+      performanceType: { type: String },
       contentDetails: {
         genreOfMusic: [{ type: String }],
         language: [{ type: String }],

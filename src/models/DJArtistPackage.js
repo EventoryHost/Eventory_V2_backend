@@ -48,6 +48,7 @@ const DJArtistPackage = Package.discriminator(
       },
       supportingCrew: { type: Number },
       visitingIncluded: { type: Boolean, default: false },
+      experience: { type: String },
     },
     
     step2_productsAndPricing: djArtistStep2Schema,

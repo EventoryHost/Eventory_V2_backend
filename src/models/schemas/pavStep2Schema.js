@@ -10,7 +10,7 @@ const pavStep2Schema = new mongoose.Schema({
       contentDetails: {
         categories: [String],
         style: String,
-        quantity: Number,
+        quantity: String,
         description: String,
       },
       albumSpecific: {
@@ -18,6 +18,11 @@ const pavStep2Schema = new mongoose.Schema({
         pageCount: Number,
         bindingType: String,
         pageFinish: String,
+      },
+      videoSpecific: {
+        numberOfVideos: String,
+        duration: String,
+        resolution: String,
       },
       logisticsAndHandover: {
         deliveryFormat: String,
