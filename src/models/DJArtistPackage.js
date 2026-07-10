@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import Package from "./Package.js";
 import djArtistStep2Schema from "./schemas/djArtistStep2Schema.js";
+import policySchema from "./schemas/policySchema.js";
 
 const DJArtistPackage = Package.discriminator(
   "DJArtist",
@@ -97,7 +98,14 @@ const DJArtistPackage = Package.discriminator(
         },
       },
       policiesDocUrl: { type: String },
-      
+
+      // Whether the quoted prices are inclusive of GST.
+      gstInclusive: { type: Boolean, default: false },
+      // Policies and other documents (template / uploaded files / written text).
+      cancellationPolicy: policySchema,
+      lastMinutePolicy: policySchema,
+      generalPolicies: [policySchema],
+
       // DJ Specific
       overtimeCharges: {
         price: { type: Number },

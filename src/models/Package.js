@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import policySchema from "./schemas/policySchema.js";
 
 const packageOptions = {
   discriminatorKey: "vendorType", // This will store the vendor type (e.g., 'Caterer')
@@ -191,6 +192,12 @@ const PackageSchema = new mongoose.Schema(
         billingUnit: { type: String },
         noOfPeople: { type: String },
       },
+      // Whether the quoted prices are inclusive of GST.
+      gstInclusive: { type: Boolean, default: false },
+      // Policies and other documents (template / uploaded files / written text).
+      cancellationPolicy: policySchema,
+      lastMinutePolicy: policySchema,
+      generalPolicies: [policySchema],
       lastMinuteChargesDocUrl: { type: String },
       lastMinuteChargesDescription: { type: String },
       guestTiers: [
