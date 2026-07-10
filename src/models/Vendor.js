@@ -50,6 +50,22 @@ const VendorSchema = new mongoose.Schema({
   },
 
   //business documents
+  fssaiNumber: String,
+  isFssaiVerified: {
+    type: Boolean,
+    default: false,
+  },
+  fssaiDocUrl: String,
+  
+  tradeLicenseNumber: String,
+  isTradeLicVerified: {
+    type: Boolean,
+    default: false,
+  },
+  tradeLicUrl: String,
+  
+  gstDocUrl: String,
+  
   fssaiLicense: String,
   tradeLicense: String,
   gstCertificate: String,
