@@ -231,6 +231,7 @@ const PackageSchema = new mongoose.Schema(
         },
       },
       policiesDocUrl: { type: String },
+      cancellationDocUrl: { type: String },
       // PAV Specific
       dateRangeDynamicPricing: [
         {
