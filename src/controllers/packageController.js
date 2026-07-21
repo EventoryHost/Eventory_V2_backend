@@ -232,7 +232,7 @@ export const getVendorPackages = async (req, res) => {
     const query = { vendorId: actualVendorId };
     if (status) query.packageStatus = status;
 
-    const packages = await Package.find(query);
+    const packages = await Package.find(query).sort({ createdAt: -1 });
 
     return res.status(200).json({ status: "SUCCESS", count: packages.length, packages });
   } catch (error) {
