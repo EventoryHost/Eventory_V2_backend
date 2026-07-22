@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import policySchema from "./policySchema.js";
 
 const pavStep2Schema = new mongoose.Schema({
   packageItems: [
@@ -59,6 +60,7 @@ const pavStep2Schema = new mongoose.Schema({
         price: { type: Number },
         billingUnit: { type: String },
         policyDocUrl: { type: String },
+        policy: policySchema,
         mediaUrls: [{ type: String }],
       },
     ],

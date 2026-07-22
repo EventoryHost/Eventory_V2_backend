@@ -99,9 +99,8 @@ const DJArtistPackage = Package.discriminator(
       },
       policiesDocUrl: { type: String },
 
-      // Whether the quoted prices are inclusive of GST.
       gstInclusive: { type: Boolean, default: false },
-      // Policies and other documents (template / uploaded files / written text).
+      gstRatePercent: { type: Number },
       cancellationPolicy: policySchema,
       lastMinutePolicy: policySchema,
       generalPolicies: [policySchema],
