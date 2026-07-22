@@ -9,6 +9,7 @@ import {
   cancelBooking,
   updateMilestoneStatus,
   updateCalendarNote,
+  customizeBookingPackage,
 } from "../controllers/bookingController.js";
 
 /**
@@ -497,5 +498,73 @@ router.put("/:bookingId/milestone", updateMilestoneStatus);
  *         description: Server error
  */
 router.put("/:bookingId/note", updateCalendarNote);
+
+/**
+ * @swagger
+ * /api/bookings/{bookingId}/customize:
+ *   put:
+ *     summary: Customize the package for a specific booking
+ *     description: |
+ *       Lets the vendor override package details (name, price, addons) for one booking
+ *       without touching the original Package document. Writes to booking.customizedPackage
+ *       and syncs booking.charges[] + booking.totalAmount. Only Accepted bookings can be
+ *       customized. Idempotent — calling again overwrites the previous customization.
+ *     tags: [Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               packageName:
+ *                 type: string
+ *                 example: "Corporate Premium (Custom)"
+ *               basePrice:
+ *                 type: number
+ *                 example: 25000
+ *               billingUnit:
+ *                 type: string
+ *                 enum: [Per Event, Per Hour, Per Day, Per Guest]
+ *                 example: "Per Event"
+ *               lineItems:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   required: [label, amount]
+ *                   properties:
+ *                     label:
+ *                       type: string
+ *                       example: "Base Package"
+ *                     amount:
+ *                       type: number
+ *                       example: 25000
+ *                     qty:
+ *                       type: number
+ *                       default: 1
+ *                     type:
+ *                       type: string
+ *                       enum: [Base, Addon, Fee, Discount, Tax]
+ *                       default: Addon
+ *               notes:
+ *                 type: string
+ *                 example: "Client requested fog machine for entrance"
+ *     responses:
+ *       200:
+ *         description: Package customized successfully
+ *       400:
+ *         description: Booking not Accepted, or validation failed
+ *       404:
+ *         description: Booking not found
+ *       500:
+ *         description: Server error
+ */
+router.put("/:bookingId/customize", customizeBookingPackage);
 
 export default router;

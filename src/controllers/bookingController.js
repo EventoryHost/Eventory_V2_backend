@@ -7,6 +7,7 @@ import { generateISTId } from "../utils/idGenerator.js";
 import {
   validateCreateBooking,
   validateMilestoneUpdate,
+  validateCustomizePackage,
 } from "../validators/bookingValidators.js";
 
 // ─── Helpers ────────────────────────────────────────────────
@@ -570,6 +571,96 @@ export const updateCalendarNote = async (req, res) => {
     return res.status(500).json({
       status: "ERROR",
       message: "Failed to save calendar note",
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @desc    Customize the package for a specific booking (vendor-only, booking-scoped)
+ * @route   PUT /api/bookings/:bookingId/customize
+ * @body    { packageName?, basePrice?, billingUnit?, lineItems?:[{label,amount,qty?,type?}], notes? }
+ *
+ * Does NOT touch the original Package document. Writes only to booking.customizedPackage.
+ * Also syncs booking.charges[] and booking.totalAmount from the lineItems so that the
+ * "Payment Details" section in the app displays real data.
+ */
+export const customizeBookingPackage = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+
+    let booking;
+    if (bookingId.startsWith("EVT")) {
+      booking = await Booking.findOne({ bookingId });
+    } else {
+      booking = await Booking.findById(bookingId);
+    }
+
+    if (!booking) {
+      return res
+        .status(404)
+        .json({ status: "FAILED", message: "Booking not found" });
+    }
+
+    if (booking.status !== "Accepted") {
+      return res.status(400).json({
+        status: "FAILED",
+        message: `Cannot customize a booking with status "${booking.status}". Only Accepted bookings can be customized.`,
+      });
+    }
+
+    const validation = validateCustomizePackage(req.body);
+    if (!validation.valid) {
+      return res.status(400).json({
+        status: "FAILED",
+        message: "Validation failed",
+        errors: validation.errors,
+      });
+    }
+
+    const lineItems = (req.body.lineItems || []).map((item) => ({
+      label: item.label,
+      amount: item.amount,
+      qty: item.qty ?? 1,
+      type: item.type ?? "Addon",
+    }));
+
+    const totalAmount = lineItems.reduce(
+      (sum, item) => sum + item.amount * item.qty,
+      0
+    );
+
+    booking.customizedPackage = {
+      packageName: req.body.packageName ?? booking.customizedPackage?.packageName ?? null,
+      basePrice: req.body.basePrice ?? booking.customizedPackage?.basePrice ?? null,
+      billingUnit: req.body.billingUnit ?? booking.customizedPackage?.billingUnit ?? "Per Event",
+      lineItems,
+      totalAmount,
+      notes: req.body.notes ?? null,
+      customizedAt: new Date(),
+    };
+
+    // Sync charges[] so Payment Details widget gets real itemized data
+    booking.charges = lineItems.map((item) => ({
+      label: item.label,
+      amount: item.amount * item.qty,
+      type: item.type === "Addon" ? "Fee" : item.type,
+    }));
+
+    booking.totalAmount = totalAmount;
+
+    await booking.save();
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Package customized successfully",
+      booking,
+    });
+  } catch (error) {
+    console.error("Customize Booking Package Error:", error);
+    return res.status(500).json({
+      status: "ERROR",
+      message: "Failed to customize package",
       error: error.message,
     });
   }
