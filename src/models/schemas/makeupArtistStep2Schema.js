@@ -39,6 +39,8 @@ const makeupArtistStep2Schema = new mongoose.Schema({
   ],
   included: [{ type: String }],
   notIncluded: [{ type: String }],
+  drapingIncluded: { type: Boolean, default: false },
+  drapingServiceTypes: [{ type: String }],
 }, { _id: false });
 
 export default makeupArtistStep2Schema;

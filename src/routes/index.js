@@ -8,6 +8,7 @@ import calendarRoutes from "./calendarRoutes.js";
 import bookingRoutes from "./bookingRoutes.js";
 import enquiryRoutes from "./enquiryRoutes.js";
 import transactionRoutes from "./transactionRoutes.js";
+import redirectRoutes from "./redirectRoutes.js";
 
 /**
  * @swagger
@@ -53,6 +54,7 @@ router.use("/calendar", calendarRoutes);
 router.use("/bookings", bookingRoutes);
 router.use("/enquiries", enquiryRoutes);
 router.use("/transactions", transactionRoutes);
+router.use("/redirect", redirectRoutes);
 
 export default router;
 
