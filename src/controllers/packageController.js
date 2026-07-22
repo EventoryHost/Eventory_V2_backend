@@ -136,6 +136,21 @@ export const getPackageById = async (req, res) => {
   }
 };
 
+// Steps 1-4 are the package setup; 5-8 are the booking settings sections,
+// which live at the top level rather than under a stepN_ key. Saving through a
+// step also records it in completedSteps, so the vendor can resume from
+// wherever they left off.
+const STEP_FIELDS = {
+  1: "step1_eventAndCrew",
+  2: "step2_productsAndPricing",
+  3: "step3_policiesAndCharges",
+  4: "step4_sampleMedia",
+  5: "bookingSettings",
+  6: "paymentMilestones",
+  7: "availabilitySettings",
+  8: "bookingCapacity",
+};
+
 /**
  * @desc Update a specific step of the package (Deep Merge)
  */
@@ -152,22 +167,7 @@ export const updatePackageStep = async (req, res) => {
     // Solve discriminator gotcha by using the subclass Model so subclass-specific fields like step2 are kept
     const Model = getModelForVendor(basePkg.vendorType);
 
-    // Steps 1-4 are the package setup; 5-8 are the booking settings sections,
-    // which live at the top level rather than under a stepN_ key. Routing them
-    // through here means they also get recorded in completedSteps below, so the
-    // vendor can resume from wherever they left off.
-    const stepMap = {
-      1: "step1_eventAndCrew",
-      2: "step2_productsAndPricing",
-      3: "step3_policiesAndCharges",
-      4: "step4_sampleMedia",
-      5: "bookingSettings",
-      6: "paymentMilestones",
-      7: "availabilitySettings",
-      8: "bookingCapacity",
-    };
-
-    const updateField = stepMap[stepNumber];
+    const updateField = STEP_FIELDS[stepNumber];
     if (!updateField) {
       return res.status(400).json({ status: "FAILED", message: "Invalid step number" });
     }
@@ -211,7 +211,9 @@ export const updatePackage = async (req, res) => {
     const { packageId } = req.params;
 
     // Whitelist the top-level fields that may be updated this way.
-    const allowedFields = ["variantType"];
+    // packageStatus covers soft delete ("Deleted") and restore ("Draft");
+    // the schema enum rejects anything else via runValidators below.
+    const allowedFields = ["variantType", "packageStatus"];
     const updates = {};
     for (const field of allowedFields) {
       if (req.body[field] !== undefined) updates[field] = req.body[field];
@@ -321,12 +323,11 @@ export const getPackageGroup = async (req, res) => {
 
 /**
  * @desc Rename a logical package across all of its variants in one write.
- * Body: { packageName: string }
  */
 export const updatePackageGroup = async (req, res) => {
   try {
     const { packageGroupId } = req.params;
-    const { packageName } = req.body;
+    const { packageName, packageStatus, step, data } = req.body;
 
     if (!mongoose.Types.ObjectId.isValid(packageGroupId)) {
       return res.status(400).json({
@@ -335,18 +336,54 @@ export const updatePackageGroup = async (req, res) => {
       });
     }
 
-    if (typeof packageName !== "string" || !packageName.trim()) {
-      return res.status(400).json({
-        status: "FAILED",
-        message: "packageName is required",
-      });
+    const set = {};
+
+    if (packageName !== undefined) {
+      if (typeof packageName !== "string" || !packageName.trim()) {
+        return res.status(400).json({
+          status: "FAILED",
+          message: "packageName must be a non-empty string",
+        });
+      }
+      set["step1_eventAndCrew.packageName"] = packageName.trim();
     }
 
-    // Renaming through the base model is safe here: this touches only a base
-    // schema path, and $set never strips discriminator fields.
+    // Soft delete and restore are a status change across the whole group.
+    if (packageStatus !== undefined) {
+      set.packageStatus = packageStatus;
+    }
+
+    const update = {};
+
+    // Booking settings (steps 5-8) belong to the logical package, so they are
+    // written to every variant at once rather than one call per variant.
+    if (step !== undefined) {
+      const field = STEP_FIELDS[step];
+      if (!field) {
+        return res.status(400).json({ status: "FAILED", message: "Invalid step number" });
+      }
+      if (data && typeof data === "object" && !Array.isArray(data)) {
+        Object.keys(data).forEach((key) => {
+          set[`${field}.${key}`] = data[key];
+        });
+      }
+      update.$addToSet = { completedSteps: parseInt(step) };
+    }
+
+    if (Object.keys(set).length === 0 && !update.$addToSet) {
+      return res.status(400).json({
+        status: "FAILED",
+        message: "No updatable fields provided",
+      });
+    }
+    if (Object.keys(set).length > 0) update.$set = set;
+
+    // Safe through the base model: every path touched here is on the base
+    // schema, and $set never strips discriminator fields.
     const result = await Package.updateMany(
       { packageGroupId: new mongoose.Types.ObjectId(packageGroupId) },
-      { $set: { "step1_eventAndCrew.packageName": packageName.trim() } }
+      update,
+      { runValidators: true }
     );
 
     if (result.matchedCount === 0) {
@@ -355,12 +392,12 @@ export const updatePackageGroup = async (req, res) => {
 
     return res.status(200).json({
       status: "SUCCESS",
-      message: "Package group renamed",
+      message: "Package group updated",
       matched: result.matchedCount,
       modified: result.modifiedCount,
     });
   } catch (error) {
-    return res.status(500).json({ status: "ERROR", message: "Failed to rename package group", error: error.message });
+    return res.status(500).json({ status: "ERROR", message: "Failed to update package group", error: error.message });
   }
 };
 
@@ -387,36 +424,6 @@ export const submitPackage = async (req, res) => {
     return res.status(200).json({ status: "SUCCESS", message: "Package submitted successfully", packageStatus: pkg.packageStatus });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to submit package", error: error.message });
-  }
-};
-
-/**
- * @desc Restore a soft-deleted package back to Draft
- */
-export const restorePackage = async (req, res) => {
-  try {
-    const { packageId } = req.params;
-    const pkg = await Package.findById(packageId);
-
-    if (!pkg) {
-      return res.status(404).json({ status: "FAILED", message: "Package not found" });
-    }
-    if (pkg.packageStatus !== "Deleted") {
-      return res.status(400).json({
-        status: "FAILED",
-        message: "Only a deleted package can be restored",
-      });
-    }
-
-    // Soft delete only flips packageStatus, so restoring is the inverse. A
-    // restored package returns to Draft rather than to whatever it was before,
-    // since its previous status is not recorded.
-    pkg.packageStatus = "Draft";
-    await pkg.save();
-
-    return res.status(200).json({ status: "SUCCESS", message: "Package restored" });
-  } catch (error) {
-    return res.status(500).json({ status: "ERROR", message: "Failed to restore package", error: error.message });
   }
 };
 

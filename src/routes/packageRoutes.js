@@ -11,7 +11,6 @@ import {
   submitPackage,
   deletePackage,
   duplicatePackage,
-  restorePackage,
   hardDeletePackage,
   addNestedItem,
   updateNestedItem,
@@ -636,9 +635,6 @@ router.post("/:packageId/submit", submitPackage);
  *         description: Server error
  */
 router.delete("/:packageId", deletePackage);
-
-// Restore a soft-deleted package back to Draft.
-router.put("/:packageId/restore", restorePackage);
 
 // Permanently remove the document. Irreversible; declared before the generic
 // delete above would still match, so the distinct path keeps them separate.
