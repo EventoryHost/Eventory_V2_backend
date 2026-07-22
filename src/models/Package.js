@@ -158,7 +158,9 @@ const PackageSchema = new mongoose.Schema(
       // Makeup Artist specific
       durationPerPerson: { type: Number },
       durationOfSetup: { type: Number },
+      atHomeService: { type: Boolean, default: false },
       trialOffered: { type: Boolean, default: false },
+      trialCost: { type: Number },
       parallelServicingPossible: { type: Boolean, default: false },
       // DJ Artist specific
       audienceCapacity: {
@@ -176,6 +178,7 @@ const PackageSchema = new mongoose.Schema(
       },
       supportingCrew: { type: Number },
       visitingIncluded: { type: Boolean, default: false },
+      experience: { type: String },
       // PAV specific
       crewBreakdown: {
         photographers: { type: Number, default: 0 },
@@ -241,6 +244,7 @@ const PackageSchema = new mongoose.Schema(
         },
       },
       policiesDocUrl: { type: String },
+      cancellationDocUrl: { type: String },
       // PAV Specific
       dateRangeDynamicPricing: [
         {

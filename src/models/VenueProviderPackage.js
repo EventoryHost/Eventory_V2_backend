@@ -126,6 +126,8 @@ const VenueProviderPackage = Package.discriminator(
           },
         },
       ],
+      included: [{ type: String }],
+      notIncluded: [{ type: String }],
     },
 
     step3_policiesAndCharges: {
