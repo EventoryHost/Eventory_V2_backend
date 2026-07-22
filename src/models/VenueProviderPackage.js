@@ -96,6 +96,7 @@ const VenueProviderPackage = Package.discriminator(
           name: { type: String },
           category: { type: String },
           subCategory: { type: String },
+          quantity: { type: Number },
           minCapacity: { type: Number },
           maxCapacity: { type: Number },
           description: { type: String },
@@ -123,6 +124,8 @@ const VenueProviderPackage = Package.discriminator(
           },
         },
       ],
+      included: [{ type: String }],
+      notIncluded: [{ type: String }],
     },
 
     step3_policiesAndCharges: {
