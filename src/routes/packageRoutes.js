@@ -6,9 +6,13 @@ import {
   updatePackage,
   updatePackageStep,
   getVendorPackages,
+  getPackageGroup,
+  updatePackageGroup,
   submitPackage,
   deletePackage,
   duplicatePackage,
+  restorePackage,
+  hardDeletePackage,
   addNestedItem,
   updateNestedItem,
   removeNestedItem,
@@ -133,6 +137,10 @@ import {
  *       Creates a new empty package in Draft status for the given vendor.
  *       The correct discriminator model is chosen based on vendorType.
  *       Returns the new packageId — use this ID for all subsequent step updates.
+ *
+ *       Also returns packageGroupId. Omit it on the FIRST variant of a package
+ *       (one is minted for you), then send that same value back when creating
+ *       the remaining variants so they join the same group.
  *     tags: [Packages]
  *     requestBody:
  *       required: true
@@ -154,6 +162,16 @@ import {
  *                 type: string
  *                 enum: [Ready-to-Book, Enquiry/Quote]
  *                 example: "Ready-to-Book"
+ *               variantType:
+ *                 type: string
+ *                 description: Free-form variant name, defaults to "Premium"
+ *                 example: "Premium"
+ *               packageGroupId:
+ *                 type: string
+ *                 description: |
+ *                   Group this variant joins. Omit on the first variant of a
+ *                   package; pass the returned value for subsequent variants.
+ *                 example: "664a1b2c3d4e5f6a7b8c9d0e"
  *               availabilityCalendar:
  *                 type: array
  *                 items:
@@ -181,12 +199,111 @@ import {
  *                 packageId:
  *                   type: string
  *                   description: The ID to use for all subsequent operations
+ *                 packageGroupId:
+ *                   type: string
+ *                   description: Send this back when creating sibling variants
  *       400:
- *         description: Missing required fields
+ *         description: Missing required fields or invalid packageGroupId
  *       500:
  *         description: Server error
  */
 router.post("/initialize", initializePackage);
+
+/**
+ * @swagger
+ * /api/packages/group/{packageGroupId}:
+ *   get:
+ *     summary: Get every variant of one logical package
+ *     description: |
+ *       Returns all variant documents sharing the given packageGroupId, oldest
+ *       first. Replaces fetching every package for a vendor and filtering by
+ *       package name on the client.
+ *     tags: [Packages]
+ *     parameters:
+ *       - in: path
+ *         name: packageGroupId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The package group ObjectId shared by all variants
+ *     responses:
+ *       200:
+ *         description: Variants of the package
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: SUCCESS
+ *                 count:
+ *                   type: number
+ *                 packageGroupId:
+ *                   type: string
+ *                 packages:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/PackageBase'
+ *       400:
+ *         description: Invalid packageGroupId
+ *       404:
+ *         description: Package group not found
+ *       500:
+ *         description: Server error
+ */
+router.get("/group/:packageGroupId", getPackageGroup);
+
+/**
+ * @swagger
+ * /api/packages/group/{packageGroupId}:
+ *   put:
+ *     summary: Rename a logical package across all of its variants
+ *     description: |
+ *       Sets step1_eventAndCrew.packageName on every variant in the group in a
+ *       single write, so a rename cannot partially apply and split the group.
+ *     tags: [Packages]
+ *     parameters:
+ *       - in: path
+ *         name: packageGroupId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The package group ObjectId shared by all variants
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [packageName]
+ *             properties:
+ *               packageName:
+ *                 type: string
+ *                 example: Wedding Deluxe
+ *     responses:
+ *       200:
+ *         description: Group renamed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: SUCCESS
+ *                 matched:
+ *                   type: number
+ *                 modified:
+ *                   type: number
+ *       400:
+ *         description: Invalid packageGroupId or missing packageName
+ *       404:
+ *         description: Package group not found
+ *       500:
+ *         description: Server error
+ */
+router.put("/group/:packageGroupId", updatePackageGroup);
 
 /**
  * @swagger
@@ -282,6 +399,12 @@ router.put("/:packageId", updatePackage);
  *           type: string
  *           enum: [Draft, Under Review, Live, Deleted]
  *         description: "Filter by package status. Example: ?status=Draft"
+ *       - in: query
+ *         name: packageGroupId
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: "Return only variants of one logical package"
  *     responses:
  *       200:
  *         description: List of packages
@@ -513,6 +636,13 @@ router.post("/:packageId/submit", submitPackage);
  *         description: Server error
  */
 router.delete("/:packageId", deletePackage);
+
+// Restore a soft-deleted package back to Draft.
+router.put("/:packageId/restore", restorePackage);
+
+// Permanently remove the document. Irreversible; declared before the generic
+// delete above would still match, so the distinct path keeps them separate.
+router.delete("/:packageId/permanent", hardDeletePackage);
 
 /**
  * @swagger

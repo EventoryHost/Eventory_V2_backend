@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Package from "../models/Package.js";
 import Vendor from "../models/Vendor.js";
 import { getModelForVendor } from "../utils/modelRegistry.js";
@@ -13,6 +14,7 @@ export const initializePackage = async (req, res) => {
       vendorType,
       packageName,
       variantType,
+      packageGroupId,
     } = req.body;
 
     if (!vendorId || !vendorType) {
@@ -38,26 +40,51 @@ export const initializePackage = async (req, res) => {
 
     const Model = getModelForVendor(vendorType);
 
-    // A logical package can have multiple variants — each is its own document
-    // sharing vendorId + packageName and distinguished by variantType.
+    // A logical package can have multiple variants — each is its own document,
+    // tied to its siblings by a shared packageGroupId.
     const resolvedName =
       packageName && packageName.trim() ? packageName.trim() : "Untitled Package";
     const resolvedVariant =
       variantType && variantType.trim() ? variantType.trim() : "Premium";
 
-    // Idempotency: reuse an existing draft for the SAME variant of this package
-    // (scoped to variantType + packageName so sibling variants are not collapsed).
-    const existingDraft = await Model.findOne({
-      vendorId: actualVendorId,
-      packageStatus: "Draft",
-      variantType: resolvedVariant,
-      "step1_eventAndCrew.packageName": resolvedName,
-    });
+    // The client sends the group id it got back from the first variant so the
+    // rest join that group. Reject a malformed one rather than quietly minting a
+    // fresh id, which would split the group without any visible error.
+    const hasClientGroupId =
+      packageGroupId !== undefined && packageGroupId !== null && packageGroupId !== "";
+    if (hasClientGroupId && !mongoose.Types.ObjectId.isValid(packageGroupId)) {
+      return res.status(400).json({
+        status: "FAILED",
+        message: `Invalid packageGroupId: ${packageGroupId}`,
+      });
+    }
+    const resolvedGroupId = hasClientGroupId
+      ? new mongoose.Types.ObjectId(packageGroupId)
+      : new mongoose.Types.ObjectId();
+
+    // Idempotency: reuse an existing draft for the SAME variant of this package.
+    // Prefer the group id; fall back to the legacy name match only when the
+    // client sent no group id (i.e. a client that predates this field).
+    const existingDraft = await Model.findOne(
+      hasClientGroupId
+        ? {
+            packageGroupId: resolvedGroupId,
+            packageStatus: "Draft",
+            variantType: resolvedVariant,
+          }
+        : {
+            vendorId: actualVendorId,
+            packageStatus: "Draft",
+            variantType: resolvedVariant,
+            "step1_eventAndCrew.packageName": resolvedName,
+          }
+    );
     if (existingDraft) {
       return res.status(200).json({
         status: "SUCCESS",
         message: "Existing draft package retrieved",
         packageId: existingDraft._id,
+        packageGroupId: existingDraft.packageGroupId,
       });
     }
 
@@ -65,6 +92,7 @@ export const initializePackage = async (req, res) => {
       vendorId: actualVendorId,
       vendorType,
       packageStatus: "Draft",
+      packageGroupId: resolvedGroupId,
       variantType: resolvedVariant,
       step1_eventAndCrew: {
         packageName: resolvedName,
@@ -78,6 +106,7 @@ export const initializePackage = async (req, res) => {
       status: "SUCCESS",
       message: "Package initialized successfully",
       packageId: newPackage._id,
+      packageGroupId: newPackage.packageGroupId,
     });
   } catch (error) {
     console.error("Initialize Package Error:", error);
@@ -123,11 +152,19 @@ export const updatePackageStep = async (req, res) => {
     // Solve discriminator gotcha by using the subclass Model so subclass-specific fields like step2 are kept
     const Model = getModelForVendor(basePkg.vendorType);
 
+    // Steps 1-4 are the package setup; 5-8 are the booking settings sections,
+    // which live at the top level rather than under a stepN_ key. Routing them
+    // through here means they also get recorded in completedSteps below, so the
+    // vendor can resume from wherever they left off.
     const stepMap = {
       1: "step1_eventAndCrew",
       2: "step2_productsAndPricing",
       3: "step3_policiesAndCharges",
       4: "step4_sampleMedia",
+      5: "bookingSettings",
+      6: "paymentMilestones",
+      7: "availabilitySettings",
+      8: "bookingCapacity",
     };
 
     const updateField = stepMap[stepNumber];
@@ -216,7 +253,7 @@ export const updatePackage = async (req, res) => {
 export const getVendorPackages = async (req, res) => {
   try {
     const { vendorId } = req.params;
-    const { status } = req.query;
+    const { status, packageGroupId } = req.query;
     
     // Resolve human-readable custom vendor ID (e.g., "VEN...") to MongoDB ObjectId
     let actualVendorId = vendorId;
@@ -231,12 +268,99 @@ export const getVendorPackages = async (req, res) => {
     
     const query = { vendorId: actualVendorId };
     if (status) query.packageStatus = status;
+    if (packageGroupId) {
+      if (!mongoose.Types.ObjectId.isValid(packageGroupId)) {
+        return res.status(400).json({
+          status: "FAILED",
+          message: `Invalid packageGroupId: ${packageGroupId}`,
+        });
+      }
+      query.packageGroupId = new mongoose.Types.ObjectId(packageGroupId);
+    }
 
     const packages = await Package.find(query);
 
     return res.status(200).json({ status: "SUCCESS", count: packages.length, packages });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to fetch vendor packages", error: error.message });
+  }
+};
+
+/**
+ * @desc Get every variant of one logical package, oldest first.
+ */
+export const getPackageGroup = async (req, res) => {
+  try {
+    const { packageGroupId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(packageGroupId)) {
+      return res.status(400).json({
+        status: "FAILED",
+        message: `Invalid packageGroupId: ${packageGroupId}`,
+      });
+    }
+
+    const packages = await Package.find({
+      packageGroupId: new mongoose.Types.ObjectId(packageGroupId),
+    }).sort({ createdAt: 1 });
+
+    if (packages.length === 0) {
+      return res.status(404).json({ status: "FAILED", message: "Package group not found" });
+    }
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      count: packages.length,
+      packageGroupId,
+      packages,
+    });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to fetch package group", error: error.message });
+  }
+};
+
+/**
+ * @desc Rename a logical package across all of its variants in one write.
+ * Body: { packageName: string }
+ */
+export const updatePackageGroup = async (req, res) => {
+  try {
+    const { packageGroupId } = req.params;
+    const { packageName } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(packageGroupId)) {
+      return res.status(400).json({
+        status: "FAILED",
+        message: `Invalid packageGroupId: ${packageGroupId}`,
+      });
+    }
+
+    if (typeof packageName !== "string" || !packageName.trim()) {
+      return res.status(400).json({
+        status: "FAILED",
+        message: "packageName is required",
+      });
+    }
+
+    // Renaming through the base model is safe here: this touches only a base
+    // schema path, and $set never strips discriminator fields.
+    const result = await Package.updateMany(
+      { packageGroupId: new mongoose.Types.ObjectId(packageGroupId) },
+      { $set: { "step1_eventAndCrew.packageName": packageName.trim() } }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ status: "FAILED", message: "Package group not found" });
+    }
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Package group renamed",
+      matched: result.matchedCount,
+      modified: result.modifiedCount,
+    });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to rename package group", error: error.message });
   }
 };
 
@@ -267,6 +391,54 @@ export const submitPackage = async (req, res) => {
 };
 
 /**
+ * @desc Restore a soft-deleted package back to Draft
+ */
+export const restorePackage = async (req, res) => {
+  try {
+    const { packageId } = req.params;
+    const pkg = await Package.findById(packageId);
+
+    if (!pkg) {
+      return res.status(404).json({ status: "FAILED", message: "Package not found" });
+    }
+    if (pkg.packageStatus !== "Deleted") {
+      return res.status(400).json({
+        status: "FAILED",
+        message: "Only a deleted package can be restored",
+      });
+    }
+
+    // Soft delete only flips packageStatus, so restoring is the inverse. A
+    // restored package returns to Draft rather than to whatever it was before,
+    // since its previous status is not recorded.
+    pkg.packageStatus = "Draft";
+    await pkg.save();
+
+    return res.status(200).json({ status: "SUCCESS", message: "Package restored" });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to restore package", error: error.message });
+  }
+};
+
+/**
+ * @desc Permanently delete a package. Irreversible — the document is removed.
+ */
+export const hardDeletePackage = async (req, res) => {
+  try {
+    const { packageId } = req.params;
+    const deleted = await Package.findByIdAndDelete(packageId);
+
+    if (!deleted) {
+      return res.status(404).json({ status: "FAILED", message: "Package not found" });
+    }
+
+    return res.status(200).json({ status: "SUCCESS", message: "Package permanently deleted" });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to permanently delete package", error: error.message });
+  }
+};
+
+/**
  * @desc Soft delete a package
  */
 export const deletePackage = async (req, res) => {
@@ -289,6 +461,20 @@ export const deletePackage = async (req, res) => {
 };
 
 /**
+ * Recursively deletes every `_id` in a lean document so a duplicate gets fresh
+ * ones. Mutates in place.
+ */
+const stripIds = (node) => {
+  if (Array.isArray(node)) {
+    node.forEach(stripIds);
+  } else if (node && typeof node === "object" && !(node instanceof Date)) {
+    delete node._id;
+    Object.values(node).forEach(stripIds);
+  }
+  return node;
+};
+
+/**
  * @desc Duplicate an existing package
  */
 export const duplicatePackage = async (req, res) => {
@@ -300,21 +486,33 @@ export const duplicatePackage = async (req, res) => {
       return res.status(404).json({ status: "FAILED", message: "Package not found" });
     }
 
-    // Remove ID and metadata
-    delete originalPkg._id;
+    // Remove ID and metadata. stripIds also clears nested subdocument _ids,
+    // which would otherwise be carried over verbatim from the original.
+    stripIds(originalPkg);
     delete originalPkg.createdAt;
     delete originalPkg.updatedAt;
-    
+
+    // A duplicate is a NEW logical package, so it starts its own group rather
+    // than joining the original's.
+    originalPkg.packageGroupId = new mongoose.Types.ObjectId();
+
     // Reset status and progress
     originalPkg.packageStatus = "Draft";
     originalPkg.completedSteps = [];
-    originalPkg.step1_eventAndCrew.packageName += " (Copy)";
+    if (!originalPkg.step1_eventAndCrew) originalPkg.step1_eventAndCrew = {};
+    originalPkg.step1_eventAndCrew.packageName =
+      `${originalPkg.step1_eventAndCrew.packageName || "Untitled Package"} (Copy)`;
 
     const Model = getModelForVendor(originalPkg.vendorType);
     const duplicatedPkg = new Model(originalPkg);
     await duplicatedPkg.save();
 
-    return res.status(201).json({ status: "SUCCESS", message: "Package duplicated", packageId: duplicatedPkg._id });
+    return res.status(201).json({
+      status: "SUCCESS",
+      message: "Package duplicated",
+      packageId: duplicatedPkg._id,
+      packageGroupId: duplicatedPkg.packageGroupId,
+    });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to duplicate package", error: error.message });
   }
