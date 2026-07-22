@@ -1,5 +1,7 @@
 const VALID_PAYMENT_TYPES = ["FreeBooking", "AdvancePaid", "FullPaid"];
 const VALID_MILESTONE_TYPES = ["Token", "Advanced1", "Advanced2", "FinalClearance"];
+const VALID_BILLING_UNITS = ["Per Event", "Per Hour", "Per Day", "Per Guest"];
+const VALID_LINE_ITEM_TYPES = ["Base", "Addon", "Fee", "Discount", "Tax"];
 
 /**
  * Validate booking creation payload.
@@ -89,6 +91,45 @@ export const validateCreateEnquiry = (body) => {
     body.budgetMin > body.budgetMax
   ) {
     errors.push("budgetMin must be less than or equal to budgetMax");
+  }
+
+  return { valid: errors.length === 0, errors };
+};
+
+/**
+ * Validate customize package payload. All fields are optional (idempotent update).
+ */
+export const validateCustomizePackage = (body) => {
+  const errors = [];
+
+  if (body.packageName !== undefined && (typeof body.packageName !== "string" || !body.packageName.trim())) {
+    errors.push("packageName must be a non-empty string");
+  }
+
+  if (body.basePrice !== undefined && (typeof body.basePrice !== "number" || body.basePrice < 0)) {
+    errors.push("basePrice must be a number >= 0");
+  }
+
+  if (body.billingUnit !== undefined && !VALID_BILLING_UNITS.includes(body.billingUnit)) {
+    errors.push(`billingUnit must be one of: ${VALID_BILLING_UNITS.join(", ")}`);
+  }
+
+  if (body.lineItems !== undefined) {
+    if (!Array.isArray(body.lineItems)) {
+      errors.push("lineItems must be an array");
+    } else {
+      body.lineItems.forEach((item, i) => {
+        if (!item || typeof item.label !== "string" || !item.label.trim()) {
+          errors.push(`lineItems[${i}].label is required`);
+        }
+        if (!item || typeof item.amount !== "number" || item.amount < 0) {
+          errors.push(`lineItems[${i}].amount must be a number >= 0`);
+        }
+        if (item && item.type !== undefined && !VALID_LINE_ITEM_TYPES.includes(item.type)) {
+          errors.push(`lineItems[${i}].type must be one of: ${VALID_LINE_ITEM_TYPES.join(", ")}`);
+        }
+      });
+    }
   }
 
   return { valid: errors.length === 0, errors };

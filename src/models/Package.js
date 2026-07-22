@@ -114,11 +114,19 @@ const PackageSchema = new mongoose.Schema(
         status: { type: String, enum: ["Available", "Blocked", "Booked"] },
       },
     ],
+    // Groups the variants of one logical package. Every variant is its own
+    // document; siblings are tied together by sharing this id rather than by
+    // matching on the (mutable, user-typed) step1_eventAndCrew.packageName.
+    packageGroupId: {
+      type: mongoose.Schema.Types.ObjectId,
+      required: true,
+      index: true,
+    },
     variantType: {
       type: String,
       default: "Premium",
     },
-    completedSteps: [{ type: Number }], // Track which steps (1, 2, 3, 4) are finished
+    completedSteps: [{ type: Number }],
 
     // -- Step 1: Event & Crew (Mostly Shared) --
     step1_eventAndCrew: {
@@ -197,6 +205,8 @@ const PackageSchema = new mongoose.Schema(
       },
       // Whether the quoted prices are inclusive of GST.
       gstInclusive: { type: Boolean, default: false },
+      // GST rate as a whole-number percentage (e.g. 5 or 18).
+      gstRatePercent: { type: Number },
       // Policies and other documents (template / uploaded files / written text).
       cancellationPolicy: policySchema,
       lastMinutePolicy: policySchema,
@@ -267,6 +277,11 @@ const PackageSchema = new mongoose.Schema(
   },
   packageOptions
 );
+
+// Loading every variant of one logical package (the common read).
+PackageSchema.index({ packageGroupId: 1, variantType: 1 });
+// Listing a vendor's packages, optionally filtered by status.
+PackageSchema.index({ vendorId: 1, packageStatus: 1 });
 
 const Package = mongoose.model("Package", PackageSchema);
 

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import policySchema from "./policySchema.js";
 
 const decoratorStep2Schema = new mongoose.Schema({
   totalPackagePrice: { type: Number, default: 0 },
@@ -64,6 +65,7 @@ const decoratorStep2Schema = new mongoose.Schema({
       },
       materialOptions: [{ material: String, price: Number }],
       policyDocUrl: String,
+      policy: policySchema,
       mediaUrls: [String],
     },
   ],

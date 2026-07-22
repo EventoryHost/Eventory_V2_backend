@@ -5,6 +5,7 @@ import decoratorStep2Schema from "./schemas/decoratorStep2Schema.js";
 import pavStep2Schema from "./schemas/pavStep2Schema.js";
 import djArtistStep2Schema from "./schemas/djArtistStep2Schema.js";
 import makeupArtistStep2Schema from "./schemas/makeupArtistStep2Schema.js";
+import policySchema from "./schemas/policySchema.js";
 
 const mediaSchema = {
   url: { type: String },
@@ -103,6 +104,7 @@ const VenueProviderPackage = Package.discriminator(
           price: { type: Number },
           billingUnit: { type: String },
           policyDocUrl: { type: String },
+          policy: policySchema,
           mediaUrls: [{ type: String }],
           spaceDetails: {
             spaceType: { type: String },
@@ -133,6 +135,14 @@ const VenueProviderPackage = Package.discriminator(
         price: { type: Number },
         billingUnit: { type: String },
       },
+      // Whether the quoted prices are inclusive of GST.
+      gstInclusive: { type: Boolean, default: false },
+      // GST rate as a whole-number percentage (e.g. 5 or 18).
+      gstRatePercent: { type: Number },
+      // Policies and other documents (template / uploaded files / written text).
+      cancellationPolicy: policySchema,
+      lastMinutePolicy: policySchema,
+      generalPolicies: [policySchema],
     },
 
     step4_sampleMedia: {

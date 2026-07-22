@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import policySchema from "./policySchema.js";
 
 const catererStep2Schema = new mongoose.Schema({
   crockery: {
@@ -41,6 +42,7 @@ const catererStep2Schema = new mongoose.Schema({
       price: Number,
       billingUnit: String,
       policyDocUrl: String,
+      policy: policySchema,
       mediaUrls: [String],
     },
   ],

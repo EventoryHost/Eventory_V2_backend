@@ -1,5 +1,36 @@
 import mongoose from "mongoose";
 
+const CustomizedLineItemSchema = new mongoose.Schema(
+  {
+    label: { type: String, required: true },
+    amount: { type: Number, required: true },
+    qty: { type: Number, default: 1 },
+    type: {
+      type: String,
+      enum: ["Base", "Addon", "Fee", "Discount", "Tax"],
+      default: "Addon",
+    },
+  },
+  { _id: false }
+);
+
+const CustomizedPackageSchema = new mongoose.Schema(
+  {
+    packageName: { type: String, default: null },
+    basePrice: { type: Number, default: null },
+    billingUnit: {
+      type: String,
+      enum: ["Per Event", "Per Hour", "Per Day", "Per Guest"],
+      default: "Per Event",
+    },
+    lineItems: [CustomizedLineItemSchema],
+    totalAmount: { type: Number, default: 0 },
+    notes: { type: String, default: null },
+    customizedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
 const ChargeSchema = new mongoose.Schema(
   {
     label: {
@@ -84,9 +115,9 @@ const BookingSchema = new mongoose.Schema(
       type: Date,
       required: true,
     },
-    guestRange:{
-      min:{ type: Number },
-      max:{ type: Number }
+    guestRange: {
+      min: { type: Number },
+      max: { type: Number },
     },
     location: {
       type: String,
@@ -106,7 +137,7 @@ const BookingSchema = new mongoose.Schema(
       default: null,
     },
 
-    // Package snapshot (denormalized at booking time)
+    // Package snapshot (denormalized at booking time — never mutated after creation)
     packageSnapshot: {
       name: { type: String },
       price: { type: Number },
@@ -130,8 +161,8 @@ const BookingSchema = new mongoose.Schema(
     // Payment milestones
     paymentMilestones: [PaymentMilestoneSchema],
 
-    // Itemized payment breakdown (per-guest base + additional fees) shown in
-    // the "Payment Details" section.
+    // Itemized payment breakdown shown in the "Payment Details" section.
+    // Synced from customizedPackage.lineItems when the vendor customizes.
     charges: [ChargeSchema],
 
     totalAmount: {
@@ -147,9 +178,14 @@ const BookingSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
-    // Vendor-private note attached to the booking from the "Calendar Note" section
+    // Vendor-private note from the "Calendar Note" section
     calendarNote: {
       type: String,
+      default: null,
+    },
+    // Vendor's per-booking package customization (null = using original packageSnapshot)
+    customizedPackage: {
+      type: CustomizedPackageSchema,
       default: null,
     },
   },
