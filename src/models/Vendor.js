@@ -49,16 +49,51 @@ const VendorSchema = new mongoose.Schema({
     default: false,
   },
 
-  bankDetails: {
+  //business documents
+  fssaiNumber: String,
+  isFssaiVerified: {
+    type: Boolean,
+    default: false,
+  },
+  fssaiDocUrl: String,
+  
+  tradeLicenseNumber: String,
+  isTradeLicVerified: {
+    type: Boolean,
+    default: false,
+  },
+  tradeLicUrl: String,
+  
+  gstDocUrl: String,
+  
+  fssaiLicense: String,
+  tradeLicense: String,
+  gstCertificate: String,
+
+  bankDetails: [{
     accountNumber: String,
     ifscCode: String,
     bankName: String,
     branchName: String,
-  },
+  }],
 
   isVerified: {
     type: Boolean,
     default: false,
+  },
+
+  isDeactivated: {
+    type: Boolean,
+    default: false,
+  },
+
+  rating: {
+    type: Number,
+    default: 0,
+  },
+  reviewsCount: {
+    type: Number,
+    default: 0,
   },
 
   createdAt: {

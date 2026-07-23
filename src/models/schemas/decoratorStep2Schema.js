@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import policySchema from "./policySchema.js";
 
 const decoratorStep2Schema = new mongoose.Schema({
   totalPackagePrice: { type: Number, default: 0 },
@@ -10,16 +11,36 @@ const decoratorStep2Schema = new mongoose.Schema({
       description: String,
       price: Number,
       decoratingWhat: String,
+      structuresIncluded: [String],
+      themes: [String],
       items: [
         {
           name: String,
+          itemType: { type: String, enum: ["Flowers", "Lighting", "Balloons", "Carpet/Flooring Decor", "Furniture", "Custom", ""] },
+          flowerType: String,
+          volume: String,
+          lightingType: String,
+          dimensions: String,
+          colors: [String],
+          chargeMoreForLargerSize: { type: Boolean, default: false },
+          description: String,
           qty: { type: Number, default: 1 },
           unit: String,
           price: Number,
+          chargeBySize: { type: Boolean, default: false },
+          pricePerMeter: Number,
+          itemType: String,
+          subCategory: String,
+          length: Number,
+          description: String,
+          colors: [{ type: String }],
+          volume: String,
         },
       ],
       notPartOfSetup: String,
       partOfSetup: String,
+      structures: [{ type: String }],
+      themes: [{ type: String }],
     },
   ],
   addOns: [
@@ -44,6 +65,7 @@ const decoratorStep2Schema = new mongoose.Schema({
       },
       materialOptions: [{ material: String, price: Number }],
       policyDocUrl: String,
+      policy: policySchema,
       mediaUrls: [String],
     },
   ],

@@ -6,6 +6,8 @@ import {
   getVendorById,
   updateVendor,
   deleteVendor,
+  deactivateVendor,
+  reactivateVendor,
 } from "../controllers/vendorController.js";
 
 /**
@@ -112,5 +114,7 @@ router.route("/").get(getAllVendors).post(createVendor);
  *         description: Vendor not found
  */
 router.route("/:id").get(getVendorById).patch(updateVendor).delete(deleteVendor);
+router.patch("/:id/deactivate", deactivateVendor);
+router.patch("/:id/reactivate", reactivateVendor);
 
 export default router;

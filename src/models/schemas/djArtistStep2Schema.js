@@ -1,9 +1,11 @@
 import mongoose from "mongoose";
+import policySchema from "./policySchema.js";
 
 const djArtistStep2Schema = new mongoose.Schema({
   items: [
     {
       name: { type: String },
+      performanceType: { type: String },
       contentDetails: {
         genreOfMusic: [{ type: String }],
         language: [{ type: String }],
@@ -27,6 +29,7 @@ const djArtistStep2Schema = new mongoose.Schema({
           name: { type: String },
           artist: { type: String },
           duration: { type: String },
+          url: { type: String },
         },
       ],
       customerPlaylistAllowed: { type: Boolean, default: false },
@@ -53,6 +56,7 @@ const djArtistStep2Schema = new mongoose.Schema({
       price: { type: Number },
       billingUnit: { type: String },
       policyDocUrl: { type: String },
+      policy: policySchema,
       mediaUrls: [{ type: String }],
     },
   ],

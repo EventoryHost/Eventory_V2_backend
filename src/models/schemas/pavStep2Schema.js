@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import policySchema from "./policySchema.js";
 
 const pavStep2Schema = new mongoose.Schema({
   packageItems: [
@@ -10,7 +11,7 @@ const pavStep2Schema = new mongoose.Schema({
       contentDetails: {
         categories: [String],
         style: String,
-        quantity: Number,
+        quantity: String,
         description: String,
       },
       albumSpecific: {
@@ -18,6 +19,11 @@ const pavStep2Schema = new mongoose.Schema({
         pageCount: Number,
         bindingType: String,
         pageFinish: String,
+      },
+      videoSpecific: {
+        numberOfVideos: String,
+        duration: String,
+        resolution: String,
       },
       logisticsAndHandover: {
         deliveryFormat: String,
@@ -28,33 +34,37 @@ const pavStep2Schema = new mongoose.Schema({
       price: Number,
     },
   ],
-  addOns: [
-    {
-      addOnType: { type: String, enum: ["Service", "Product"] },
-      name: { type: String },
-      category: { type: String },
-      subCategory: { type: String },
-      quantity: { type: Number },
-      description: { type: String },
-      productSpecific: {
-        pageCount: Number,
-        noOfEditedPhotos: Number,
-        coverType: String,
-        color: String,
-        pageFinish: String,
-        bindingType: String,
-        contentSpec: String,
-        fileFormat: String,
-        resolution: String,
-        videoType: String,
-        duration: String,
+    addOns: [
+      {
+        addOnType: { type: String, enum: ["Service", "Product"] },
+        name: { type: String },
+        category: { type: String },
+        subCategory: { type: String },
+        quantity: { type: Number },
+        contentType:{type:String},
+        crewSize: { type: Number },
+        description: { type: String },
+        durationEach:{type:Number},
+        productSpecific: {
+          pageCount: Number,
+          noOfEditedPhotos: Number,
+          coverType: String,
+          color: String,
+          pageFinish: String,
+          bindingType: String,
+          contentSpec: String,
+          fileFormat: String,
+          resolution: String,
+          videoType: String,
+          duration: String,
+        },
+        price: { type: Number },
+        billingUnit: { type: String },
+        policyDocUrl: { type: String },
+        policy: policySchema,
+        mediaUrls: [{ type: String }],
       },
-      price: { type: Number },
-      billingUnit: { type: String },
-      policyDocUrl: { type: String },
-      mediaUrls: [{ type: String }],
-    },
-  ],
+    ],
   included: [{ type: String }],
   notIncluded: [{ type: String }],
 }, { _id: false });

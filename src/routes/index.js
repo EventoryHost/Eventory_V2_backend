@@ -4,6 +4,12 @@ import vendorRoutes from "./vendorRoutes.js";
 import authRoutes from "./authRoutes.js";
 import verificationRoutes from "./verificationRoutes.js";
 import packageRoutes from "./packageRoutes.js";
+import calendarRoutes from "./calendarRoutes.js";
+import bookingRoutes from "./bookingRoutes.js";
+import enquiryRoutes from "./enquiryRoutes.js";
+import transactionRoutes from "./transactionRoutes.js";
+import redirectRoutes from "./redirectRoutes.js";
+
 /**
  * @swagger
  * /api/health:
@@ -44,5 +50,11 @@ router.use("/vendors", vendorRoutes);
 router.use("/auth", authRoutes);
 router.use("/verification", verificationRoutes);
 router.use("/packages", packageRoutes);
+router.use("/calendar", calendarRoutes);
+router.use("/bookings", bookingRoutes);
+router.use("/enquiries", enquiryRoutes);
+router.use("/transactions", transactionRoutes);
+router.use("/redirect", redirectRoutes);
 
 export default router;
+

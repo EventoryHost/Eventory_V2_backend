@@ -368,12 +368,28 @@ export const verifyBankDetails = async (req, res) => {
       try {
         const vendor = await Vendor.findOne({ id: vendor_id });
         if (vendor) {
-          vendor.bankDetails = {
+          const newBankAccount = {
             accountNumber: cleanedAcc,
             ifscCode: cleanedIfsc,
             bankName: "Test Bank",
             branchName: "Munirka",
           };
+          vendor.bankDetails = Array.isArray(vendor.bankDetails)
+            ? vendor.bankDetails
+            : [];
+          const existingIndex = vendor.bankDetails.findIndex(
+            (item) =>
+              item.accountNumber === newBankAccount.accountNumber &&
+              item.ifscCode === newBankAccount.ifscCode
+          );
+          if (existingIndex >= 0) {
+            vendor.bankDetails[existingIndex] = {
+              ...vendor.bankDetails[existingIndex],
+              ...newBankAccount,
+            };
+          } else {
+            vendor.bankDetails.push(newBankAccount);
+          }
           await vendor.save();
           console.log(`Updated Vendor ${vendor_id} with Dummy Bank Details`);
         }
@@ -434,12 +450,28 @@ export const verifyBankDetails = async (req, res) => {
         try {
           const vendor = await Vendor.findOne({ id: vendor_id });
           if (vendor) {
-            vendor.bankDetails = {
+            const newBankAccount = {
               accountNumber: cleanedAcc,
               ifscCode: cleanedIfsc,
               bankName: data.bank_name,
               branchName: data.branch,
             };
+            vendor.bankDetails = Array.isArray(vendor.bankDetails)
+              ? vendor.bankDetails
+              : [];
+            const existingIndex = vendor.bankDetails.findIndex(
+              (item) =>
+                item.accountNumber === newBankAccount.accountNumber &&
+                item.ifscCode === newBankAccount.ifscCode
+            );
+            if (existingIndex >= 0) {
+              vendor.bankDetails[existingIndex] = {
+                ...vendor.bankDetails[existingIndex],
+                ...newBankAccount,
+              };
+            } else {
+              vendor.bankDetails.push(newBankAccount);
+            }
             await vendor.save();
           }
         } catch (vErr) { console.error("DB Update Error:", vErr); }
