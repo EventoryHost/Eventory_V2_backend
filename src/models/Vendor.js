@@ -87,6 +87,11 @@ const VendorSchema = new mongoose.Schema({
     default: false,
   },
 
+  isDarkMode: {
+    type: Boolean,
+    default: false,
+  },
+
   rating: {
     type: Number,
     default: 0,
