@@ -686,37 +686,15 @@ export const faceMatch = async (req, res) => {
     const actualVerificationId = verification_id || `fm_${Date.now()}`;
     const actualThreshold = threshold || "0.75";
 
-    // Dummy bypass block
-    if (actualVerificationId === "DUMMY_FACE_MATCH") {
-      if (vendor_id) {
-        try {
-          const vendor = await Vendor.findOne({ id: vendor_id });
-          if (vendor) {
-            vendor.isFaceMatchVerified = true;
-            vendor.faceMatchScore = 0.99;
-            await vendor.save();
-          }
-        } catch (err) {
-          console.error("Error updating vendor with dummy Face Match:", err);
-        }
-      }
-      return res.status(200).json({
-        status: "SUCCESS",
-        message: "Face match completed successfully (Dummy Mode)",
-        face_match_result: "YES",
-        face_match_score: 0.99,
-        verification_id: actualVerificationId,
-        ref_id: 12345678,
-        originalResponse: { dummy: true },
-      });
-    }
-
     const clientId = process.env.CASHFREE_CLIENT_ID;
     const clientSecret = process.env.CASHFREE_CLIENT_SECRET;
     const publicKey = `-----BEGIN PUBLIC KEY-----\n${process.env.CASHFREE_PUBLIC_KEY}\n-----END PUBLIC KEY-----`;
 
     const timestamp = Math.floor(Date.now() / 1000);
     const signature = generateSignature(clientId, publicKey, timestamp);
+
+    console.log("=== FACE MATCH DEBUG ===");
+    console.log("Verification ID:", actualVerificationId);
 
     const form = new FormData();
     form.append("verification_id", actualVerificationId);
@@ -744,6 +722,7 @@ export const faceMatch = async (req, res) => {
 
     const response = await axios.post(url, form, { headers });
     const data = response.data;
+    console.log("Cashfree Face Match Response Data:", JSON.stringify(data, null, 2));
 
     // Based on Cashfree Face Match response
     if (data.status === "SUCCESS") {
