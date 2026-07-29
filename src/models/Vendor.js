@@ -48,6 +48,15 @@ const VendorSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  
+  isFaceMatchVerified: {
+    type: Boolean,
+    default: false,
+  },
+  faceMatchScore: {
+    type: Number,
+    default: null,
+  },
 
   //business documents
   fssaiNumber: String,

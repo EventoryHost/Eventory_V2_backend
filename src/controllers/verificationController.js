@@ -1,5 +1,6 @@
 import axios from "axios";
 import dotenv from "dotenv";
+import FormData from "form-data";
 import { generateSignature } from "../utils/generateId.js";
 import Vendor from "../models/Vendor.js";
 
@@ -665,6 +666,111 @@ export const getDigilockerDocument = async (req, res) => {
     );
     res.status(error?.response?.status || 500).json({
       message: "Failed to fetch DigiLocker document",
+      error: error?.response?.data || error.message,
+    });
+  }
+};
+
+export const faceMatch = async (req, res) => {
+  try {
+    const { verification_id, threshold } = req.body;
+    const vendor_id = req.query.vendor_id || req.body?.vendor_id;
+
+    if (!req.files || !req.files.first_image || !req.files.second_image) {
+      return res.status(400).json({ status: "ERROR", message: "Both first_image and second_image are required" });
+    }
+
+    const firstImage = req.files.first_image[0];
+    const secondImage = req.files.second_image[0];
+
+    const actualVerificationId = verification_id || `fm_${Date.now()}`;
+    const actualThreshold = threshold || "0.75";
+
+    const clientId = process.env.CASHFREE_CLIENT_ID;
+    const clientSecret = process.env.CASHFREE_CLIENT_SECRET;
+    const publicKey = `-----BEGIN PUBLIC KEY-----\n${process.env.CASHFREE_PUBLIC_KEY}\n-----END PUBLIC KEY-----`;
+
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signature = generateSignature(clientId, publicKey, timestamp);
+
+    console.log("=== FACE MATCH DEBUG ===");
+    console.log("Verification ID:", actualVerificationId);
+
+    const form = new FormData();
+    form.append("verification_id", actualVerificationId);
+    form.append("first_image", firstImage.buffer, {
+      filename: firstImage.originalname,
+      contentType: firstImage.mimetype,
+    });
+    form.append("second_image", secondImage.buffer, {
+      filename: secondImage.originalname,
+      contentType: secondImage.mimetype,
+    });
+    form.append("threshold", actualThreshold);
+
+    const headers = {
+      "x-client-id": clientId,
+      "x-client-secret": clientSecret,
+      "X-Cf-Signature": signature,
+      "X-Timestamp": timestamp.toString(),
+      ...form.getHeaders(),
+    };
+
+    const url = process.env.IS_DEV === "true"
+      ? "https://sandbox.cashfree.com/verification/face-match"
+      : "https://api.cashfree.com/verification/face-match";
+
+    const response = await axios.post(url, form, { headers });
+    const data = response.data;
+    console.log("Cashfree Face Match Response Data:", JSON.stringify(data, null, 2));
+
+    // Based on Cashfree Face Match response
+    if (data.status === "SUCCESS") {
+      if (vendor_id && data.face_match_result === "YES") {
+        try {
+          const vendor = await Vendor.findOne({ id: vendor_id });
+          if (vendor) {
+            vendor.isFaceMatchVerified = true;
+            vendor.faceMatchScore = data.face_match_score;
+            await vendor.save();
+          }
+        } catch (vErr) { console.error("DB Update Error:", vErr); }
+      }
+      
+      return res.status(200).json({
+        status: data.status,
+        message: "Face match completed successfully",
+        face_match_result: data.face_match_result,
+        face_match_score: data.face_match_score,
+        verification_id: data.verification_id,
+        ref_id: data.ref_id,
+        originalResponse: data,
+      });
+    } else if (data.status === "MULTIPLE_FACE_DETECTED") {
+      return res.status(200).json({
+        status: data.status,
+        message: "Multiple faces detected in one or both images",
+        verification_id: data.verification_id,
+        ref_id: data.ref_id,
+        originalResponse: data,
+      });
+    } else {
+      return res.status(400).json({
+        status: "ERROR",
+        message: "Face match could not be processed",
+        originalResponse: data,
+      });
+    }
+  } catch (error) {
+    console.error("Face Match error:", error?.response?.data || error.message);
+    
+    if (error.response && error.response.status === 429) {
+      return res.status(429).json({ message: "Too many requests, please try again later" });
+    }
+    
+    return res.status(500).json({
+      status: "ERROR",
+      message: "Face match verification failed",
       error: error?.response?.data || error.message,
     });
   }
