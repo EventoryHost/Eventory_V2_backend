@@ -48,8 +48,33 @@ const VendorSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  
+  isFaceMatchVerified: {
+    type: Boolean,
+    default: false,
+  },
+  faceMatchScore: {
+    type: Number,
+    default: null,
+  },
 
   //business documents
+  fssaiNumber: String,
+  isFssaiVerified: {
+    type: Boolean,
+    default: false,
+  },
+  fssaiDocUrl: String,
+  
+  tradeLicenseNumber: String,
+  isTradeLicVerified: {
+    type: Boolean,
+    default: false,
+  },
+  tradeLicUrl: String,
+  
+  gstDocUrl: String,
+  
   fssaiLicense: String,
   tradeLicense: String,
   gstCertificate: String,
@@ -74,6 +99,11 @@ const VendorSchema = new mongoose.Schema({
   agreementAcceptedAt: Date,
 
   isDeactivated: {
+    type: Boolean,
+    default: false,
+  },
+
+  isDarkMode: {
     type: Boolean,
     default: false,
   },

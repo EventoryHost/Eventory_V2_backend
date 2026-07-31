@@ -280,7 +280,7 @@ export const getVendorPackages = async (req, res) => {
       query.packageGroupId = new mongoose.Types.ObjectId(packageGroupId);
     }
 
-    const packages = await Package.find(query);
+    const packages = await Package.find(query).sort({ createdAt: -1 });
 
     return res.status(200).json({ status: "SUCCESS", count: packages.length, packages });
   } catch (error) {
