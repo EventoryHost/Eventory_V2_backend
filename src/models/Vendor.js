@@ -91,6 +91,13 @@ const VendorSchema = new mongoose.Schema({
     default: false,
   },
 
+  agreementDocUrl: String,
+  isAgreementAccepted: {
+    type: Boolean,
+    default: false,
+  },
+  agreementAcceptedAt: Date,
+
   isDeactivated: {
     type: Boolean,
     default: false,
