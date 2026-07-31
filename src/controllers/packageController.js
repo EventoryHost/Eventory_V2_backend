@@ -492,15 +492,11 @@ export const duplicatePackage = async (req, res) => {
     if (!originalPkg) {
       return res.status(404).json({ status: "FAILED", message: "Package not found" });
     }
-
-    // Remove ID and metadata. stripIds also clears nested subdocument _ids,
-    // which would otherwise be carried over verbatim from the original.
+    
     stripIds(originalPkg);
     delete originalPkg.createdAt;
     delete originalPkg.updatedAt;
 
-    // A duplicate is a NEW logical package, so it starts its own group rather
-    // than joining the original's.
     originalPkg.packageGroupId = new mongoose.Types.ObjectId();
 
     // Reset status and progress

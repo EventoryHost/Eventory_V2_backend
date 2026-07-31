@@ -1,8 +1,20 @@
 import "dotenv/config";
 import express from "express";
+import multer from "multer";
 const verificationRoutes = express.Router();
 
-import { verifyGSTIN, verifyPAN, verifyBankDetails, generateDigilockerUrl, getDigilockerDocument } from "../controllers/verificationController.js";
+import { verifyGSTIN, verifyPAN, verifyBankDetails, generateDigilockerUrl, getDigilockerDocument, faceMatch } from "../controllers/verificationController.js";
+
+// Multer config for Face Match
+const faceMatchUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB per file
+  fileFilter: (req, file, cb) => {
+    const allowed = ['image/jpeg', 'image/jpg', 'image/png'];
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Invalid file type. Only JPEG, JPG, PNG allowed'), false);
+  },
+});
 
 /**
  * @swagger
@@ -136,5 +148,60 @@ verificationRoutes.post("/digilocker/generate-url", generateDigilockerUrl);
  *         description: Missing verificationId
  */
 verificationRoutes.get("/digilocker/document/:verificationId", getDigilockerDocument);
+
+/**
+ * @swagger
+ * /api/verification/face-match:
+ *   post:
+ *     summary: Verify Face Match
+ *     description: Verify facial match between two images.
+ *     tags:
+ *       - Verification
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - first_image
+ *               - second_image
+ *             properties:
+ *               first_image:
+ *                 type: string
+ *                 format: binary
+ *                 description: First image to compare (JPEG, PNG, max 5MB)
+ *               second_image:
+ *                 type: string
+ *                 format: binary
+ *                 description: Second image to compare (JPEG, PNG, max 5MB)
+ *               verification_id:
+ *                 type: string
+ *                 description: Optional unique ID for the request
+ *               threshold:
+ *                 type: string
+ *                 description: Optional threshold between 0 and 1 (default 0.75)
+ *     parameters:
+ *       - in: query
+ *         name: vendor_id
+ *         schema:
+ *           type: string
+ *         description: Optional vendor ID to update face match status
+ *     responses:
+ *       200:
+ *         description: Face match completed successfully
+ *       400:
+ *         description: Missing files or invalid request
+ *       500:
+ *         description: Face match verification failed
+ */
+verificationRoutes.post(
+  "/face-match",
+  faceMatchUpload.fields([
+    { name: 'first_image', maxCount: 1 },
+    { name: 'second_image', maxCount: 1 },
+  ]),
+  faceMatch
+);
 
 export default verificationRoutes;
