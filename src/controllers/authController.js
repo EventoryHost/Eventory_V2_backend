@@ -12,6 +12,14 @@ import { generateISTId } from "../utils/idGenerator.js";
 
 dotenv.config();
 
+// 🔥 Dummy test user — skips Cognito entirely (no SMS, fixed OTP).
+// Only this one mobile number is bypassed; every other number goes to Cognito.
+const DUMMY_MOBILE = process.env.DUMMY_MOBILE || "1111111111";
+const DUMMY_OTP = process.env.DUMMY_OTP || "111111";
+const DUMMY_SESSION = "dummy_session";
+
+const isDummyMobile = (mobile) => String(mobile).trim() === DUMMY_MOBILE;
+
 // Helper to check if user exists in Cognito
 const isNewUser = async (mobile) => {
   try {
@@ -35,6 +43,16 @@ export const loginOrSignUp = async (req, res, next) => {
 
   if (!mobile) {
     return res.status(400).json({ success: false, message: "Mobile number is required" });
+  }
+
+  // 🔥 Dummy Bypass Block — no Cognito sign-up, no OTP sent.
+  if (isDummyMobile(mobile)) {
+    console.log("🟡 Dummy mobile detected → Bypassing Cognito OTP");
+    return res.status(200).json({
+      success: true,
+      message: "OTP sent successfully (Dummy Mode)",
+      session: DUMMY_SESSION,
+    });
   }
 
   try {
@@ -102,19 +120,30 @@ export const verifyOtp = async (req, res, next) => {
   }
 
   try {
-    const params = {
-      ChallengeName: "CUSTOM_CHALLENGE",
-      ClientId: process.env.COGNITO_APP_CLIENT_ID,
-      UserPoolId: process.env.COGNITO_USER_POOL_ID,
-      Username: `+91${mobile}`,
-      ChallengeResponses: {
-        USERNAME: `+91${mobile}`,
-        ANSWER: code,
-      },
-      Session: session,
-    };
+    // 🔥 Dummy Bypass Block — accept only the fixed OTP, skip Cognito.
+    if (isDummyMobile(mobile)) {
+      if (code !== DUMMY_OTP) {
+        return res.status(400).json({
+          success: false,
+          message: "Invalid OTP",
+        });
+      }
+      console.log("🟡 Dummy mobile detected → Bypassing Cognito challenge");
+    } else {
+      const params = {
+        ChallengeName: "CUSTOM_CHALLENGE",
+        ClientId: process.env.COGNITO_APP_CLIENT_ID,
+        UserPoolId: process.env.COGNITO_USER_POOL_ID,
+        Username: `+91${mobile}`,
+        ChallengeResponses: {
+          USERNAME: `+91${mobile}`,
+          ANSWER: code,
+        },
+        Session: session,
+      };
 
-    await cognito.send(new AdminRespondToAuthChallengeCommand(params));
+      await cognito.send(new AdminRespondToAuthChallengeCommand(params));
+    }
 
     // Check if vendor exists in local DB
     let vendor = await Vendor.findOne({ phone: `+91${mobile}` });
