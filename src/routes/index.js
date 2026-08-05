@@ -3,6 +3,7 @@ const router = express.Router();
 import vendorRoutes from "./vendorRoutes.js";
 import customerRoutes from "./customerRoutes.js";
 import customerAuthRoutes from "./customerAuthRoutes.js";
+import customerPhoneRoutes from "./customerPhoneRoutes.js";
 import authRoutes from "./authRoutes.js";
 import verificationRoutes from "./verificationRoutes.js";
 import packageRoutes from "./packageRoutes.js";
@@ -68,6 +69,7 @@ router.get("/health", (req, res) => {
 router.use("/vendors", vendorRoutes);
 router.use("/customers", customerRoutes);
 router.use("/customer/auth", customerAuthRoutes);
+router.use("/customer/phone", customerPhoneRoutes);
 router.use("/auth", authRoutes);
 router.use("/verification", verificationRoutes);
 router.use("/packages", packageRoutes);

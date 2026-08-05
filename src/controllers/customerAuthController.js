@@ -1,56 +1,93 @@
-import { cognito } from "../config/awsConfig.js";
-import {
-  SignUpCommand,
-  AdminInitiateAuthCommand,
-  AdminRespondToAuthChallengeCommand,
-  AdminGetUserCommand,
-} from "@aws-sdk/client-cognito-identity-provider";
-import jwt from "jsonwebtoken";
 import Customer from "../models/Customer.js";
-import dotenv from "dotenv";
 import { generateISTId } from "../utils/idGenerator.js";
-
-dotenv.config();
+import {
+  generateAccessToken,
+  issueRefreshToken,
+  rotateRefreshToken,
+  revokeRefreshToken,
+  accessTokenCookieOptions,
+  refreshTokenCookieOptions,
+} from "../utils/tokenService.js";
 
 /**
- * Customer auth flow — mirrors authController.js (vendor), but uses the
- * dedicated customer Cognito pool (COGNITO_*_USERS env vars) and the
- * Customer model, so a customer account can never be confused with /
- * escalate into a vendor account.
+ * Email + password customer auth, per the Login/Signup/Dashboard spec:
+ * 3-field signup (name, email, password), no phone at signup. Phone
+ * verification lives in customerPhoneController.js instead, and only runs
+ * for an already-authenticated customer.
  */
 
-const MOBILE_REGEX = /^[6-9]\d{9}$/; // basic Indian 10-digit mobile sanity check
+function stripPassword(customerDoc) {
+  const obj = customerDoc.toObject ? customerDoc.toObject() : customerDoc;
+  const { password, ...safe } = obj;
+  return safe;
+}
 
-// Helper to check if user exists in the CUSTOMER Cognito pool
-const isNewUser = async (mobile) => {
+async function issueSession(customer, req, res, statusCode, message) {
+  const accessToken = generateAccessToken(customer);
+  const refreshToken = await issueRefreshToken(customer, req);
+
+  res.cookie("accessToken", accessToken, accessTokenCookieOptions());
+  res.cookie("refreshToken", refreshToken, refreshTokenCookieOptions());
+
+  res.status(statusCode).json({
+    success: true,
+    message,
+    accessToken, // also returned in-body: works for non-browser clients and keeps Postman/curl testing simple
+    customer: stripPassword(customer),
+  });
+}
+
+// POST /api/customer/auth/signup
+export const signup = async (req, res, next) => {
   try {
-    const getUserCommand = new AdminGetUserCommand({
-      UserPoolId: process.env.COGNITO_USER_POOL_ID_USERS,
-      Username: `+91${mobile}`,
-    });
-    await cognito.send(getUserCommand);
-    return false; // User exists
-  } catch (error) {
-    if (error.name === "UserNotFoundException") {
-      return true; // New user
+    const { name, email, password } = req.body;
+
+    const existing = await Customer.findOne({ email: email.toLowerCase() });
+    if (existing) {
+      return res.status(409).json({
+        success: false,
+        code: "EMAIL_ALREADY_REGISTERED",
+        message: "An account with this email already exists. Please log in instead.",
+      });
     }
-    throw error;
+
+    const customer = new Customer({
+      id: generateISTId("CUS"),
+      name,
+      email: email.toLowerCase(),
+      password, // hashed by the pre-save hook on Customer
+      authProviders: [{ provider: "local" }],
+      lastLogin: new Date(),
+    });
+    await customer.save();
+
+    await issueSession(customer, req, res, 201, "Account created successfully");
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ success: false, message: "An account with this email already exists" });
+    }
+    next(error);
   }
 };
 
-// Sign Up / Login Initiation (OTP Send)
-export const loginOrSignUp = async (req, res, next) => {
-  const { mobile, isSignup } = req.body;
-
-  if (!mobile || !MOBILE_REGEX.test(mobile)) {
-    return res.status(400).json({ success: false, message: "A valid 10-digit mobile number is required" });
-  }
-
+// POST /api/customer/auth/login
+export const login = async (req, res, next) => {
   try {
-    const isNew = await isNewUser(mobile);
-    const existingCustomer = await Customer.findOne({ phone: `+91${mobile}` });
+    const { email, password } = req.body;
 
-    if (existingCustomer && existingCustomer.isDeactivated) {
+    const customer = await Customer.findOne({ email: email.toLowerCase() }).select("+password");
+
+    // Same generic message whether the email doesn't exist or the password
+    // is wrong — avoids leaking which registered emails exist.
+    const invalidCredentials = () =>
+      res.status(401).json({ success: false, message: "Invalid email or password" });
+
+    if (!customer) return invalidCredentials();
+
+    const passwordMatches = await customer.comparePassword(password);
+    if (!passwordMatches) return invalidCredentials();
+
+    if (customer.isDeactivated) {
       return res.status(403).json({
         success: false,
         code: "ACCOUNT_DEACTIVATED",
@@ -58,116 +95,55 @@ export const loginOrSignUp = async (req, res, next) => {
       });
     }
 
-    if (isSignup && (!isNew || existingCustomer)) {
-      return res.status(400).json({
-        success: false,
-        code: "USER_ALREADY_EXISTS",
-        message: "You are already a registered user. Please log in instead.",
-      });
-    }
+    customer.lastLogin = new Date();
+    await customer.save();
 
-    if (isNew) {
-      // Sign Up in the customer Cognito pool
-      const signUpParams = {
-        ClientId: process.env.COGNITO_APP_CLIENT_ID_USERS,
-        Username: `+91${mobile}`,
-        Password: Math.random().toString(36).slice(-10) + "A1!", // Random password as per Cognito policy; never used, OTP-only auth
-        UserAttributes: [
-          { Name: "phone_number", Value: `+91${mobile}` },
-          { Name: "custom:userType", Value: "Customer" },
-        ],
-      };
-      await cognito.send(new SignUpCommand(signUpParams));
-    }
-
-    // Initiate Auth (Send OTP)
-    const authParams = {
-      AuthFlow: "CUSTOM_AUTH",
-      ClientId: process.env.COGNITO_APP_CLIENT_ID_USERS,
-      UserPoolId: process.env.COGNITO_USER_POOL_ID_USERS,
-      Username: `+91${mobile}`,
-      AuthParameters: {
-        USERNAME: `+91${mobile}`,
-      },
-    };
-    const data = await cognito.send(new AdminInitiateAuthCommand(authParams));
-
-    res.status(200).json({
-      success: true,
-      message: "OTP sent successfully",
-      session: data.Session,
-    });
+    await issueSession(customer, req, res, 200, "Login successful");
   } catch (error) {
     next(error);
   }
 };
 
-// Verify OTP
-export const verifyOtp = async (req, res, next) => {
-  const { mobile, code, session, name, email } = req.body;
-
-  if (!mobile || !MOBILE_REGEX.test(mobile) || !code || !session) {
-    return res.status(400).json({ success: false, message: "Mobile, code, and session are required" });
-  }
-
+// POST /api/customer/auth/refresh-token
+export const refreshToken = async (req, res, next) => {
   try {
-    const params = {
-      ChallengeName: "CUSTOM_CHALLENGE",
-      ClientId: process.env.COGNITO_APP_CLIENT_ID_USERS,
-      UserPoolId: process.env.COGNITO_USER_POOL_ID_USERS,
-      Username: `+91${mobile}`,
-      ChallengeResponses: {
-        USERNAME: `+91${mobile}`,
-        ANSWER: code,
-      },
-      Session: session,
-    };
+    const rawToken = req.cookies?.refreshToken || req.body?.refreshToken;
 
-    await cognito.send(new AdminRespondToAuthChallengeCommand(params));
-
-    // Check if customer exists in local DB
-    let customer = await Customer.findOne({ phone: `+91${mobile}` });
-
-    if (customer && customer.isDeactivated) {
-      return res.status(403).json({
-        success: false,
-        code: "ACCOUNT_DEACTIVATED",
-        message: "This account has been deactivated. Please contact support.",
-      });
+    let rotated;
+    try {
+      rotated = await rotateRefreshToken(rawToken, req);
+    } catch (err) {
+      const status = err.code === "REFRESH_TOKEN_REUSED" ? 401 : 401;
+      res.clearCookie("accessToken", accessTokenCookieOptions());
+      res.clearCookie("refreshToken", refreshTokenCookieOptions());
+      return res.status(status).json({ success: false, code: err.code, message: err.message });
     }
 
-    if (!customer) {
-      // Create new customer profile if not exists — OTP success on the
-      // customer's own phone number is itself the proof of phone ownership
-      customer = new Customer({
-        id: generateISTId("CUS"),
-        phone: `+91${mobile}`,
-        name,
-        email,
-        isPhoneVerified: true,
-        verificationStatus: "PhoneVerified",
-      });
-      await customer.save();
-    } else if (!customer.isPhoneVerified) {
-      customer.isPhoneVerified = true;
-      customer.verificationStatus = "PhoneVerified";
-      await customer.save();
+    const customer = await Customer.findById(rotated.customerId);
+    if (!customer || customer.isDeactivated) {
+      return res.status(401).json({ success: false, message: "Session no longer valid, please log in again" });
     }
 
-    // Generate JWT — role claim keeps this token scoped to customer-only
-    // routes and distinguishes it from a vendor token at verification time.
-    const token = jwt.sign(
-      { id: customer.id, phone: customer.phone, role: "customer" },
-      process.env.JWT_SECRET,
-      { expiresIn: "7d" }
-    );
+    const accessToken = generateAccessToken(customer);
+    res.cookie("accessToken", accessToken, accessTokenCookieOptions());
+    res.cookie("refreshToken", rotated.rawToken, refreshTokenCookieOptions());
 
-    res.status(200).json({
-      success: true,
-      message: "Login successful",
-      token,
-      customer,
-    });
+    res.status(200).json({ success: true, accessToken });
+  } catch (error) {
+    next(error);
+  }
+};
+
+// POST /api/customer/auth/logout
+export const logout = async (req, res, next) => {
+  try {
+    const rawToken = req.cookies?.refreshToken || req.body?.refreshToken;
+    await revokeRefreshToken(rawToken);
+
+    res.clearCookie("accessToken", accessTokenCookieOptions());
+    res.clearCookie("refreshToken", refreshTokenCookieOptions());
+
+    res.status(200).json({ success: true, message: "Logged out" });
   } catch (error) {
     next(error);
   }

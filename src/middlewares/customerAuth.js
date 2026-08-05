@@ -2,7 +2,12 @@ import jwt from "jsonwebtoken";
 import Customer from "../models/Customer.js";
 
 /**
- * Verifies the Bearer JWT issued by customerAuthController.verifyOtp.
+ * Verifies the customer access token issued by customerAuthController
+ * (email/password login or signup) or customerSocialAuthController
+ * (Google/Facebook). Accepts the token from either the httpOnly
+ * "accessToken" cookie (browser clients, per the spec) or an
+ * "Authorization: Bearer <token>" header (non-browser clients, and the
+ * simplest path for manual/Postman testing) — whichever is present.
  *
  * This is the first place in the codebase that actually calls jwt.verify()
  * — until now a token was signed on login but never checked anywhere, so
@@ -14,12 +19,13 @@ import Customer from "../models/Customer.js";
 export const protectCustomer = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization || "";
-    const [scheme, token] = authHeader.split(" ");
+    const [scheme, headerToken] = authHeader.split(" ");
+    const token = (scheme === "Bearer" && headerToken) || req.cookies?.accessToken;
 
-    if (scheme !== "Bearer" || !token) {
+    if (!token) {
       return res.status(401).json({
         success: false,
-        message: "Authentication token missing. Include 'Authorization: Bearer <token>'.",
+        message: "Authentication token missing. Log in, or include 'Authorization: Bearer <token>'.",
       });
     }
 

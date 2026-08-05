@@ -1,4 +1,7 @@
 import mongoose from "mongoose";
+import Customer from "./Customer.js";
+import { normalizePhone } from "../utils/phone.js";
+
 const EnquirySchema = new mongoose.Schema(
   {
     enquiryId: {
@@ -167,6 +170,22 @@ const EnquirySchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// Best-effort auto-link — see the identical hook on Booking.js for the full
+// rationale. Additive only: never overwrites an existing customerId, never
+// fails the save if no match is found or the lookup errors.
+EnquirySchema.pre("save", async function autoLinkCustomer() {
+  if (this.customerId || !this.customer?.phone) return;
+  try {
+    const normalized = normalizePhone(this.customer.phone);
+    if (!normalized) return;
+    const match = await Customer.findOne({ phone: normalized }).select("_id").lean();
+    if (match) this.customerId = match._id;
+  } catch (err) {
+    console.warn("[Enquiry.autoLinkCustomer] lookup failed, continuing without a link:", err.message);
+  }
+});
+
 // Compound indexes
 EnquirySchema.index({ vendorId: 1, status: 1 });
 // Supports a future customer-facing "my enquiries" view.

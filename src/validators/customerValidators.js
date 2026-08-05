@@ -8,17 +8,42 @@ import { z } from "zod";
  * the customer side going forward.
  */
 
-const MOBILE_REGEX = /^[6-9]\d{9}$/; // 10-digit Indian mobile, matches customerAuthController
+const MOBILE_REGEX = /^[6-9]\d{9}$/; // 10-digit Indian mobile
+
+// ---- Email + password auth (primary, per the Login/Signup spec) ----
+
+export const customerSignupSchema = z.object({
+  name: z.string().trim().min(2, "name must be 2-50 characters").max(50, "name must be 2-50 characters"),
+  email: z.string().trim().toLowerCase().email("email must be a valid email address"),
+  password: z.string().min(8, "password must be at least 8 characters"),
+});
 
 export const customerLoginSchema = z.object({
+  email: z.string().trim().toLowerCase().email("email must be a valid email address"),
+  password: z.string().min(1, "password is required"),
+});
+
+export const customerRefreshTokenSchema = z.object({
+  // Normally read from the httpOnly cookie; this body fallback only matters
+  // for non-browser clients that can't rely on cookies.
+  refreshToken: z.string().trim().min(1).optional(),
+});
+
+export const linkAccountSchema = z.object({
+  provider: z.enum(["google", "facebook"]),
+  providerId: z.string().trim().min(1, "providerId is required"),
+});
+
+// ---- Phone verification (post-signup, authenticated) ----
+
+export const phoneOtpRequestSchema = z.object({
   mobile: z
     .string()
     .trim()
     .regex(MOBILE_REGEX, "mobile must be a valid 10-digit Indian mobile number"),
-  isSignup: z.boolean().optional(),
 });
 
-export const customerVerifyOtpSchema = z.object({
+export const phoneOtpVerifySchema = z.object({
   mobile: z
     .string()
     .trim()
@@ -28,10 +53,9 @@ export const customerVerifyOtpSchema = z.object({
     .trim()
     .regex(/^\d{4,8}$/, "code must be a 4-8 digit numeric OTP"),
   session: z.string().trim().min(1, "session is required"),
-  // Optional, only meaningful on first-time sign-up
-  name: z.string().trim().min(1).max(120).optional(),
-  email: z.string().trim().email("email must be a valid email address").optional(),
 });
+
+// ---- Profile update ----
 
 const noDataUri = (val) => typeof val !== "string" || !val.startsWith("data:");
 

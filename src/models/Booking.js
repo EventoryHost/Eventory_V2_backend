@@ -1,4 +1,6 @@
 import mongoose from "mongoose";
+import Customer from "./Customer.js";
+import { normalizePhone } from "../utils/phone.js";
 
 const CustomizedLineItemSchema = new mongoose.Schema(
   {
@@ -210,6 +212,26 @@ const BookingSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// Best-effort auto-link: if a booking is saved without a customerId but has
+// a customer.phone, try to match it to an existing Customer account so
+// vendor-created bookings (walk-ins, enquiry-first, vendor manually typing
+// in a phone number) still end up linked when that phone happens to belong
+// to a registered customer — without vendorController/bookingController
+// (not touched by this change) needing any awareness of Customer accounts
+// at all. Never overwrites an already-set customerId, never fails the save
+// if no match is found or the lookup errors — this is purely additive.
+BookingSchema.pre("save", async function autoLinkCustomer() {
+  if (this.customerId || !this.customer?.phone) return;
+  try {
+    const normalized = normalizePhone(this.customer.phone);
+    if (!normalized) return;
+    const match = await Customer.findOne({ phone: normalized }).select("_id").lean();
+    if (match) this.customerId = match._id;
+  } catch (err) {
+    console.warn("[Booking.autoLinkCustomer] lookup failed, continuing without a link:", err.message);
+  }
+});
 
 // Compound indexes
 BookingSchema.index({ vendorId: 1, status: 1 });

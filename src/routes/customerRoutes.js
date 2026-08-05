@@ -1,7 +1,6 @@
 import express from "express";
 const router = express.Router();
 import {
-  createCustomer,
   getCustomerById,
   updateCustomer,
   deactivateCustomer,
@@ -12,18 +11,19 @@ import { validateRequest } from "../middlewares/validateRequest.js";
 import { updateCustomerSchema } from "../validators/customerValidators.js";
 
 /**
- * GET/PATCH/deactivate below now require a valid customer JWT (protectCustomer)
- * AND that the token's owner matches the :id in the URL (requireSelf) — a
- * customer can only ever read/update/deactivate their own profile, never
- * another customer's by guessing an ID.
+ * GET/PATCH/deactivate below require a valid customer access token
+ * (protectCustomer) AND that the token's owner matches the :id in the URL
+ * (requireSelf) — a customer can only ever read/update/deactivate their own
+ * profile, never another customer's by guessing an ID.
  *
- * POST / (create) stays open — in normal operation an account is created
- * automatically by customerAuthController.verifyOtp on first login, so this
- * endpoint is mainly for admin/internal tooling; it does not leak any other
- * customer's data since it only ever creates a new document.
+ * There is no direct "create customer" endpoint here on purpose — accounts
+ * are created via /api/customer/auth/signup (email+password) or Google/
+ * Facebook login, both of which set up a usable authProviders[] entry. A
+ * bare POST /api/customers would mint an account with no password and no
+ * linked provider, which could never log in.
  *
  * reactivate intentionally stays unprotected for now: a deactivated
- * customer's JWT is rejected by protectCustomer, so self-service
+ * customer's token is rejected by protectCustomer, so self-service
  * reactivation is impossible by design — this must go behind an admin role
  * once one exists in this codebase.
  *
@@ -31,38 +31,6 @@ import { updateCustomerSchema } from "../validators/customerValidators.js";
  * every customer's PII should only ever exist behind an admin role,
  * which doesn't exist in this codebase yet either.
  */
-
-/**
- * @swagger
- * /api/customers:
- *   post:
- *     summary: Create a new customer
- *     description: Creates a customer profile (invoked by the auth flow on first-time OTP verification).
- *     tags:
- *       - Customers
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               phone:
- *                 type: string
- *                 example: "+919876543210"
- *               name:
- *                 type: string
- *                 example: "Jane Doe"
- *               email:
- *                 type: string
- *                 example: "jane@example.com"
- *     responses:
- *       201:
- *         description: Customer created successfully
- *       409:
- *         description: Customer with this phone/email already exists
- */
-router.route("/").post(createCustomer);
 
 /**
  * @swagger
