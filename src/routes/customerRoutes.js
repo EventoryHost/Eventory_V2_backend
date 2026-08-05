@@ -8,6 +8,8 @@ import {
   reactivateCustomer,
 } from "../controllers/customerController.js";
 import { protectCustomer, requireSelf } from "../middlewares/customerAuth.js";
+import { validateRequest } from "../middlewares/validateRequest.js";
+import { updateCustomerSchema } from "../validators/customerValidators.js";
 
 /**
  * GET/PATCH/deactivate below now require a valid customer JWT (protectCustomer)
@@ -113,7 +115,7 @@ router.route("/").post(createCustomer);
 router
   .route("/:id")
   .get(protectCustomer, requireSelf, getCustomerById)
-  .patch(protectCustomer, requireSelf, updateCustomer);
+  .patch(protectCustomer, requireSelf, validateRequest(updateCustomerSchema), updateCustomer);
 
 router.patch("/:id/deactivate", protectCustomer, requireSelf, deactivateCustomer);
 router.patch("/:id/reactivate", reactivateCustomer);

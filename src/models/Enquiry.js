@@ -13,7 +13,18 @@ const EnquirySchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-    // Customer info (embedded)
+    // Reference to the logged-in customer account this enquiry belongs to.
+    // Optional/nullable — see the matching comment on Booking.customerId for
+    // why (vendor-entered/offline enquiries may have no linked account, and
+    // backfilling existing records is a separate decision, not automatic).
+    customerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Customer",
+      default: null,
+      index: true,
+    },
+    // Customer info (embedded) — point-in-time snapshot, not synced with the
+    // Customer account afterwards. See Booking.customer for the same intent.
     customer: {
       name: { type: String, required: true },
       phone: { type: String, default: null },
@@ -158,4 +169,6 @@ const EnquirySchema = new mongoose.Schema(
 );
 // Compound indexes
 EnquirySchema.index({ vendorId: 1, status: 1 });
+// Supports a future customer-facing "my enquiries" view.
+EnquirySchema.index({ customerId: 1, status: 1 });
 export default mongoose.model("Enquiry", EnquirySchema);

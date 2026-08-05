@@ -1,5 +1,8 @@
 import express from "express";
 import { loginOrSignUp, verifyOtp } from "../controllers/customerAuthController.js";
+import { otpRequestLimiter, otpVerifyLimiter } from "../middlewares/rateLimiters.js";
+import { validateRequest } from "../middlewares/validateRequest.js";
+import { customerLoginSchema, customerVerifyOtpSchema } from "../validators/customerValidators.js";
 
 const router = express.Router();
 
@@ -35,7 +38,7 @@ const router = express.Router();
  *       403:
  *         description: Account deactivated
  */
-router.post("/login", loginOrSignUp);
+router.post("/login", otpRequestLimiter, validateRequest(customerLoginSchema), loginOrSignUp);
 
 /**
  * @swagger
@@ -81,6 +84,6 @@ router.post("/login", loginOrSignUp);
  *       403:
  *         description: Account deactivated
  */
-router.post("/verify-otp", verifyOtp);
+router.post("/verify-otp", otpVerifyLimiter, validateRequest(customerVerifyOtpSchema), verifyOtp);
 
 export default router;

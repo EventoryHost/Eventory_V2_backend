@@ -99,7 +99,26 @@ const BookingSchema = new mongoose.Schema(
       required: true,
     },
 
-    // Customer info (embedded)
+    // Reference to the logged-in customer account this booking belongs to.
+    // Optional/nullable: bookings can exist without one (vendor-entered
+    // walk-in/offline bookings, enquiry-first bookings for a customer who
+    // never created an account) — only a customer-initiated checkout flow
+    // is expected to always set this. Existing bookings created before the
+    // Customer model existed will have this as null; backfilling them is a
+    // deliberate, separate decision (phone-number matching is not exact),
+    // not something this field's presence does automatically.
+    customerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Customer",
+      default: null,
+      index: true,
+    },
+
+    // Customer info (embedded) — this is the point-in-time snapshot of who
+    // booked (same intent as packageSnapshot below): it is NOT kept in sync
+    // with the Customer account after creation, and remains the source of
+    // truth for "who did this booking say it was for" even if customerId is
+    // null or the linked account's details later change.
     customer: {
       name: { type: String, required: true },
       phone: { type: String, default: null },
@@ -195,5 +214,9 @@ const BookingSchema = new mongoose.Schema(
 // Compound indexes
 BookingSchema.index({ vendorId: 1, status: 1 });
 BookingSchema.index({ vendorId: 1, eventDate: 1 });
+// Supports the customer-facing "my bookings" dashboard (active/past/cancelled
+// tabs, sorted/filtered by status or event date) once that endpoint exists.
+BookingSchema.index({ customerId: 1, status: 1 });
+BookingSchema.index({ customerId: 1, eventDate: 1 });
 
 export default mongoose.model("Booking", BookingSchema);

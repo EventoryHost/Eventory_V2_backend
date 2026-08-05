@@ -14,6 +14,22 @@ import transactionRoutes from "./transactionRoutes.js";
 import redirectRoutes from "./redirectRoutes.js";
 
 /**
+ * API namespace convention:
+ *  - Plain CRUD on an actor's own resource stays flat + plural, matching the
+ *    existing vendor style: /api/vendors, /api/customers.
+ *  - Anything that isn't simple CRUD, or that could otherwise collide in
+ *    name/semantics with an equivalent vendor-facing route, is namespaced
+ *    under /api/customer/<feature>: e.g. /api/customer/auth today, and
+ *    future additions like /api/customer/cart, /api/customer/wishlist,
+ *    /api/customer/bookings ("my bookings", distinct from the vendor's
+ *    /api/bookings which lists a vendor's incoming bookings).
+ *  - Vendor routes were built before this convention existed and stay as
+ *    they are (flat, e.g. /api/auth for vendor auth) rather than being
+ *    renamed — renaming a live vendor endpoint is a breaking change with no
+ *    benefit to the customer-side build.
+ */
+
+/**
  * @swagger
  * /api/health:
  *   get:

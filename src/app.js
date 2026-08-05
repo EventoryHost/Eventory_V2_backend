@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import helmet from "helmet";
 import morgan from "morgan";
 import routes from "./routes/index.js";
 import errorHandler from "./middlewares/errorHandler.js";
@@ -8,6 +9,13 @@ import swaggerSpec from "./config/swagger.js";
 const app = express();
 
 // --------------- Middleware ---------------
+
+// Security headers (HSTS, X-Content-Type-Options, X-Frame-Options, etc.).
+// contentSecurityPolicy is disabled because Swagger UI (served from this
+// same app at /api-docs) needs inline scripts/styles that helmet's default
+// CSP blocks; every other API response here is JSON, which CSP doesn't
+// meaningfully protect anyway.
+app.use(helmet({ contentSecurityPolicy: false }));
 
 // CORS
 app.use(cors());
