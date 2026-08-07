@@ -31,7 +31,17 @@ export const validateRequest = (schema, source = "body") => (req, res, next) => 
     });
   }
 
-  req[source] = result.data;
+  // Express 5 defines req.query as a getter-only accessor (parsed lazily
+  // from req.url), so a plain `req.query = ...` throws "Cannot set property
+  // query of #<IncomingMessage> which has only a getter". req.body has no
+  // such restriction. Redefine the property for the query case instead of
+  // assigning to it, so parsed/coerced/defaulted query values (e.g. the
+  // discovery endpoints' page/limit numbers) actually reach the controller.
+  if (source === "query") {
+    Object.defineProperty(req, "query", { value: result.data, writable: true, configurable: true });
+  } else {
+    req[source] = result.data;
+  }
   next();
 };
 

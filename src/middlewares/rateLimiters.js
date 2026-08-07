@@ -50,3 +50,15 @@ export const phoneOtpVerifyLimiter = rateLimit({
     message: "Too many OTP verification attempts. Please try again in a few minutes.",
   },
 });
+
+// GET /api/customer/packages, /api/customer/vendors — public, no auth, so IP
+// is the only key available. Generous on purpose: a single page load fires
+// several filtered requests, and this is here to blunt scraping/DoS-by-scan,
+// not to throttle normal browsing.
+export const publicBrowseLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 120,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: "Too many requests. Please slow down." },
+});

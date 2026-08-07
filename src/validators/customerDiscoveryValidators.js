@@ -1,0 +1,41 @@
+import { z } from "zod";
+import { SUPPORTED_TYPES } from "../utils/modelRegistry.js";
+
+/**
+ * Zod schemas for the public (no-auth) customer discovery endpoints —
+ * browsing/searching Packages and Vendors. Same pattern as
+ * customerValidators.js, split into its own file since this is a distinct
+ * feature area (read-only catalog browsing vs. auth/profile).
+ *
+ * All query params are optional — an empty query just means "no filter" —
+ * and z.coerce is used throughout since query-string values always arrive
+ * as strings.
+ */
+
+// Matches EVENT_CATEGORIES / VENDOR_TYPES freeform strings on the frontend —
+// no shared taxonomy enum exists in this repo yet, so these stay plain
+// trimmed strings rather than a hardcoded enum that could drift out of sync.
+const paginationFields = {
+  page: z.coerce.number().int().min(1).max(1000).default(1),
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+};
+
+export const browsePackagesQuerySchema = z.object({
+  eventCategory: z.string().trim().min(1).max(100).optional(),
+  vendorType: z.enum(SUPPORTED_TYPES).optional(),
+  city: z.string().trim().min(1).max(100).optional(),
+  guests: z.coerce.number().int().min(1).optional(), // must fit within capacity.minGuests/maxGuests
+  date: z.coerce.date().optional(), // must not be Blocked/Booked on availabilityCalendar
+  minPrice: z.coerce.number().min(0).optional(),
+  maxPrice: z.coerce.number().min(0).optional(),
+  sort: z.enum(["newest", "price_asc", "price_desc", "rating"]).default("newest"),
+  ...paginationFields,
+});
+
+export const browseVendorsQuerySchema = z.object({
+  vendorType: z.string().trim().min(1).max(60).optional(),
+  eventCategory: z.string().trim().min(1).max(100).optional(),
+  city: z.string().trim().min(1).max(100).optional(),
+  sort: z.enum(["rating", "newest"]).default("rating"),
+  ...paginationFields,
+});
