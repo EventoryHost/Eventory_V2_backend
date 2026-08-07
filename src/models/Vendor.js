@@ -13,6 +13,13 @@ const VendorSchema = new mongoose.Schema({
     default: false,
   },
   pocName: String,
+  pocPhone: String,
+
+  // Points of contact beyond the primary pocName / pocPhone pair.
+  additionalPocs: [{
+    name: String,
+    phone: String,
+  }],
 
   vendorType: String,
   eventCategories: [String],

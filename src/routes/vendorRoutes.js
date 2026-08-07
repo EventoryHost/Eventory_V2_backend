@@ -87,6 +87,21 @@ router.route("/").get(getAllVendors).post(createVendor);
  *               pocName:
  *                 type: string
  *                 example: "Jane Doe"
+ *               pocPhone:
+ *                 type: string
+ *                 example: "+919876543210"
+ *               additionalPocs:
+ *                 type: array
+ *                 description: Points of contact beyond the primary pocName / pocPhone pair. Replaces the whole array.
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     name:
+ *                       type: string
+ *                       example: "Ajay Sharma"
+ *                     phone:
+ *                       type: string
+ *                       example: "+918888888888"
  *               isVerified:
  *                 type: boolean
  *                 example: true
