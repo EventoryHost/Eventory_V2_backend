@@ -9,20 +9,6 @@ const makeupArtistStep2Schema = new mongoose.Schema({
         type: String,
         enum: ["Makeup", "Hair", "Skin & Spa", "Mehendi", "Nail", "Other"],
       },
-      makeupType: { type: String },
-      longevity: { type: String },
-      hairServiceType: { type: String },
-      brandOrigin: { type: String },
-      styles: [{ type: String }],
-      coverages: [{ type: String }],
-      coneTypes: [{ type: String }],
-      skinTypes: [{ type: String }],
-      customOptions: [
-        {
-          category: { type: String },
-          options: [{ type: String }],
-        },
-      ],
       options: [
         {
           name: { type: String },
