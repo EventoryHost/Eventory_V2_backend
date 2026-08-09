@@ -9,7 +9,6 @@ import jwt from "jsonwebtoken";
 import Vendor from "../models/Vendor.js";
 import dotenv from "dotenv";
 import { generateISTId } from "../utils/idGenerator.js";
-import { purgeEligibleAt } from "../utils/accountDeletion.js";
 
 dotenv.config();
 
@@ -60,15 +59,7 @@ export const loginOrSignUp = async (req, res, next) => {
     const isNew = await isNewUser(mobile);
     const existingVendor = await Vendor.findOne({ phone: `+91${mobile}` });
 
-    // A vendor with a pending deletion is deactivated but must still be able
-    // to sign in during the retention window to cancel it — a grace period
-    // they cannot re-enter would not be one. Support deactivations, which
-    // carry no deletionRequestedAt, stay blocked.
-    if (
-      existingVendor &&
-      existingVendor.isDeactivated &&
-      !existingVendor.deletionRequestedAt
-    ) {
+    if (existingVendor && existingVendor.isDeactivated) {
       return res.status(403).json({
         success: false,
         code: "ACCOUNT_DEACTIVATED",
@@ -157,9 +148,7 @@ export const verifyOtp = async (req, res, next) => {
     // Check if vendor exists in local DB
     let vendor = await Vendor.findOne({ phone: `+91${mobile}` });
 
-    // Mirrors loginOrSignUp: a pending deletion is allowed through so the
-    // vendor can cancel it; a support deactivation is not.
-    if (vendor && vendor.isDeactivated && !vendor.deletionRequestedAt) {
+    if (vendor && vendor.isDeactivated) {
       return res.status(403).json({
         success: false,
         code: "ACCOUNT_DEACTIVATED",
@@ -190,12 +179,6 @@ export const verifyOtp = async (req, res, next) => {
       message: "Login successful",
       token,
       vendor,
-      // Lets the app route a returning vendor straight to the pending-deletion
-      // screen instead of the main app, where they can cancel the request.
-      deletionPending: Boolean(vendor.deletionRequestedAt),
-      scheduledPurgeAt: vendor.deletionRequestedAt
-        ? purgeEligibleAt(vendor.deletionRequestedAt)
-        : null,
     });
   } catch (error) {
     next(error);

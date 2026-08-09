@@ -13,13 +13,6 @@ const VendorSchema = new mongoose.Schema({
     default: false,
   },
   pocName: String,
-  pocPhone: String,
-
-  // Points of contact beyond the primary pocName / pocPhone pair.
-  additionalPocs: [{
-    name: String,
-    phone: String,
-  }],
 
   vendorType: String,
   eventCategories: [String],
@@ -108,16 +101,6 @@ const VendorSchema = new mongoose.Schema({
   isDeactivated: {
     type: Boolean,
     default: false,
-  },
-
-  // Set when the vendor requests deletion from the app. Distinct from
-  // isDeactivated, which support also sets on its own: a deletion request
-  // deactivates the account *and* starts the retention window, and unlike a
-  // support deactivation the vendor can still sign in to cancel it.
-  // Cleared on cancellation; the purge job keys off this date.
-  deletionRequestedAt: {
-    type: Date,
-    default: null,
   },
 
   isDarkMode: {
