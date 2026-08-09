@@ -49,6 +49,12 @@ const TransactionSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    // Set when the vendor's account is purged. Financial records are retained
+    // and anonymised rather than deleted.
+    vendorDeleted: {
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true }
 );
