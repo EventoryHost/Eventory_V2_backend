@@ -559,47 +559,12 @@ export const duplicatePackage = async (req, res) => {
     if (!originalPkg) {
       return res.status(404).json({ status: "FAILED", message: "Package not found" });
     }
+    
+    stripIds(originalPkg);
+    delete originalPkg.createdAt;
+    delete originalPkg.updatedAt;
 
-    // Documents predating packageGroupId have no siblings to find — copy the
-    // one document rather than failing the whole request.
-    const variants = originalPkg.packageGroupId
-      ? await Package.find({ packageGroupId: originalPkg.packageGroupId })
-          .sort({ createdAt: 1 })
-          .lean()
-      : [originalPkg];
-
-    const newGroupId = new mongoose.Types.ObjectId();
-    const name = copyName(variants[0].step1_eventAndCrew?.packageName);
-
-    const created = [];
-    try {
-      for (const variant of variants) {
-        const Model = getModelForVendor(variant.vendorType);
-        const doc = new Model(
-          buildDuplicate(variant, { packageGroupId: newGroupId, packageName: name })
-        );
-        await doc.save();
-        created.push(doc._id);
-      }
-    } catch (error) {
-      // No transaction across the writes — undo the partial copy. Safe to delete
-      // by the new group id: it was minted here and holds nothing else.
-      await Package.deleteMany({ packageGroupId: newGroupId });
-      throw error;
-    }
-
-    return res.status(201).json({
-      status: "SUCCESS",
-      message: "Package duplicated",
-      packageId: created[0],
-      packageGroupId: newGroupId,
-      count: created.length,
-      packageIds: created,
-    });
-  } catch (error) {
-    return res.status(500).json({ status: "ERROR", message: "Failed to duplicate package", error: error.message });
-  }
-};
+    originalPkg.packageGroupId = new mongoose.Types.ObjectId();
 
 /**
  * @desc Duplicate one variant into the package it already belongs to: the copy
