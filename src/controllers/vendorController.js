@@ -1,5 +1,9 @@
 import Vendor from "../models/Vendor.js";
 import { generateISTId } from "../utils/idGenerator.js";
+import {
+  DELETION_RETENTION_DAYS,
+  purgeEligibleAt,
+} from "../utils/accountDeletion.js";
 
 /**
  * Strip any base64 / data URI values from an update payload.
@@ -154,9 +158,11 @@ export const deactivateVendor = async (req, res, next) => {
 
 export const reactivateVendor = async (req, res, next) => {
   try {
+    // Also clears any pending deletion — otherwise a support reactivation
+    // would leave the purge armed and the account would vanish later.
     const vendor = await Vendor.findOneAndUpdate(
       { id: req.params.id },
-      { isDeactivated: false },
+      { isDeactivated: false, deletionRequestedAt: null },
       { new: true, runValidators: true }
     );
     if (!vendor) {
@@ -168,6 +174,81 @@ export const reactivateVendor = async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: "Vendor account has been reactivated",
+      data: vendor,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/**
+ * Vendor-initiated account deletion (App Store guideline 5.1.1(v)).
+ *
+ * Deactivates the account and starts the retention window. The vendor keeps
+ * the ability to sign in during the window solely to cancel; once it lapses
+ * the scheduled job purges the account for good.
+ */
+export const requestVendorDeletion = async (req, res, next) => {
+  try {
+    const existing = await Vendor.findOne({ id: req.params.id });
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor not found",
+      });
+    }
+
+    // Re-requesting must not slide the purge date forward.
+    const requestedAt = existing.deletionRequestedAt || new Date();
+
+    const vendor = await Vendor.findOneAndUpdate(
+      { id: req.params.id },
+      { isDeactivated: true, deletionRequestedAt: requestedAt },
+      { new: true, runValidators: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Account deletion requested",
+      data: {
+        deletionRequestedAt: vendor.deletionRequestedAt,
+        scheduledPurgeAt: purgeEligibleAt(vendor.deletionRequestedAt),
+        retentionDays: DELETION_RETENTION_DAYS,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+/** Cancel a pending deletion and restore the account. */
+export const cancelVendorDeletion = async (req, res, next) => {
+  try {
+    const existing = await Vendor.findOne({ id: req.params.id });
+    if (!existing) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor not found",
+      });
+    }
+
+    if (!existing.deletionRequestedAt) {
+      return res.status(400).json({
+        success: false,
+        code: "NO_PENDING_DELETION",
+        message: "This account has no pending deletion request",
+      });
+    }
+
+    const vendor = await Vendor.findOneAndUpdate(
+      { id: req.params.id },
+      { isDeactivated: false, deletionRequestedAt: null },
+      { new: true, runValidators: true }
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Account deletion cancelled",
       data: vendor,
     });
   } catch (error) {

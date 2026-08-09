@@ -8,6 +8,8 @@ import {
   deleteVendor,
   deactivateVendor,
   reactivateVendor,
+  requestVendorDeletion,
+  cancelVendorDeletion,
 } from "../controllers/vendorController.js";
 
 /**
@@ -131,5 +133,53 @@ router.route("/").get(getAllVendors).post(createVendor);
 router.route("/:id").get(getVendorById).patch(updateVendor).delete(deleteVendor);
 router.patch("/:id/deactivate", deactivateVendor);
 router.patch("/:id/reactivate", reactivateVendor);
+
+/**
+ * @swagger
+ * /api/vendors/{id}/request-deletion:
+ *   patch:
+ *     summary: Request account deletion
+ *     description: >
+ *       Vendor-initiated deletion. Deactivates the account and starts the
+ *       retention window; the account is purged once the window lapses. The
+ *       vendor may sign in during the window solely to cancel.
+ *     tags:
+ *       - Vendors
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Deletion requested
+ *       404:
+ *         description: Vendor not found
+ */
+router.patch("/:id/request-deletion", requestVendorDeletion);
+
+/**
+ * @swagger
+ * /api/vendors/{id}/cancel-deletion:
+ *   patch:
+ *     summary: Cancel a pending account deletion
+ *     tags:
+ *       - Vendors
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Deletion cancelled
+ *       400:
+ *         description: No pending deletion request
+ *       404:
+ *         description: Vendor not found
+ */
+router.patch("/:id/cancel-deletion", cancelVendorDeletion);
 
 export default router;
