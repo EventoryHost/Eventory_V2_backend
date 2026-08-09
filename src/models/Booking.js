@@ -188,12 +188,6 @@ const BookingSchema = new mongoose.Schema(
       type: CustomizedPackageSchema,
       default: null,
     },
-    // Set when the vendor's account is purged. The booking is the customer's
-    // record too, so it is retained and anonymised rather than deleted.
-    vendorDeleted: {
-      type: Boolean,
-      default: false,
-    },
   },
   { timestamps: true }
 );

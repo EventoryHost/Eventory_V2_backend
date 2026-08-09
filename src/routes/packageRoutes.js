@@ -11,9 +11,7 @@ import {
   submitPackage,
   deletePackage,
   duplicatePackage,
-  duplicateVariant,
   hardDeletePackage,
-  hardDeleteVariant,
   addNestedItem,
   updateNestedItem,
   removeNestedItem,
@@ -638,29 +636,19 @@ router.post("/:packageId/submit", submitPackage);
  */
 router.delete("/:packageId", deletePackage);
 
-// Permanently remove ONE variant document. 
-router.delete("/:packageId/permanent", hardDeleteVariant);
-
-// Permanently remove a whole package — every variant in the group.
-router.delete("/group/:packageGroupId/permanent", hardDeletePackage);
+// Permanently remove the document. Irreversible; declared before the generic
+// delete above would still match, so the distinct path keeps them separate.
+router.delete("/:packageId/permanent", hardDeletePackage);
 
 /**
  * @swagger
  * /api/packages/{packageId}/duplicate:
  *   post:
- *     summary: Duplicate a whole package, including every variant
+ *     summary: Duplicate an existing package
  *     description: |
- *       Deep-copies the ENTIRE logical package the given id belongs to — every
- *       variant sharing its packageGroupId — into a single new group, so the
- *       copy keeps the same variant line-up (e.g. Premium/Standard/Basic).
- *
- *       Pass any variant's id; the group is resolved server-side. Do NOT call
- *       this once per variant — that produces one standalone package per
- *       variant instead of one package with all of them.
- *
- *       Every copy comes back as a Draft with " (Copy)" appended to the package
- *       name. `completedSteps` is preserved, since the copy carries all of the
- *       source's step data.
+ *       Creates a deep copy of the package as a new Draft.
+ *       Appends " (Copy)" to the package name.
+ *       Resets completedSteps to [].
  *     tags: [Packages]
  *     parameters:
  *       - in: path
@@ -668,7 +656,6 @@ router.delete("/group/:packageGroupId/permanent", hardDeletePackage);
  *         required: true
  *         schema:
  *           type: string
- *         description: Any variant of the package to duplicate
  *     responses:
  *       201:
  *         description: Package duplicated
@@ -684,84 +671,13 @@ router.delete("/group/:packageGroupId/permanent", hardDeletePackage);
  *                   type: string
  *                 packageId:
  *                   type: string
- *                   description: The first copied variant, representing the new package
- *                 packageGroupId:
- *                   type: string
- *                   description: The new group shared by every copy
- *                 count:
- *                   type: number
- *                   description: How many variants were copied
- *                 packageIds:
- *                   type: array
- *                   items:
- *                     type: string
+ *                   description: The new duplicated package's ID
  *       404:
  *         description: Original package not found
  *       500:
  *         description: Server error
  */
 router.post("/:packageId/duplicate", duplicatePackage);
-
-/**
- * @swagger
- * /api/packages/{packageId}/duplicate-variant:
- *   post:
- *     summary: Duplicate one variant within its package
- *     description: |
- *       Deep-copies a single variant document and keeps it in the SAME package:
- *       the copy inherits the source's packageGroupId and package name, and
- *       takes the new variant name from the body.
- *
- *       Use this for "duplicate this variant" inside the package editor. Use
- *       `/duplicate` to copy the package as a whole.
- *     tags: [Packages]
- *     parameters:
- *       - in: path
- *         name: packageId
- *         required: true
- *         schema:
- *           type: string
- *         description: The variant to copy
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [variantType]
- *             properties:
- *               variantType:
- *                 type: string
- *                 description: Name for the new variant; must be free within the package
- *                 example: "Premium Copy"
- *     responses:
- *       201:
- *         description: Variant duplicated
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 status:
- *                   type: string
- *                   example: SUCCESS
- *                 packageId:
- *                   type: string
- *                   description: The new variant's ID
- *                 packageGroupId:
- *                   type: string
- *                 variantType:
- *                   type: string
- *       400:
- *         description: Missing or empty variantType
- *       404:
- *         description: Source variant not found
- *       409:
- *         description: A variant with that name already exists in the package
- *       500:
- *         description: Server error
- */
-router.post("/:packageId/duplicate-variant", duplicateVariant);
 
 // ============================================================
 //  NESTED RESOURCE MANAGEMENT (Step 2 sub-items)
