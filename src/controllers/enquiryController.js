@@ -174,9 +174,9 @@ export const getEnquiryById = async (req, res) => {
 
     let enquiry;
     if (enquiryId.startsWith("ENQ")) {
-      enquiry = await Enquiry.findOne({ enquiryId });
+      enquiry = await Enquiry.findOne({ enquiryId }).populate("vendorId", "vendorType").populate("primaryPackage");
     } else {
-      enquiry = await Enquiry.findById(enquiryId);
+      enquiry = await Enquiry.findById(enquiryId).populate("vendorId", "vendorType").populate("primaryPackage");
     }
 
     if (!enquiry) {
@@ -459,7 +459,7 @@ export const declineEnquiry = async (req, res) => {
 export const sendProposal = async (req, res) => {
   try {
     const { enquiryId } = req.params;
-    const { customPrice, paymentMilestones, lineItems, vendorNotes, attachments, mediaUrls } = req.body;
+    const { customPrice, paymentMilestones, lineItems, vendorNotes, attachments, mediaUrls, customiseData, pricing, termsAndPolicies, termsAttachmentUrl } = req.body;
 
     let enquiry;
     if (enquiryId.startsWith("ENQ")) {
@@ -488,15 +488,24 @@ export const sendProposal = async (req, res) => {
       });
     }
 
+    // Update customiseData if provided
+    if (customiseData) {
+      enquiry.customiseData = customiseData;
+    }
+
     // Update proposal fields and status
     enquiry.proposal = {
+      ...enquiry.proposal,
       customPrice,
       paymentMilestones,
       lineItems,
       vendorNotes,
       attachments: attachments || [],
       mediaUrls: mediaUrls || [],
-      submittedAt: new Date(),
+      pricing: pricing || enquiry.proposal?.pricing,
+      termsAndPolicies: termsAndPolicies || enquiry.proposal?.termsAndPolicies,
+      termsAndPolicies: termsAndPolicies || enquiry.proposal?.termsAndPolicies,
+      termsAttachmentUrl: termsAttachmentUrl || enquiry.proposal?.termsAttachmentUrl,
     };
     enquiry.status = "ProposalSent";
 
@@ -512,6 +521,64 @@ export const sendProposal = async (req, res) => {
     return res.status(500).json({
       status: "ERROR",
       message: "Failed to send proposal",
+      error: error.message,
+    });
+  }
+};
+
+/**
+ * @desc    Save proposal draft for an enquiry
+ * @route   PUT /api/enquiries/:enquiryId/draft
+ */
+export const saveDraft = async (req, res) => {
+  try {
+    const { enquiryId } = req.params;
+    const { customiseData, pricing, termsAndPolicies, attachments, termsAttachmentUrl } = req.body;
+
+    let enquiry;
+    if (enquiryId.startsWith("ENQ")) {
+      enquiry = await Enquiry.findOne({ enquiryId });
+    } else {
+      enquiry = await Enquiry.findById(enquiryId);
+    }
+
+    if (!enquiry) {
+      return res
+        .status(404)
+        .json({ status: "FAILED", message: "Enquiry not found" });
+    }
+
+    if (enquiry.status === "Converted" || enquiry.status === "Declined") {
+      return res.status(400).json({
+        status: "FAILED",
+        message: "Cannot save draft for a converted or declined enquiry",
+      });
+    }
+
+    if (customiseData) {
+      enquiry.customiseData = customiseData;
+    }
+
+    enquiry.proposal = {
+      ...enquiry.proposal,
+      pricing: pricing || enquiry.proposal?.pricing,
+      termsAndPolicies: termsAndPolicies || enquiry.proposal?.termsAndPolicies,
+      termsAttachmentUrl: termsAttachmentUrl || enquiry.proposal?.termsAttachmentUrl,
+      attachments: attachments || enquiry.proposal?.attachments || [],
+    };
+
+    await enquiry.save();
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Draft saved successfully",
+      enquiry,
+    });
+  } catch (error) {
+    console.error("Save Draft Error:", error);
+    return res.status(500).json({
+      status: "ERROR",
+      message: "Failed to save draft",
       error: error.message,
     });
   }
