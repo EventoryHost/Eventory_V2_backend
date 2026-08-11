@@ -4,10 +4,18 @@ import {
   browseVendors,
   getPackageFilters,
   getVendorFilters,
+  getPackageDetail,
+  getPackageReviews,
+  getVendorReviews,
 } from "../controllers/customerDiscoveryController.js";
 import { publicBrowseLimiter } from "../middlewares/rateLimiters.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
-import { browsePackagesQuerySchema, browseVendorsQuerySchema } from "../validators/customerDiscoveryValidators.js";
+import {
+  browsePackagesQuerySchema,
+  browseVendorsQuerySchema,
+  packageDetailQuerySchema,
+  reviewsQuerySchema,
+} from "../validators/customerDiscoveryValidators.js";
 
 const router = express.Router();
 
@@ -89,6 +97,96 @@ router.get("/packages/filters", publicBrowseLimiter, getPackageFilters);
 
 /**
  * @swagger
+ * /api/customer/packages/{packageId}:
+ *   get:
+ *     summary: Package detail (PDP)
+ *     description: |
+ *       Public, read-only. 404s unless the package is packageStatus "Live".
+ *       Returns the full package (event/crew details, add-ons/pricing,
+ *       policies, media) plus three computed sections:
+ *         - availability: best-effort, cross-checks the vendor's
+ *           availabilityCalendar, declared weekly/time-slot working hours,
+ *           and a live count of non-cancelled Bookings against
+ *           bookingCapacity.dailyCapacity for the requested date.
+ *         - pricingPreview: an ESTIMATE only (guest-tier + date-based
+ *           dynamic pricing + GST) — never authoritative, always
+ *           recomputed server-side at actual checkout.
+ *         - reviews: Published reviews for this package if any exist yet,
+ *           else falls back to the vendor's overall rating/reviewsCount.
+ *       This route must stay registered AFTER /packages/filters — otherwise
+ *       Express would match "filters" as this route's :packageId param.
+ *     tags: [Customer Discovery]
+ *     parameters:
+ *       - in: path
+ *         name: packageId
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: date
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: guests
+ *         schema: { type: integer }
+ *       - in: query
+ *         name: time
+ *         schema: { type: string }
+ *         description: "HH:MM 24-hour, checked against the package's declared time slots"
+ *     responses:
+ *       200: { description: Package detail + availability + pricing preview + reviews }
+ *       400: { description: Invalid packageId or query parameters }
+ *       404: { description: Package not found or not Live }
+ */
+router.get(
+  "/packages/:packageId",
+  publicBrowseLimiter,
+  validateRequest(packageDetailQuerySchema, "query"),
+  getPackageDetail
+);
+
+/**
+ * @swagger
+ * /api/customer/packages/{packageId}/reviews:
+ *   get:
+ *     summary: Standalone, paginated review listing for one package
+ *     description: |
+ *       Public, read-only. The "see all reviews" page for a package — the
+ *       PDP (Step 8) only embeds the 10 most recent. Returns real
+ *       pagination/sort/filter plus a full rating aggregate: average,
+ *       count, 1-5 star distribution, and a per-category breakdown
+ *       computed from whatever categoryRatings keys are actually present
+ *       on the matched reviews (no fixed category list is hardcoded — see
+ *       src/models/Review.js).
+ *     tags: [Customer Discovery]
+ *     parameters:
+ *       - in: path
+ *         name: packageId
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: minRating
+ *         schema: { type: integer, minimum: 1, maximum: 5 }
+ *       - in: query
+ *         name: sort
+ *         schema: { type: string, enum: [recent, highest, lowest], default: recent }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 20, maximum: 50 }
+ *     responses:
+ *       200: { description: Paginated reviews + rating aggregate }
+ *       400: { description: Invalid packageId or query parameters }
+ */
+router.get(
+  "/packages/:packageId/reviews",
+  publicBrowseLimiter,
+  validateRequest(reviewsQuerySchema, "query"),
+  getPackageReviews
+);
+
+/**
+ * @swagger
  * /api/customer/vendors:
  *   get:
  *     summary: Browse/search active vendors
@@ -133,5 +231,44 @@ router.get("/vendors", publicBrowseLimiter, validateRequest(browseVendorsQuerySc
  *       200: { description: Available filter facets and sort options }
  */
 router.get("/vendors/filters", publicBrowseLimiter, getVendorFilters);
+
+/**
+ * @swagger
+ * /api/customer/vendors/{vendorId}/reviews:
+ *   get:
+ *     summary: Standalone, paginated review listing for a vendor (across all their packages)
+ *     description: |
+ *       Public, read-only. Same shape as /packages/{packageId}/reviews but
+ *       scoped to every review a vendor has received, not one package —
+ *       the "Review Page" / vendor-profile use case from the Customer
+ *       Reviews & Social Proof Page PRD.
+ *     tags: [Customer Discovery]
+ *     parameters:
+ *       - in: path
+ *         name: vendorId
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: minRating
+ *         schema: { type: integer, minimum: 1, maximum: 5 }
+ *       - in: query
+ *         name: sort
+ *         schema: { type: string, enum: [recent, highest, lowest], default: recent }
+ *       - in: query
+ *         name: page
+ *         schema: { type: integer, default: 1 }
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 20, maximum: 50 }
+ *     responses:
+ *       200: { description: Paginated reviews + rating aggregate }
+ *       400: { description: Invalid vendorId or query parameters }
+ */
+router.get(
+  "/vendors/:vendorId/reviews",
+  publicBrowseLimiter,
+  validateRequest(reviewsQuerySchema, "query"),
+  getVendorReviews
+);
 
 export default router;

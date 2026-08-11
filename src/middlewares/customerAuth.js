@@ -74,3 +74,50 @@ export const requireSelf = (req, res, next) => {
   }
   next();
 };
+
+/**
+ * Soft-auth cart identity resolution — Phase 3 Step 13. Cart needs to work
+ * for BOTH a logged-in customer AND an anonymous guest (Cart.js's own
+ * scope: "guest cart support before login"), so unlike protectCustomer this
+ * middleware never 401s on a missing/invalid token — it just falls through
+ * to guest identification instead.
+ *
+ * Resolution order: a valid customer access token wins (sets req.customer,
+ * exactly like protectCustomer); otherwise an "x-guest-cart-id" header (or
+ * ?guestCartId= query param, for easy manual/Postman testing) sets
+ * req.guestId; if neither is present, both are left unset and the cart
+ * controller mints a brand-new guest cart on the first write action.
+ */
+export const identifyCartOwner = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization || "";
+    const [scheme, headerToken] = authHeader.split(" ");
+    const token = (scheme === "Bearer" && headerToken) || req.cookies?.accessToken;
+
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        if (decoded.role === "customer") {
+          const customer = await Customer.findOne({ id: decoded.id }).lean();
+          if (customer && !customer.isDeactivated) {
+            req.customer = customer;
+            return next();
+          }
+        }
+      } catch {
+        // Invalid/expired token — NOT an error here (unlike protectCustomer):
+        // fall through to guest identification rather than 401ing a cart
+        // request just because a stale token happened to be sent alongside it.
+      }
+    }
+
+    const guestId = req.headers["x-guest-cart-id"] || req.query.guestCartId;
+    if (typeof guestId === "string" && guestId.trim()) {
+      req.guestId = guestId.trim();
+    }
+
+    next();
+  } catch (error) {
+    next(error);
+  }
+};

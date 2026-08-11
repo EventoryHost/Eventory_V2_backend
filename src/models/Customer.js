@@ -100,10 +100,31 @@ const CustomerSchema = new mongoose.Schema(
     profileCompleteness: { type: Number, default: 0, min: 0, max: 100 },
     lastLogin: { type: Date, default: null },
 
+    // ---- Wishlist share link (Phase 2 Step 10) ----
+    // A customer has at most one share link for their whole wishlist (not
+    // one per item) — sharing exposes the current live list, not a
+    // point-in-time snapshot. wishlistShareToken is only ever generated on
+    // first share; wishlistShareEnabled gates whether the public read
+    // endpoint honors it, so disabling sharing doesn't burn the token (the
+    // same link works again if re-enabled) — only rotating mints a new one.
+    wishlistShareToken: { type: String, default: null, index: { unique: true, sparse: true } },
+    wishlistShareEnabled: { type: Boolean, default: false },
+
     // ---- Account status ----
     isDeactivated: { type: Boolean, default: false },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+    // Explicit collection name — REQUIRED, do not remove. Mongoose's default
+    // ("customers") collides with a large pre-existing, still-populated
+    // legacy collection of that exact name (43 documents, a totally
+    // different customer_name/contact_number/wishlisted_services/
+    // applied_coupons-shaped schema from some other system sharing this
+    // "dev" database) — discovered 2026-08-07 while building Wishlist
+    // (Phase 2 Step 10), the same class of collision as the Review model
+    // incident in Step 9. See info.txt Phase 0 for the full writeup.
+    collection: "customer_accounts",
+  }
 );
 
 // Hash password on set/change — never store or compare plaintext.

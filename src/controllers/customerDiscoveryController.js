@@ -1,5 +1,11 @@
+import mongoose from "mongoose";
 import Package from "../models/Package.js";
 import Vendor from "../models/Vendor.js";
+import Review from "../models/Review.js";
+import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
+import { utcDayRange } from "../utils/dateRange.js";
+import { computeAvailability } from "../utils/packageAvailability.js";
+import { round2 } from "../utils/money.js";
 
 /**
  * Public (no-auth), read-only discovery endpoints for the customer side:
@@ -9,19 +15,10 @@ import Vendor from "../models/Vendor.js";
  *
  * Per the Vendor Page PRD (see info.txt PART 3): customers never see a
  * vendor's direct contact info or verification/KYC internals, so every
- * response here is built from an explicit field whitelist rather than
- * projecting the full document — that's enforced here, not left to callers.
+ * response here is built from an explicit field whitelist (PUBLIC_VENDOR_FIELDS,
+ * src/utils/publicFields.js) rather than projecting the full document —
+ * that's enforced here, not left to callers.
  */
-
-// Fields safe to expose on a vendor to a customer. Deliberately excludes:
-// email, phone, aadharNumber/panNumber/gstNumber + their doc URLs,
-// bankDetails, agreementDocUrl, isDarkMode, faceMatchScore, and the raw
-// isAadharVerified/isPanVerified/isGstVerified/isFssaiVerified/isTradeLicVerified
-// flags (internal KYC granularity — customers only need the overall isVerified).
-const PUBLIC_VENDOR_FIELDS =
-  "id businessName isIndividual vendorType eventCategories city state serviceAreas " +
-  "teamSize bookingsPerYear experience profilePicture description businessPhotos " +
-  "coverImage isVerified rating reviewsCount createdAt";
 
 /**
  * @desc Browse/search Live packages by event category, vendor type, city,
@@ -54,10 +51,7 @@ export const browsePackages = async (req, res) => {
     }
 
     if (date) {
-      const start = new Date(date);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(start);
-      end.setDate(end.getDate() + 1);
+      const { start, end } = utcDayRange(date);
       // Exclude packages explicitly Blocked/Booked on the requested day. A
       // package with no calendar entry for that day is treated as available
       // (best-effort — the vendor's calendar isn't guaranteed exhaustive).
@@ -130,6 +124,331 @@ export const browsePackages = async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to browse packages", error: error.message });
+  }
+};
+
+/**
+ * @desc PDP (package detail): the full Live package (event/crew details,
+ * products & pricing incl. add-ons, policies, media) plus three computed
+ * sections layered on top — availability, a price preview, and reviews.
+ * Public, no auth. 404s (rather than showing Draft/Under Review internals)
+ * if the package doesn't exist or isn't Live.
+ */
+export const getPackageDetail = async (req, res) => {
+  try {
+    const { packageId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(packageId)) {
+      return res.status(400).json({ status: "FAILED", message: "Invalid packageId" });
+    }
+
+    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" })
+      .populate({ path: "vendorId", select: PUBLIC_VENDOR_FIELDS })
+      .select("-__v")
+      .lean();
+
+    if (!pkg) {
+      return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
+    }
+
+    const { date, guests, time } = req.query;
+    const [availability, pricingPreview, reviews] = await Promise.all([
+      computeAvailability(pkg, { date, guests, time }),
+      Promise.resolve(computePricingPreview(pkg, { date, guests })),
+      getPdpReviewsSection(pkg),
+    ]);
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      package: pkg,
+      availability,
+      pricingPreview,
+      reviews,
+    });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to fetch package detail", error: error.message });
+  }
+};
+
+// computeAvailability moved to src/utils/packageAvailability.js (Phase 3
+// Step 13) so Cart's revalidation can reuse the exact same logic instead of
+// a second, potentially-drifting copy — imported at the top of this file.
+
+// Preview only — NOT the authoritative price. Phase 3/4 (cart/checkout
+// pricing engine, already scoped in info.txt) recomputes server-side before
+// any charge; this exists so the PDP can show a realistic estimate for the
+// guest count/date the customer is looking at.
+function computePricingPreview(pkg, { date, guests }) {
+  const pricing = pkg.step3_policiesAndCharges || {};
+  const basePricing = pricing.packagePricing || {};
+  let amount = basePricing.price ?? null;
+  const billingUnit = basePricing.billingUnit ?? null;
+
+  let guestTierApplied = null;
+  if (guests !== undefined && Array.isArray(pricing.guestTiers) && pricing.guestTiers.length) {
+    const sorted = [...pricing.guestTiers].sort((a, b) => (a.maxGuests ?? Infinity) - (b.maxGuests ?? Infinity));
+    const tier = sorted.find((t) => t.maxGuests == null || guests <= t.maxGuests);
+    if (tier && tier.price != null) {
+      amount = tier.price;
+      guestTierApplied = { maxGuests: tier.maxGuests, price: tier.price };
+    }
+  }
+
+  let appliedAdjustment = null;
+  const unappliedToggles = [];
+
+  if (date && amount != null) {
+    const target = new Date(date);
+
+    // Explicit fixed-price override for a date range — shared base-schema
+    // field (documented "PAV specific" in the model comment, but present
+    // for every vendor type), so it's the highest-precedence signal: it's
+    // the one place a vendor sets an actual price, not just a percentage.
+    const rangeOverride = (pricing.dateRangeDynamicPricing || []).find(
+      (r) => r.fromDate && r.toDate && target >= new Date(r.fromDate) && target <= new Date(r.toDate)
+    );
+
+    const dyn = pricing.dynamicPricing || {};
+
+    if (rangeOverride) {
+      amount = rangeOverride.price;
+      appliedAdjustment = { source: "dateRangeDynamicPricing", price: rangeOverride.price };
+    } else if (dyn.customDates?.enabled && dyn.customDates.startDate && dyn.customDates.endDate) {
+      const start = new Date(dyn.customDates.startDate);
+      const end = new Date(dyn.customDates.endDate);
+      if (!isNaN(start) && !isNaN(end) && target >= start && target <= end) {
+        if (dyn.customDates.price != null) {
+          amount = dyn.customDates.price;
+          appliedAdjustment = { source: "customDates", price: dyn.customDates.price };
+        } else if (dyn.customDates.percentage != null) {
+          amount = round2(amount * (1 + dyn.customDates.percentage / 100));
+          appliedAdjustment = { source: "customDates", percentage: dyn.customDates.percentage };
+        }
+      }
+    } else if (dyn.weekends?.enabled && [0, 6].includes(target.getUTCDay())) {
+      if (dyn.weekends.price != null) {
+        amount = dyn.weekends.price;
+        appliedAdjustment = { source: "weekend", price: dyn.weekends.price };
+      } else if (dyn.weekends.percentage != null) {
+        amount = round2(amount * (1 + dyn.weekends.percentage / 100));
+        appliedAdjustment = { source: "weekend", percentage: dyn.weekends.percentage };
+      }
+    }
+
+    // weddingSeason/festivals toggles exist on the schema but neither one
+    // carries a date range to evaluate against (weddingSeason has no
+    // start/end fields at all; festivals.details is untyped Mixed) — so
+    // there is no reliable way to tell if `date` falls inside either one.
+    // Surfaced here rather than guessed at with a hardcoded date range.
+    if (dyn.weddingSeason?.enabled) {
+      unappliedToggles.push("weddingSeason is enabled on this package but has no date range in the data to evaluate against — not applied.");
+    }
+    if (dyn.festivals?.enabled) {
+      unappliedToggles.push("festivals is enabled on this package but has no structured date range to evaluate against — not applied.");
+    }
+  }
+
+  const subtotal = amount != null ? round2(amount) : null;
+  const gstInclusive = !!pricing.gstInclusive;
+  const gstRatePercent = pricing.gstRatePercent ?? null;
+
+  let gstAmount = null;
+  let total = subtotal;
+  if (subtotal != null && gstRatePercent != null) {
+    gstAmount = gstInclusive ? round2(subtotal - subtotal / (1 + gstRatePercent / 100)) : round2((subtotal * gstRatePercent) / 100);
+    total = gstInclusive ? subtotal : round2(subtotal + gstAmount);
+  }
+
+  return {
+    basePrice: basePricing.price ?? null,
+    billingUnit,
+    guestTierApplied,
+    appliedAdjustment,
+    unappliedToggles,
+    subtotal,
+    gstInclusive,
+    gstRatePercent,
+    gstAmount,
+    total,
+    note: "Preview estimate only — the authoritative price is recomputed server-side at checkout (Phase 3/4), never trusted from this response.",
+  };
+}
+
+// Package-level reviews embedded in the PDP response (Step 8) — top 10 +
+// a simple average, falling back to the vendor's overall rating/
+// reviewsCount when this specific package has none yet. Kept deliberately
+// lightweight; getPackageReviews (Step 9, below) is the dedicated
+// paginated/filterable/sortable "see all reviews" endpoint with the full
+// rating-distribution + category breakdown this one doesn't compute.
+async function getPdpReviewsSection(pkg) {
+  const [items, aggregate] = await Promise.all([
+    Review.find({ packageId: pkg._id, status: "Published" })
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .populate({ path: "customerId", select: "name profilePicture" })
+      .lean(),
+    Review.aggregate([
+      { $match: { packageId: pkg._id, status: "Published" } },
+      { $group: { _id: null, avgRating: { $avg: "$rating" }, count: { $sum: 1 } } },
+    ]),
+  ]);
+
+  if (aggregate[0]?.count) {
+    return {
+      items,
+      count: aggregate[0].count,
+      averageRating: round2(aggregate[0].avgRating),
+      usingVendorFallback: false,
+    };
+  }
+
+  const vendor = pkg.vendorId; // already populated with PUBLIC_VENDOR_FIELDS
+  return {
+    items: [],
+    count: vendor?.reviewsCount ?? 0,
+    averageRating: vendor?.rating ?? null,
+    usingVendorFallback: true,
+  };
+}
+
+// timeWithinSlot/parseTimeToMinutes moved into src/utils/packageAvailability.js
+// (only computeAvailability needs them); utcDayRange -> src/utils/dateRange.js;
+// round2 -> src/utils/money.js. All imported at the top of this file.
+
+// Shared by getVendorReviews and getPackageReviews below: average rating,
+// count, a 1-5 star histogram, and a per-category breakdown computed from
+// whatever categoryRatings keys actually appear in the matched reviews (see
+// Review.js for why there's no fixed category list to group by instead).
+async function computeReviewAggregate(match) {
+  const [result] = await Review.aggregate([
+    { $match: match },
+    {
+      $facet: {
+        summary: [{ $group: { _id: null, averageRating: { $avg: "$rating" }, count: { $sum: 1 } } }],
+        distribution: [{ $group: { _id: "$rating", count: { $sum: 1 } } }],
+        categoryBreakdown: [
+          { $match: { categoryRatings: { $exists: true } } },
+          { $project: { categoryRatings: { $objectToArray: "$categoryRatings" } } },
+          { $unwind: "$categoryRatings" },
+          { $group: { _id: "$categoryRatings.k", averageRating: { $avg: "$categoryRatings.v" }, count: { $sum: 1 } } },
+          { $sort: { _id: 1 } },
+        ],
+      },
+    },
+  ]);
+
+  const summary = result.summary[0] || { averageRating: null, count: 0 };
+  const distribution = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+  for (const bucket of result.distribution) distribution[bucket._id] = bucket.count;
+
+  return {
+    averageRating: round2(summary.averageRating),
+    count: summary.count,
+    distribution,
+    categoryBreakdown: result.categoryBreakdown.map((c) => ({
+      category: c._id,
+      averageRating: round2(c.averageRating),
+      count: c.count,
+    })),
+  };
+}
+
+/**
+ * @desc Standalone, paginated/filterable/sortable review listing for a
+ * vendor (across every one of their packages) — the "Review Page" /
+ * vendor-profile use case the PDP's embedded top-10 (Step 8) doesn't cover.
+ * Public, no auth.
+ */
+export const getVendorReviews = async (req, res) => {
+  try {
+    const { vendorId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(vendorId)) {
+      return res.status(400).json({ status: "FAILED", message: "Invalid vendorId" });
+    }
+
+    const { minRating, sort, page, limit } = req.query;
+    const match = { vendorId: new mongoose.Types.ObjectId(vendorId), status: "Published" };
+    if (minRating) match.rating = { $gte: minRating };
+
+    const sortMap = {
+      recent: { createdAt: -1 },
+      highest: { rating: -1, createdAt: -1 },
+      lowest: { rating: 1, createdAt: -1 },
+    };
+
+    const [items, total, aggregate] = await Promise.all([
+      Review.find(match)
+        .sort(sortMap[sort])
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate({ path: "customerId", select: "name profilePicture" })
+        .populate({ path: "packageId", select: "step1_eventAndCrew.packageName" })
+        .lean(),
+      Review.countDocuments(match),
+      computeReviewAggregate(match),
+    ]);
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      count: items.length,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      items,
+      aggregate,
+    });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to fetch vendor reviews", error: error.message });
+  }
+};
+
+/**
+ * @desc Standalone, paginated/filterable/sortable review listing for one
+ * package — same shape as getVendorReviews, scoped narrower. Public, no
+ * auth. Distinct from the PDP's embedded reviews section (Step 8): this is
+ * the dedicated "see all reviews" page, with real pagination/sort/filter
+ * and the full distribution + category breakdown.
+ */
+export const getPackageReviews = async (req, res) => {
+  try {
+    const { packageId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(packageId)) {
+      return res.status(400).json({ status: "FAILED", message: "Invalid packageId" });
+    }
+
+    const { minRating, sort, page, limit } = req.query;
+    const match = { packageId: new mongoose.Types.ObjectId(packageId), status: "Published" };
+    if (minRating) match.rating = { $gte: minRating };
+
+    const sortMap = {
+      recent: { createdAt: -1 },
+      highest: { rating: -1, createdAt: -1 },
+      lowest: { rating: 1, createdAt: -1 },
+    };
+
+    const [items, total, aggregate] = await Promise.all([
+      Review.find(match)
+        .sort(sortMap[sort])
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .populate({ path: "customerId", select: "name profilePicture" })
+        .lean(),
+      Review.countDocuments(match),
+      computeReviewAggregate(match),
+    ]);
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      count: items.length,
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+      items,
+      aggregate,
+    });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to fetch package reviews", error: error.message });
   }
 };
 
