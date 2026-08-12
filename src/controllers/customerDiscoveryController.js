@@ -496,7 +496,16 @@ export const getPackageFilters = async (req, res) => {
       },
     ]);
 
-    const vendorIds = facets.vendorIds.map((v) => v._id).filter(Boolean);
+    // .filter(Boolean) alone isn't enough here — it drops null/undefined
+    // but not a malformed vendorId (e.g. a stray business-id string like
+    // "VEN20260512181520098" instead of a real ObjectId, however it got
+    // there). Package.vendorId is a ref, not a validated foreign key, so
+    // Mongoose never enforces the shape on write — one bad document was
+    // enough to make Vendor.distinct's $in cast throw and 500 this shared
+    // filters endpoint for every customer. Reported by the frontend team
+    // 2026-08-13, confirmed against the actual error/code, fixed by
+    // validating shape before it ever reaches the query.
+    const vendorIds = facets.vendorIds.map((v) => v._id).filter((id) => mongoose.Types.ObjectId.isValid(id));
     const cities = vendorIds.length ? await Vendor.distinct("city", { _id: { $in: vendorIds }, city: { $nin: [null, ""] } }) : [];
 
     return res.status(200).json({
