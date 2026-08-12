@@ -1,23 +1,57 @@
-import Booking from "../models/Booking.js";
+import Booking, {
+  PRE_ACCEPTANCE_STATUSES,
+  TERMINAL_STATUSES,
+} from "../models/Booking.js";
 import Package from "../models/Package.js";
 import Vendor from "../models/Vendor.js";
-import Transaction from "../models/Transaction.js";
 import CalendarBlock from "../models/CalendarBlock.js";
 import { generateISTId } from "../utils/idGenerator.js";
+import { snapshotDeliverables } from "../utils/packageDeliverables.js";
+import {
+  applyPricingBreakdown,
+  withPricingBreakdown,
+} from "../utils/pricingBreakdown.js";
 import {
   validateCreateBooking,
-  validateMilestoneUpdate,
-  validateCustomizePackage,
+  validateChangeRequests,
+  validateBookingUpdate,
 } from "../validators/bookingValidators.js";
 
+// ─── Constants ──────────────────────────────────────────────
+
+/** Default vendor response window when the caller does not supply one. */
+const RESPONSE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 // ─── Helpers ────────────────────────────────────────────────
+
+/**
+ * Look a booking up by either its human-readable bookingId (EVT...) or its
+ * MongoDB _id.
+ */
+const findBooking = async (bookingId) =>
+  bookingId.startsWith("EVT")
+    ? Booking.findOne({ bookingId })
+    : Booking.findById(bookingId);
+
+const notFound = (res, message) =>
+  res.status(404).json({ status: "FAILED", message });
+
+const invalid = (res, errors) =>
+  res
+    .status(400)
+    .json({ status: "FAILED", message: "Validation failed", errors });
+
+const failed = (res, message, error) => {
+  console.error(`${message}:`, error);
+  return res.status(500).json({ status: "ERROR", message, error: error.message });
+};
 
 /**
  * Resolve a human-readable vendor ID (e.g. "VEN...") to a MongoDB ObjectId.
  */
 const resolveVendorId = async (vendorId) => {
   if (typeof vendorId === "string" && vendorId.startsWith("VEN")) {
-    const vendorDoc = await Vendor.findOne({ id: vendorId }).select('_id');
+    const vendorDoc = await Vendor.findOne({ id: vendorId }).select("_id");
     if (!vendorDoc) return null;
     return vendorDoc._id;
   }
@@ -34,18 +68,16 @@ const detectConflict = async (vendorId, eventDate, excludeBookingId = null) => {
   const dateEnd = new Date(eventDate);
   dateEnd.setUTCHours(23, 59, 59, 999);
 
-  // Check for other accepted bookings on the same date
   const bookingQuery = {
     vendorId,
     eventDate: { $gte: dateStart, $lte: dateEnd },
-    status: { $in: ["Pending", "Accepted"] },
+    status: { $in: ["NewBooking", "Confirmed"] },
   };
   if (excludeBookingId) {
     bookingQuery._id = { $ne: excludeBookingId };
   }
   const otherBooking = await Booking.findOne(bookingQuery);
 
-  // Check for calendar blocks (OfflineBooking or Holiday)
   const calendarBlock = await CalendarBlock.findOne({
     vendorId,
     isActive: true,
@@ -94,6 +126,40 @@ const revertPackageAvailability = async (packageId, eventDate) => {
   }
 };
 
+/**
+ * `totalReceived` is the sum of the milestones marked Received. Keeping the
+ * derivation in one place stops the figure drifting from the plan it describes.
+ */
+/**
+ * A booking inherits the package's payment plan. The package stores each
+ * instalment as a share, so the amounts are resolved against this booking's
+ * own total rather than the package's list price.
+ */
+const milestonesFromPackage = (pkg, total) => {
+  const planned = pkg.paymentMilestones?.milestones ?? [];
+  if (!planned.length) return [];
+
+  const amounts = planned.map((m) =>
+    Math.round((total * (m.percentage || 0)) / 100)
+  );
+  const drift = Math.round(total) - amounts.reduce((sum, a) => sum + a, 0);
+  if (amounts.length) amounts[amounts.length - 1] += drift;
+
+  return planned.map((m, i) => ({
+    title: m.title,
+    percentage: m.percentage,
+    amount: amounts[i],
+    dueDate: null,
+    status: "Pending",
+  }));
+};
+
+const syncTotalReceived = (booking) => {
+  booking.totalReceived = booking.paymentMilestones
+    .filter((m) => m.status === "Received")
+    .reduce((sum, m) => sum + (m.amount || 0), 0);
+};
+
 // ─── Controllers ────────────────────────────────────────────
 
 /**
@@ -105,28 +171,13 @@ export const createBooking = async (req, res) => {
     const { vendorId } = req.params;
 
     const validation = validateCreateBooking(req.body);
-    if (!validation.valid) {
-      return res.status(400).json({
-        status: "FAILED",
-        message: "Validation failed",
-        errors: validation.errors,
-      });
-    }
+    if (!validation.valid) return invalid(res, validation.errors);
 
     const actualVendorId = await resolveVendorId(vendorId);
-    if (!actualVendorId) {
-      return res
-        .status(404)
-        .json({ status: "FAILED", message: "Vendor not found" });
-    }
+    if (!actualVendorId) return notFound(res, "Vendor not found");
 
-    // Fetch and snapshot the package
     const pkg = await Package.findById(req.body.packageId);
-    if (!pkg) {
-      return res
-        .status(404)
-        .json({ status: "FAILED", message: "Package not found" });
-    }
+    if (!pkg) return notFound(res, "Package not found");
 
     const conflictDetected = await detectConflict(
       actualVendorId,
@@ -160,53 +211,67 @@ export const createBooking = async (req, res) => {
         image: pkg.step4_sampleMedia?.media?.[0]?.url || null,
         vendorType: pkg.vendorType || null,
         variantType: pkg.variantType || "Premium",
+        gstRatePercent: pkg.step3_policiesAndCharges?.gstRatePercent ?? null,
+        gstInclusive: pkg.step3_policiesAndCharges?.gstInclusive ?? false,
+        deliverables: snapshotDeliverables(pkg),
       },
       paymentType: req.body.paymentType,
-      status: "Pending",
-      paymentMilestones: req.body.paymentMilestones || [],
-      charges: req.body.charges || [],
-      totalAmount: req.body.totalAmount || pkg.step3_policiesAndCharges?.packagePricing?.price || 0,
+      status: "NewBooking",
+      respondByAt: req.body.respondByAt
+        ? new Date(req.body.respondByAt)
+        : new Date(Date.now() + RESPONSE_WINDOW_MS),
+      pricing: {
+        basePrice: req.body.basePrice ?? null,
+        taxRatePct:
+          req.body.taxRatePct ??
+          pkg.step3_policiesAndCharges?.gstRatePercent ??
+          undefined,
+      },
       totalReceived: 0,
       notes: req.body.notes || null,
       calendarNote: req.body.calendarNote || null,
     });
 
+    const breakdown = applyPricingBreakdown(booking);
+    booking.paymentMilestones = req.body.paymentMilestones?.length
+      ? req.body.paymentMilestones
+      : milestonesFromPackage(pkg, breakdown.finalAmount);
+    syncTotalReceived(booking);
     await booking.save();
 
     return res.status(201).json({
       status: "SUCCESS",
       message: "Booking created",
-      booking,
+      booking: withPricingBreakdown(booking),
       conflictDetected,
     });
   } catch (error) {
-    console.error("Create Booking Error:", error);
-    return res.status(500).json({
-      status: "ERROR",
-      message: "Failed to create booking",
-      error: error.message,
-    });
+    return failed(res, "Failed to create booking", error);
   }
 };
 
 /**
  * @desc    Get vendor bookings (filtered, paginated)
- * @route   GET /api/bookings/vendor/:vendorId?status=Pending&page=1&limit=20
+ * @route   GET /api/bookings/vendor/:vendorId?status=Pending&paymentType=FreeBooking&page=1&limit=20
  */
 export const getVendorBookings = async (req, res) => {
   try {
     const { vendorId } = req.params;
-    const { status, startDate, endDate, page = 1, limit = 20 } = req.query;
+    const {
+      status,
+      paymentType,
+      startDate,
+      endDate,
+      page = 1,
+      limit = 20,
+    } = req.query;
 
     const actualVendorId = await resolveVendorId(vendorId);
-    if (!actualVendorId) {
-      return res
-        .status(404)
-        .json({ status: "FAILED", message: "Vendor not found" });
-    }
+    if (!actualVendorId) return notFound(res, "Vendor not found");
 
     const query = { vendorId: actualVendorId };
     if (status) query.status = status;
+    if (paymentType) query.paymentType = paymentType;
     if (startDate || endDate) {
       query.eventDate = {};
       if (startDate) query.eventDate.$gte = new Date(startDate);
@@ -224,30 +289,28 @@ export const getVendorBookings = async (req, res) => {
       Booking.countDocuments(query),
     ]);
 
-    // Annotate each booking with conflict detection
+    const results = [];
     for (const booking of bookings) {
-      booking.conflictDetected = await detectConflict(
-        actualVendorId,
-        booking.eventDate,
-        booking._id
-      );
+      results.push({
+        ...withPricingBreakdown(booking),
+        conflictDetected: await detectConflict(
+          actualVendorId,
+          booking.eventDate,
+          booking._id
+        ),
+      });
     }
 
     return res.status(200).json({
       status: "SUCCESS",
-      count: bookings.length,
+      count: results.length,
       total,
       page: parseInt(page),
       totalPages: Math.ceil(total / parseInt(limit)),
-      bookings,
+      bookings: results,
     });
   } catch (error) {
-    console.error("Get Vendor Bookings Error:", error);
-    return res.status(500).json({
-      status: "ERROR",
-      message: "Failed to fetch vendor bookings",
-      error: error.message,
-    });
+    return failed(res, "Failed to fetch vendor bookings", error);
   }
 };
 
@@ -257,21 +320,8 @@ export const getVendorBookings = async (req, res) => {
  */
 export const getBookingById = async (req, res) => {
   try {
-    const { bookingId } = req.params;
-
-    // Support both MongoDB _id and human-readable bookingId
-    let booking;
-    if (bookingId.startsWith("EVT")) {
-      booking = await Booking.findOne({ bookingId });
-    } else {
-      booking = await Booking.findById(bookingId);
-    }
-
-    if (!booking) {
-      return res
-        .status(404)
-        .json({ status: "FAILED", message: "Booking not found" });
-    }
+    const booking = await findBooking(req.params.bookingId);
+    if (!booking) return notFound(res, "Booking not found");
 
     const conflictDetected = await detectConflict(
       booking.vendorId,
@@ -281,15 +331,11 @@ export const getBookingById = async (req, res) => {
 
     return res.status(200).json({
       status: "SUCCESS",
-      booking,
+      booking: withPricingBreakdown(booking),
       conflictDetected,
     });
   } catch (error) {
-    return res.status(500).json({
-      status: "ERROR",
-      message: "Failed to fetch booking",
-      error: error.message,
-    });
+    return failed(res, "Failed to fetch booking", error);
   }
 };
 
@@ -299,46 +345,29 @@ export const getBookingById = async (req, res) => {
  */
 export const acceptBooking = async (req, res) => {
   try {
-    const { bookingId } = req.params;
+    const booking = await findBooking(req.params.bookingId);
+    if (!booking) return notFound(res, "Booking not found");
 
-    let booking;
-    if (bookingId.startsWith("EVT")) {
-      booking = await Booking.findOne({ bookingId });
-    } else {
-      booking = await Booking.findById(bookingId);
-    }
-
-    if (!booking) {
-      return res
-        .status(404)
-        .json({ status: "FAILED", message: "Booking not found" });
-    }
-
-    if (booking.status !== "Pending") {
+    if (!PRE_ACCEPTANCE_STATUSES.includes(booking.status)) {
       return res.status(400).json({
         status: "FAILED",
-        message: `Cannot accept booking with status "${booking.status}". Only Pending bookings can be accepted.`,
+        message: `Cannot accept a booking with status "${booking.status}".`,
       });
     }
 
-    booking.status = "Accepted";
+    booking.status = "Confirmed";
+    booking.confirmedAt = new Date();
     await booking.save();
 
-    // Sync package availability to "Booked"
     await syncPackageBooked(booking.packageId, booking.eventDate);
 
     return res.status(200).json({
       status: "SUCCESS",
       message: "Booking accepted",
-      booking,
+      booking: withPricingBreakdown(booking),
     });
   } catch (error) {
-    console.error("Accept Booking Error:", error);
-    return res.status(500).json({
-      status: "ERROR",
-      message: "Failed to accept booking",
-      error: error.message,
-    });
+    return failed(res, "Failed to accept booking", error);
   }
 };
 
@@ -348,43 +377,28 @@ export const acceptBooking = async (req, res) => {
  */
 export const declineBooking = async (req, res) => {
   try {
-    const { bookingId } = req.params;
+    const booking = await findBooking(req.params.bookingId);
+    if (!booking) return notFound(res, "Booking not found");
 
-    let booking;
-    if (bookingId.startsWith("EVT")) {
-      booking = await Booking.findOne({ bookingId });
-    } else {
-      booking = await Booking.findById(bookingId);
-    }
-
-    if (!booking) {
-      return res
-        .status(404)
-        .json({ status: "FAILED", message: "Booking not found" });
-    }
-
-    if (booking.status !== "Pending") {
+    if (!PRE_ACCEPTANCE_STATUSES.includes(booking.status)) {
       return res.status(400).json({
         status: "FAILED",
-        message: `Cannot decline booking with status "${booking.status}". Only Pending bookings can be declined.`,
+        message: `Cannot decline a booking with status "${booking.status}".`,
       });
     }
 
     booking.status = "Declined";
+    booking.declinedAt = new Date();
+    booking.declineReason = req.body?.reason?.trim() || null;
     await booking.save();
 
     return res.status(200).json({
       status: "SUCCESS",
       message: "Booking declined",
-      booking,
+      booking: withPricingBreakdown(booking),
     });
   } catch (error) {
-    console.error("Decline Booking Error:", error);
-    return res.status(500).json({
-      status: "ERROR",
-      message: "Failed to decline booking",
-      error: error.message,
-    });
+    return failed(res, "Failed to decline booking", error);
   }
 };
 
@@ -394,20 +408,8 @@ export const declineBooking = async (req, res) => {
  */
 export const cancelBooking = async (req, res) => {
   try {
-    const { bookingId } = req.params;
-
-    let booking;
-    if (bookingId.startsWith("EVT")) {
-      booking = await Booking.findOne({ bookingId });
-    } else {
-      booking = await Booking.findById(bookingId);
-    }
-
-    if (!booking) {
-      return res
-        .status(404)
-        .json({ status: "FAILED", message: "Booking not found" });
-    }
+    const booking = await findBooking(req.params.bookingId);
+    if (!booking) return notFound(res, "Booking not found");
 
     if (booking.status === "Cancelled" || booking.status === "Completed") {
       return res.status(400).json({
@@ -418,250 +420,172 @@ export const cancelBooking = async (req, res) => {
 
     const previousStatus = booking.status;
     booking.status = "Cancelled";
+    booking.cancelledAt = new Date();
+    booking.cancelledBy =
+      req.body?.cancelledBy === "Customer" ? "Customer" : "Vendor";
+    booking.cancellationReason = req.body?.reason?.trim() || null;
     await booking.save();
 
-    // Revert package availability if it was accepted
-    if (previousStatus === "Accepted") {
+    if (previousStatus === "Confirmed") {
       await revertPackageAvailability(booking.packageId, booking.eventDate);
     }
 
     return res.status(200).json({
       status: "SUCCESS",
       message: "Booking cancelled",
-      booking,
+      booking: withPricingBreakdown(booking),
     });
   } catch (error) {
-    console.error("Cancel Booking Error:", error);
-    return res.status(500).json({
-      status: "ERROR",
-      message: "Failed to cancel booking",
-      error: error.message,
-    });
+    return failed(res, "Failed to cancel booking", error);
   }
 };
 
 /**
- * @desc    Update a payment milestone status
- * @route   PUT /api/bookings/:bookingId/milestone
- * @body    { milestoneType: "Token", status: "Received" }
- */
-export const updateMilestoneStatus = async (req, res) => {
-  try {
-    const { bookingId } = req.params;
-    const { milestoneType, status: newStatus } = req.body;
-
-    const validation = validateMilestoneUpdate(req.body);
-    if (!validation.valid) {
-      return res.status(400).json({
-        status: "FAILED",
-        message: "Validation failed",
-        errors: validation.errors,
-      });
-    }
-
-    let booking;
-    if (bookingId.startsWith("EVT")) {
-      booking = await Booking.findOne({ bookingId });
-    } else {
-      booking = await Booking.findById(bookingId);
-    }
-
-    if (!booking) {
-      return res
-        .status(404)
-        .json({ status: "FAILED", message: "Booking not found" });
-    }
-
-    // Find the milestone
-    const milestone = booking.paymentMilestones.find(
-      (m) => m.type === milestoneType
-    );
-    if (!milestone) {
-      return res.status(404).json({
-        status: "FAILED",
-        message: `Milestone "${milestoneType}" not found in this booking`,
-      });
-    }
-
-    const previousStatus = milestone.status;
-    milestone.status = newStatus;
-
-    if (newStatus === "Received" && !milestone.receivedDate) {
-      milestone.receivedDate = new Date();
-    }
-
-    // Recalculate totalReceived
-    booking.totalReceived = booking.paymentMilestones
-      .filter((m) => m.status === "Received")
-      .reduce((sum, m) => sum + (m.amount || 0), 0);
-
-    await booking.save();
-
-    // Create/update Transaction record when marking as Received
-    if (newStatus === "Received" && previousStatus !== "Received") {
-      const transaction = new Transaction({
-        transactionId: generateISTId("TXN"),
-        vendorId: booking.vendorId,
-        bookingId: booking._id,
-        customerName: booking.customer.name,
-        eventDate: booking.eventDate,
-        milestoneType,
-        amount: milestone.amount,
-        status: "Received",
-        receivedDate: milestone.receivedDate,
-      });
-      await transaction.save();
-    }
-
-    return res.status(200).json({
-      status: "SUCCESS",
-      message: `Milestone "${milestoneType}" updated to "${newStatus}"`,
-      booking,
-    });
-  } catch (error) {
-    console.error("Update Milestone Error:", error);
-    return res.status(500).json({
-      status: "ERROR",
-      message: "Failed to update milestone",
-      error: error.message,
-    });
-  }
-};
-
-/**
- * @desc    Save/update the vendor's calendar note on a booking
- * @route   PUT /api/bookings/:bookingId/note
- * @body    { calendarNote: "Bring backup generator" }
- */
-export const updateCalendarNote = async (req, res) => {
-  try {
-    const { bookingId } = req.params;
-    const { calendarNote } = req.body;
-
-    if (calendarNote === undefined) {
-      return res.status(400).json({
-        status: "FAILED",
-        message: "calendarNote is required",
-      });
-    }
-
-    let booking;
-    if (bookingId.startsWith("EVT")) {
-      booking = await Booking.findOne({ bookingId });
-    } else {
-      booking = await Booking.findById(bookingId);
-    }
-
-    if (!booking) {
-      return res
-        .status(404)
-        .json({ status: "FAILED", message: "Booking not found" });
-    }
-
-    booking.calendarNote = calendarNote || null;
-    await booking.save();
-
-    return res.status(200).json({
-      status: "SUCCESS",
-      message: "Calendar note saved",
-      booking,
-    });
-  } catch (error) {
-    console.error("Update Calendar Note Error:", error);
-    return res.status(500).json({
-      status: "ERROR",
-      message: "Failed to save calendar note",
-      error: error.message,
-    });
-  }
-};
-
-/**
- * @desc    Customize the package for a specific booking (vendor-only, booking-scoped)
- * @route   PUT /api/bookings/:bookingId/customize
- * @body    { packageName?, basePrice?, billingUnit?, lineItems?:[{label,amount,qty?,type?}], notes? }
+ * @desc    Submit the customer's requested package changes
+ * @route   POST /api/bookings/:bookingId/change-requests
+ * @body    { changes: [{ changeType, itemKind?, category, item, qty? }] }
  *
- * Does NOT touch the original Package document. Writes only to booking.customizedPackage.
- * Also syncs booking.charges[] and booking.totalAmount from the lineItems so that the
- * "Payment Details" section in the app displays real data.
+ * Each change points at a deliverable in the package snapshot by path, so a
+ * request always refers to what the customer was actually sold. Requests land
+ * as Pending and carry no weight in the pricing until the vendor accepts them.
  */
-export const customizeBookingPackage = async (req, res) => {
+export const requestPackageChanges = async (req, res) => {
   try {
-    const { bookingId } = req.params;
+    const validation = validateChangeRequests(req.body);
+    if (!validation.valid) return invalid(res, validation.errors);
 
-    let booking;
-    if (bookingId.startsWith("EVT")) {
-      booking = await Booking.findOne({ bookingId });
-    } else {
-      booking = await Booking.findById(bookingId);
-    }
+    const booking = await findBooking(req.params.bookingId);
+    if (!booking) return notFound(res, "Booking not found");
 
-    if (!booking) {
-      return res
-        .status(404)
-        .json({ status: "FAILED", message: "Booking not found" });
-    }
-
-    if (booking.status !== "Accepted") {
+    if (TERMINAL_STATUSES.includes(booking.status)) {
       return res.status(400).json({
         status: "FAILED",
-        message: `Cannot customize a booking with status "${booking.status}". Only Accepted bookings can be customized.`,
+        message: `Cannot change a booking with status "${booking.status}".`,
       });
     }
 
-    const validation = validateCustomizePackage(req.body);
-    if (!validation.valid) {
+    const requests = req.body.changes.map((change) => ({
+      changeType: change.changeType,
+      itemKind: change.itemKind ?? "Item",
+      category: change.category.trim(),
+      item: change.item.trim(),
+      qty: change.qty ?? 1,
+      status: "Pending",
+      requestedAt: new Date(),
+    }));
+
+    booking.changeRequests.push(...requests);
+    if (PRE_ACCEPTANCE_STATUSES.includes(booking.status)) {
+      booking.status = "InDiscussion";
+    }
+    await booking.save();
+
+    return res.status(201).json({
+      status: "SUCCESS",
+      message: `${requests.length} change request(s) submitted`,
+      booking: withPricingBreakdown(booking),
+    });
+  } catch (error) {
+    return failed(res, "Failed to submit change requests", error);
+  }
+};
+
+const PRICING_FIELDS = [
+  "basePrice",
+  "itemsAdded",
+  "addonsAdded",
+  "substituteItemsAdded",
+  "itemsRemoved",
+  "addonsRemoved",
+  "discountAmount",
+  "taxRatePct",
+];
+
+/**
+ * @desc    Apply the vendor's edits to a booking
+ * @route   PUT /api/bookings/:bookingId
+ * @body    { changeRequests?: [{ id, status?, qty? }], pricing?, paymentMilestones?, calendarNote? }
+ *
+ * Everything the vendor changes on the details screen is saved in one call, so
+ * a half-applied edit is not reachable: decisions and the price they were
+ * agreed at land together or not at all.
+ */
+export const updateBooking = async (req, res) => {
+  try {
+    const validation = validateBookingUpdate(req.body);
+    if (!validation.valid) return invalid(res, validation.errors);
+
+    const booking = await findBooking(req.params.bookingId);
+    if (!booking) return notFound(res, "Booking not found");
+
+    if (TERMINAL_STATUSES.includes(booking.status)) {
       return res.status(400).json({
         status: "FAILED",
-        message: "Validation failed",
-        errors: validation.errors,
+        message: `Cannot change a booking with status "${booking.status}".`,
       });
     }
 
-    const lineItems = (req.body.lineItems || []).map((item) => ({
-      label: item.label,
-      amount: item.amount,
-      qty: item.qty ?? 1,
-      type: item.type ?? "Addon",
-    }));
+    const { changeRequests, pricing, paymentMilestones, calendarNote } = req.body;
 
-    const totalAmount = lineItems.reduce(
-      (sum, item) => sum + item.amount * item.qty,
-      0
-    );
+    if (Array.isArray(changeRequests)) {
+      for (const decision of changeRequests) {
+        const request = booking.changeRequests.id(decision.id);
+        if (!request) {
+          return notFound(res, `Change request "${decision.id}" not found`);
+        }
+        if (decision.qty !== undefined) request.qty = decision.qty;
+        if (decision.status !== undefined) {
+          request.status = decision.status;
+          request.respondedAt = new Date();
+        }
+      }
+    }
 
-    booking.customizedPackage = {
-      packageName: req.body.packageName ?? booking.customizedPackage?.packageName ?? null,
-      basePrice: req.body.basePrice ?? booking.customizedPackage?.basePrice ?? null,
-      billingUnit: req.body.billingUnit ?? booking.customizedPackage?.billingUnit ?? "Per Event",
-      lineItems,
-      totalAmount,
-      notes: req.body.notes ?? null,
-      customizedAt: new Date(),
-    };
+    if (pricing) {
+      for (const field of PRICING_FIELDS) {
+        if (pricing[field] !== undefined) booking.pricing[field] = pricing[field];
+      }
+      if (pricing.discountLabel !== undefined) {
+        booking.pricing.discountLabel =
+          pricing.discountLabel?.trim() || "Discount Allowed";
+      }
+      booking.pricing.updatedAt = new Date();
+    }
 
-    // Sync charges[] so Payment Details widget gets real itemized data
-    booking.charges = lineItems.map((item) => ({
-      label: item.label,
-      amount: item.amount * item.qty,
-      type: item.type === "Addon" ? "Fee" : item.type,
-    }));
+    if (Array.isArray(paymentMilestones)) {
+      const received = booking.paymentMilestones.filter(
+        (m) => m.status === "Received"
+      );
+      const receivedTitles = received.map((m) => m.title.toLowerCase());
 
-    booking.totalAmount = totalAmount;
+      booking.paymentMilestones = [
+        ...received.map((m) => m.toObject()),
+        ...paymentMilestones
+          .filter((m) => !receivedTitles.includes(m.title.trim().toLowerCase()))
+          .map((m) => ({
+            title: m.title.trim(),
+            percentage: m.percentage ?? null,
+            amount: m.amount,
+            dueDate: m.dueDate ? new Date(m.dueDate) : null,
+            status: m.status === "PaymentDue" ? "PaymentDue" : "Pending",
+          })),
+      ];
+    }
 
+    if (calendarNote !== undefined) {
+      booking.calendarNote = calendarNote || null;
+    }
+
+    syncTotalReceived(booking);
+    applyPricingBreakdown(booking);
     await booking.save();
 
     return res.status(200).json({
       status: "SUCCESS",
-      message: "Package customized successfully",
-      booking,
+      message: "Booking updated",
+      booking: withPricingBreakdown(booking),
     });
   } catch (error) {
-    console.error("Customize Booking Package Error:", error);
-    return res.status(500).json({
-      status: "ERROR",
-      message: "Failed to customize package",
-      error: error.message,
-    });
+    return failed(res, "Failed to update booking", error);
   }
 };
