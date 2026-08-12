@@ -72,6 +72,13 @@ const CartItemSchema = new mongoose.Schema(
     // mutation endpoints, not a schema constraint here — the model stays
     // permissive per-item so that rule has real data to check against.
     eventDetails: {
+      // Added Phase 4 Step 17: the final BRD's checkout validation rules
+      // (Section 10.5) require "Event type, event date and location
+      // present on every vendor line" — captured here (not just at
+      // checkout) so it flows through naturally when a CheckoutSession is
+      // built from the cart, rather than forcing the customer to re-enter
+      // it at checkout even when it was already set earlier.
+      eventType: { type: String, default: null },
       date: { type: Date, default: null },
       timeSlot: { type: String, default: null },
       guestCount: { type: Number, default: null },

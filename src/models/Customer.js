@@ -107,7 +107,14 @@ const CustomerSchema = new mongoose.Schema(
     // first share; wishlistShareEnabled gates whether the public read
     // endpoint honors it, so disabling sharing doesn't burn the token (the
     // same link works again if re-enabled) — only rotating mints a new one.
-    wishlistShareToken: { type: String, default: null, index: { unique: true, sparse: true } },
+    // NO `default: null` here — a sparse unique index only skips documents
+    // where the field is truly ABSENT, not documents where it's present
+    // and explicitly null. `default: null` was giving every customer an
+    // explicit null, so the second customer ever created (in the same
+    // collection) always failed signup with a duplicate-key error on this
+    // index — found via direct testing 2026-08-12, fixed by leaving the
+    // field genuinely unset until shareWishlist() first writes a real value.
+    wishlistShareToken: { type: String, index: { unique: true, sparse: true } },
     wishlistShareEnabled: { type: Boolean, default: false },
 
     // ---- Account status ----

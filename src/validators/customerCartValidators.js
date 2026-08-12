@@ -24,6 +24,7 @@ const selectedItemSchema = z.object({
 
 export const addCartItemSchema = z.object({
   packageId: objectId("packageId"),
+  eventType: z.string().trim().max(100).optional(),
   guests: z.coerce.number().int().min(1).optional(),
   date: z.coerce.date().optional(),
   timeSlot: z.string().trim().max(60).optional(),
@@ -37,6 +38,7 @@ export const addCartItemSchema = z.object({
 // All optional — a partial update touches only the fields sent, same
 // deep-merge philosophy as the vendor-side updatePackageStep.
 export const updateCartItemSchema = z.object({
+  eventType: z.string().trim().max(100).optional(),
   guests: z.coerce.number().int().min(1).optional(),
   date: z.coerce.date().optional(),
   timeSlot: z.string().trim().max(60).optional(),

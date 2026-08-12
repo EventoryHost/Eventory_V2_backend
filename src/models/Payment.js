@@ -1,0 +1,74 @@
+import mongoose from "mongoose";
+
+/**
+ * A Cashfree Payment Gateway order tied to a CheckoutSession — Phase 4 Step
+ * 18. This is the model PART 1 originally flagged as entirely missing
+ * ("MODELS THAT DO NOT EXIST AT ALL: ... Payment/Order (Cashfree)").
+ *
+ * paymentType is broader than what Step 18 actually exercises (only
+ * "Token", per the final BRD's token-first model) — Milestone/Remaining
+ * are included now so Phase 5 Step 22 ("Pay-milestone endpoint") can reuse
+ * this exact model/order-creation flow instead of building a parallel one
+ * later.
+ *
+ * status is SERVER-AUTHORITATIVE ONLY: the client never marks a payment
+ * paid — only the webhook handler (customerPaymentController.js), itself
+ * re-verified against Cashfree's own PGFetchOrder before trusting it, ever
+ * transitions status away from PENDING. Matches the final BRD's own rule
+ * (Section 11) plus this codebase's own extension of it (re-verify with
+ * Cashfree's API, don't trust the webhook payload alone).
+ *
+ * bookingCreated stays false here — Step 18 does NOT create a Booking on
+ * payment success, that's explicitly Step 19's job. It's a placeholder
+ * flag for Step 19 to flip (idempotently — checked before creating a
+ * Booking) so a webhook retry can never create two Bookings for the same
+ * successful payment.
+ */
+const WebhookEventSchema = new mongoose.Schema(
+  {
+    type: { type: String, required: true }, // e.g. PAYMENT_SUCCESS_WEBHOOK
+    cfPaymentStatus: { type: String, default: null },
+    receivedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
+const PaymentSchema = new mongoose.Schema(
+  {
+    checkoutSessionId: { type: mongoose.Schema.Types.ObjectId, ref: "CheckoutSession", required: true, index: true },
+    customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", required: true, index: true },
+
+    paymentType: { type: String, enum: ["Token", "Remaining", "Milestone"], required: true },
+    milestoneLabel: { type: String, default: null }, // set only when paymentType:"Milestone" — not exercised until Phase 5 Step 22
+
+    amount: { type: Number, required: true, min: 0 },
+    currency: { type: String, default: "INR" },
+
+    // Our own generated id, sent to Cashfree AS the order_id — Cashfree
+    // never generates this, we do (generatePaymentId(), already in
+    // utils/generateId.js, ported from V1).
+    cfOrderId: { type: String, required: true, unique: true },
+    cfPaymentSessionId: { type: String, default: null }, // handed to the frontend's Cashfree Checkout SDK
+
+    // Prevents a retried/duplicated "create payment" request from minting a
+    // second Cashfree order for the same intent — see
+    // customerPaymentController.js's idempotency check, which looks this
+    // up BEFORE calling Cashfree at all.
+    idempotencyKey: { type: String, required: true, unique: true },
+
+    status: { type: String, enum: ["PENDING", "PAID", "FAILED", "EXPIRED", "CANCELLED"], default: "PENDING", index: true },
+    failureReason: { type: String, default: null },
+    paidAt: { type: Date, default: null },
+
+    webhookEvents: { type: [WebhookEventSchema], default: [] },
+
+    // Step 19's flag, not used here — see the model comment above.
+    bookingCreated: { type: Boolean, default: false },
+  },
+  {
+    timestamps: true,
+    collection: "customer_payments",
+  }
+);
+
+export default mongoose.model("Payment", PaymentSchema);

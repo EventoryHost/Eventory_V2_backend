@@ -209,7 +209,7 @@ export const getCartQuote = async (req, res) => {
  */
 export const addCartItem = async (req, res) => {
   try {
-    const { packageId, guests, date, timeSlot, location, selectedAddOns, selectedItems, specialRequest, quantity } = req.body;
+    const { packageId, eventType, guests, date, timeSlot, location, selectedAddOns, selectedItems, specialRequest, quantity } = req.body;
 
     const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" });
     if (!pkg) {
@@ -241,7 +241,13 @@ export const addCartItem = async (req, res) => {
         vendorType: pkg.vendorType,
         variantType: pkg.variantType,
       },
-      eventDetails: { date: date || null, timeSlot: timeSlot || null, guestCount: guests || null, location: location || null },
+      eventDetails: {
+        eventType: eventType || null,
+        date: date || null,
+        timeSlot: timeSlot || null,
+        guestCount: guests || null,
+        location: location || null,
+      },
       selectedAddOns: selectedAddOns || [],
       selectedItems: selectedItems || [],
       specialRequest: specialRequest || "",
@@ -278,9 +284,11 @@ export const updateCartItem = async (req, res) => {
     const resolved = await findOwnedCartItem(req, itemId);
     if (resolved.error) return res.status(resolved.error).json({ status: "FAILED", message: resolved.message });
 
-    const { guests, date, timeSlot, location, selectedAddOns, selectedItems, specialRequest, quantity, selectedForCheckout } = req.body;
+    const { eventType, guests, date, timeSlot, location, selectedAddOns, selectedItems, specialRequest, quantity, selectedForCheckout } =
+      req.body;
     const { item, cart } = resolved;
 
+    if (eventType !== undefined) item.eventDetails.eventType = eventType;
     if (guests !== undefined) item.eventDetails.guestCount = guests;
     if (date !== undefined) item.eventDetails.date = date;
     if (timeSlot !== undefined) item.eventDetails.timeSlot = timeSlot;

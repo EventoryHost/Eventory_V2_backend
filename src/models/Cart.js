@@ -33,8 +33,17 @@ const CartCouponSchema = new mongoose.Schema(
 
 const CartSchema = new mongoose.Schema(
   {
-    customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", default: null, index: { unique: true, sparse: true } },
-    guestId: { type: String, default: null, index: { unique: true, sparse: true } },
+    // NO `default: null` on either field — a sparse unique index only skips
+    // documents where the field is truly ABSENT, not present-and-null. With
+    // an explicit default of null, every guest cart got customerId:null
+    // (colliding with every OTHER guest cart on that index) and every
+    // customer cart got guestId:null (same collision the other way) — the
+    // bug never surfaced in this file's own Step 12/13 testing because
+    // only one of each cart kind ever coexisted at a time; found via
+    // direct testing 2026-08-12 while debugging the identical bug in
+    // Customer.js's wishlistShareToken. Left genuinely unset instead.
+    customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", index: { unique: true, sparse: true } },
+    guestId: { type: String, index: { unique: true, sparse: true } },
 
     coupon: { type: CartCouponSchema, default: null },
 

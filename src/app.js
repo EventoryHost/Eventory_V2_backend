@@ -63,7 +63,16 @@ app.use(passport.initialize());
 app.use(morgan("dev"));
 
 // Body parsers
-app.use(express.json({ limit: '50mb' }));
+// `verify` captures the exact raw bytes of every JSON request onto
+// req.rawBody, IN ADDITION TO normal parsing — added for Phase 4 Step 18's
+// Cashfree webhook signature verification, which must HMAC the raw
+// payload exactly as Cashfree sent it. Re-serializing the already-parsed
+// req.body with JSON.stringify() is NOT safe for this (key order/
+// whitespace can differ from the original bytes, silently breaking every
+// signature check) — capturing the raw buffer here is the only reliable
+// way, and doing it globally is cheap/harmless for every other route that
+// never reads req.rawBody.
+app.use(express.json({ limit: '50mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
 app.use(express.urlencoded({ limit: '50mb', extended: true }));
 
 // --------------- Routes ---------------
