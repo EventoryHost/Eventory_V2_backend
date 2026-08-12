@@ -30,10 +30,9 @@ const TransactionSchema = new mongoose.Schema(
       default: null,
     },
 
-    // Payment details
-    milestoneType: {
+    // Payment details — the milestone's title as the vendor wrote it.
+    milestoneTitle: {
       type: String,
-      enum: ["Token", "Advanced1", "Advanced2", "FinalClearance"],
       required: true,
     },
     amount: {
