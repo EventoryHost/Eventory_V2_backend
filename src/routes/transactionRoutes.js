@@ -38,9 +38,9 @@ import {
  *         eventDate:
  *           type: string
  *           format: date
- *         milestoneType:
+ *         milestoneTitle:
  *           type: string
- *           enum: [Token, Advanced1, Advanced2, FinalClearance]
+ *           example: "Token"
  *         amount:
  *           type: number
  *         status:
@@ -265,7 +265,7 @@ router.get("/vendor/:vendorId/upcoming", getUpcomingTransactions);
  *                 nextPaymentDue:
  *                   type: object
  *                   properties:
- *                     milestoneType:
+ *                     milestoneTitle:
  *                       type: string
  *                     amount:
  *                       type: number
