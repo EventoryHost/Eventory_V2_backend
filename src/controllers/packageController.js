@@ -24,18 +24,23 @@ export const initializePackage = async (req, res) => {
       });
     }
 
-    // Resolve human-readable custom vendor ID (e.g., "VEN...") to MongoDB ObjectId
+    // Ensure vendorId is in the custom string format (e.g., "VEN...")
     let actualVendorId = vendorId;
-    if (typeof vendorId === "string" && vendorId.startsWith("VEN")) {
-      const vendorDoc = await Vendor.findOne({ id: vendorId }).select('_id');
-      if (vendorDoc) {
-        actualVendorId = vendorDoc._id;
+    if (mongoose.Types.ObjectId.isValid(vendorId)) {
+      const vendorDoc = await Vendor.findById(vendorId).select('id');
+      if (vendorDoc && vendorDoc.id) {
+        actualVendorId = vendorDoc.id;
       } else {
         return res.status(404).json({
           status: "FAILED",
-          message: `Vendor with ID ${vendorId} not found in database`,
+          message: `Vendor with ObjectId ${vendorId} not found in database`,
         });
       }
+    } else if (typeof vendorId === "string" && !vendorId.startsWith("VEN")) {
+      return res.status(400).json({
+        status: "FAILED",
+        message: "Invalid vendorId format",
+      });
     }
 
     const Model = getModelForVendor(vendorType);
@@ -257,12 +262,12 @@ export const getVendorPackages = async (req, res) => {
     const { vendorId } = req.params;
     const { status, packageGroupId } = req.query;
 
-    // Resolve human-readable custom vendor ID (e.g., "VEN...") to MongoDB ObjectId
+    // Ensure vendorId is in the custom string format (e.g., "VEN...")
     let actualVendorId = vendorId;
-    if (typeof vendorId === "string" && vendorId.startsWith("VEN")) {
-      const vendorDoc = await Vendor.findOne({ id: vendorId }).select('_id');
-      if (vendorDoc) {
-        actualVendorId = vendorDoc._id;
+    if (mongoose.Types.ObjectId.isValid(vendorId)) {
+      const vendorDoc = await Vendor.findById(vendorId).select('id');
+      if (vendorDoc && vendorDoc.id) {
+        actualVendorId = vendorDoc.id;
       } else {
         return res.status(200).json({ status: "SUCCESS", count: 0, packages: [] });
       }

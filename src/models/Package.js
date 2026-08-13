@@ -9,7 +9,7 @@ const packageOptions = {
 const PackageSchema = new mongoose.Schema(
   {
     vendorId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: String,
       ref: "Vendor",
       required: true,
     },

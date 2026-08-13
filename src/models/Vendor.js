@@ -119,6 +119,7 @@ const VendorSchema = new mongoose.Schema({
     businessLicenses: { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
     bankDetails:      { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
     agreement:        { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
+  },
   // Set when the vendor requests deletion from the app. Distinct from
   // isDeactivated, which support also sets on its own: a deletion request
   // deactivates the account *and* starts the retention window, and unlike a
