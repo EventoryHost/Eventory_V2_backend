@@ -18,7 +18,7 @@ const router = express.Router();
  * @swagger
  * /api/customer/bookings:
  *   get:
- *     summary: "My Bookings" dashboard — active/past/cancelled tabs, search, sort
+ *     summary: '"My Bookings" dashboard — active/past/cancelled tabs, search, sort'
  *     description: |
  *       One row per Booking (i.e. per vendor) — see the controller's own
  *       comment for why this can't yet group multiple vendors under one
