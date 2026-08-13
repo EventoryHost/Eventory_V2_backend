@@ -7,13 +7,22 @@ export const getReviewQueue = async (req, res) => {
     const { page = 1, limit = 10 } = req.query;
     const skip = (page - 1) * limit;
 
-    const packagesRaw = await Package.find({ packageStatus: "Under Review" })
-      .sort({ updatedAt: 1 })
-      .skip(skip)
-      .limit(parseInt(limit))
-      .lean();
+    const groupsRaw = await Package.aggregate([
+      { $match: { packageStatus: "Under Review" } },
+      { $sort: { updatedAt: 1 } },
+      {
+        $group: {
+          _id: { $ifNull: ["$packageGroupId", "$_id"] },
+          variants: { $push: "$$ROOT" },
+          updatedAt: { $first: "$updatedAt" }
+        }
+      },
+      { $sort: { updatedAt: 1 } },
+      { $skip: skip },
+      { $limit: parseInt(limit) }
+    ]);
 
-    const vendorIds = [...new Set(packagesRaw.map(p => p.vendorId))];
+    const vendorIds = [...new Set(groupsRaw.flatMap(g => g.variants.map(v => v.vendorId)))];
     const vendors = await Vendor.find({ id: { $in: vendorIds } })
       .select("id businessName city phone isVerified vendorType")
       .lean();
@@ -21,16 +30,24 @@ export const getReviewQueue = async (req, res) => {
     const vendorMap = {};
     vendors.forEach(v => vendorMap[v.id] = v);
 
-    const packages = packagesRaw.map(p => ({
-      ...p,
-      vendorId: vendorMap[p.vendorId] || p.vendorId
+    const groups = groupsRaw.map(g => ({
+      ...g,
+      variants: g.variants.map(v => ({
+        ...v,
+        vendorId: vendorMap[v.vendorId] || v.vendorId
+      }))
     }));
 
-    const total = await Package.countDocuments({ packageStatus: "Under Review" });
+    const counts = await Package.aggregate([
+      { $match: { packageStatus: "Under Review" } },
+      { $group: { _id: { $ifNull: ["$packageGroupId", "$_id"] } } },
+      { $count: "total" }
+    ]);
+    const total = counts.length > 0 ? counts[0].total : 0;
 
     res.status(200).json({
       success: true,
-      data: packages,
+      data: groups,
       pagination: {
         total,
         page: parseInt(page),
@@ -45,7 +62,12 @@ export const getReviewQueue = async (req, res) => {
 // GET /api/admin/packages/review-queue/count
 export const getReviewQueueCount = async (req, res) => {
   try {
-    const count = await Package.countDocuments({ packageStatus: "Under Review" });
+    const counts = await Package.aggregate([
+      { $match: { packageStatus: "Under Review" } },
+      { $group: { _id: { $ifNull: ["$packageGroupId", "$_id"] } } },
+      { $count: "total" }
+    ]);
+    const count = counts.length > 0 ? counts[0].total : 0;
     res.status(200).json({ success: true, count });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
