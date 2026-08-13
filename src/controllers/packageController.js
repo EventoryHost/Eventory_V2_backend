@@ -68,16 +68,16 @@ export const initializePackage = async (req, res) => {
     const existingDraft = await Model.findOne(
       hasClientGroupId
         ? {
-            packageGroupId: resolvedGroupId,
-            packageStatus: "Draft",
-            variantType: resolvedVariant,
-          }
+          packageGroupId: resolvedGroupId,
+          packageStatus: "Draft",
+          variantType: resolvedVariant,
+        }
         : {
-            vendorId: actualVendorId,
-            packageStatus: "Draft",
-            variantType: resolvedVariant,
-            "step1_eventAndCrew.packageName": resolvedName,
-          }
+          vendorId: actualVendorId,
+          packageStatus: "Draft",
+          variantType: resolvedVariant,
+          "step1_eventAndCrew.packageName": resolvedName,
+        }
     );
     if (existingDraft) {
       return res.status(200).json({
@@ -181,7 +181,7 @@ export const updatePackageStep = async (req, res) => {
     // Also update completedSteps if not already there
     const updatedPackage = await Model.findByIdAndUpdate(
       packageId,
-      { 
+      {
         $set: flatUpdates,
         $addToSet: { completedSteps: parseInt(stepNumber) }
       },
@@ -256,7 +256,7 @@ export const getVendorPackages = async (req, res) => {
   try {
     const { vendorId } = req.params;
     const { status, packageGroupId } = req.query;
-    
+
     // Resolve human-readable custom vendor ID (e.g., "VEN...") to MongoDB ObjectId
     let actualVendorId = vendorId;
     if (typeof vendorId === "string" && vendorId.startsWith("VEN")) {
@@ -267,7 +267,7 @@ export const getVendorPackages = async (req, res) => {
         return res.status(200).json({ status: "SUCCESS", count: 0, packages: [] });
       }
     }
-    
+
     const query = { vendorId: actualVendorId };
     if (status) query.packageStatus = status;
     if (packageGroupId) {
@@ -492,7 +492,7 @@ export const duplicatePackage = async (req, res) => {
     if (!originalPkg) {
       return res.status(404).json({ status: "FAILED", message: "Package not found" });
     }
-    
+
     stripIds(originalPkg);
     delete originalPkg.createdAt;
     delete originalPkg.updatedAt;

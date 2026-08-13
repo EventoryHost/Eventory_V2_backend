@@ -103,6 +103,17 @@ const VendorSchema = new mongoose.Schema({
     default: false,
   },
 
+  adminReview: {
+    businessProfile:  { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
+    contactAndLocation: { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
+    experienceAndTeam: { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
+    photosAndBranding: { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
+    kycDocuments:     { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
+    businessLicenses: { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
+    bankDetails:      { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
+    agreement:        { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
+  },
+
   isDarkMode: {
     type: Boolean,
     default: false,

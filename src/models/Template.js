@@ -32,6 +32,11 @@ const TemplateSchema = new mongoose.Schema(
 
     // Full package snapshot: { packages: [ ...package documents ] }
     data: { type: mongoose.Schema.Types.Mixed, required: true },
+
+    isLive: {
+      type: Boolean,
+      default: false, // Templates start hidden until EM explicitly publishes them
+    },
   },
   { timestamps: true }
 );

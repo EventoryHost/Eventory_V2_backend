@@ -11,6 +11,13 @@ import enquiryRoutes from "./enquiryRoutes.js";
 import transactionRoutes from "./transactionRoutes.js";
 import redirectRoutes from "./redirectRoutes.js";
 
+// Admin Routes
+import adminVendorRoutes from "./adminVendorRoutes.js";
+import adminPackageRoutes from "./adminPackageRoutes.js";
+import adminBookingRoutes from "./adminBookingRoutes.js";
+import adminTemplateRoutes from "./adminTemplateRoutes.js";
+import adminDashboardRoutes from "./adminDashboardRoutes.js";
+
 /**
  * @swagger
  * /api/health:
@@ -58,5 +65,13 @@ router.use("/enquiries", enquiryRoutes);
 router.use("/transactions", transactionRoutes);
 router.use("/redirect", redirectRoutes);
 
+// Mount Admin Routes
+router.use("/admin/vendors", adminVendorRoutes);
+router.use("/admin/packages", adminPackageRoutes);
+router.use("/admin/bookings", adminBookingRoutes);
+router.use("/admin/templates", adminTemplateRoutes);
+router.use("/admin/dashboard", adminDashboardRoutes);
+
 export default router;
+
 
