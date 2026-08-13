@@ -30,10 +30,9 @@ const TransactionSchema = new mongoose.Schema(
       default: null,
     },
 
-    // Payment details
-    milestoneType: {
+    // Payment details — the milestone's title as the vendor wrote it.
+    milestoneTitle: {
       type: String,
-      enum: ["Token", "Advanced1", "Advanced2", "FinalClearance"],
       required: true,
     },
     amount: {
@@ -48,6 +47,12 @@ const TransactionSchema = new mongoose.Schema(
     receivedDate: {
       type: Date,
       default: null,
+    },
+    // Set when the vendor's account is purged. Financial records are retained
+    // and anonymised rather than deleted.
+    vendorDeleted: {
+      type: Boolean,
+      default: false,
     },
   },
   { timestamps: true }

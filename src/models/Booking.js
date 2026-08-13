@@ -1,80 +1,113 @@
 import mongoose from "mongoose";
+import Customer from "./Customer.js";
+import { normalizePhone } from "../utils/phone.js";
 
-const CustomizedLineItemSchema = new mongoose.Schema(
+export const PAYMENT_TYPES = ["FreeBooking", "AdvancePaid", "FullPaid"];
+
+const BOOKING_STATUSES = [
+  "NewBooking",
+  "Viewed",
+  "InDiscussion",
+  "Confirmed",
+  "Declined",
+  "Cancelled",
+  "Completed",
+];
+
+//Statuses before the vendor has accepted — all share the same affordances.
+export const PRE_ACCEPTANCE_STATUSES = ["NewBooking", "Viewed", "InDiscussion"];
+
+// Statuses after which nothing about the booking can change
+export const TERMINAL_STATUSES = ["Declined", "Cancelled", "Completed"];
+
+export const MILESTONE_STATUSES = ["Pending", "PaymentDue", "Received"];
+
+export const CHANGE_TYPES = ["Add", "Remove"];
+
+export const ITEM_KINDS = ["Item", "Addon", "Substitute"];
+
+export const CHANGE_REQUEST_STATUSES = ["Pending", "Accepted", "Rejected"];
+
+//The package exactly as the customer bought 
+const PackageSnapshotSchema = new mongoose.Schema(
   {
-    label: { type: String, required: true },
-    amount: { type: Number, required: true },
-    qty: { type: Number, default: 1 },
-    type: {
-      type: String,
-      enum: ["Base", "Addon", "Fee", "Discount", "Tax"],
-      default: "Addon",
+    name: { type: String, immutable: true },
+    price: { type: Number, immutable: true },
+    image: { type: String, immutable: true },
+    vendorType: { type: String, immutable: true },
+    variantType: { type: String, immutable: true },
+    gstRatePercent: { type: Number, immutable: true, default: null },
+    gstInclusive: { type: Boolean, immutable: true, default: false },
+    // Vendor-type-specific step-2 payload (spaces, setups, menus, items…).
+    deliverables: {
+      type: mongoose.Schema.Types.Mixed,
+      immutable: true,
+      default: null,
     },
   },
   { _id: false }
 );
 
-const CustomizedPackageSchema = new mongoose.Schema(
+const ChangeRequestSchema = new mongoose.Schema(
   {
-    packageName: { type: String, default: null },
-    basePrice: { type: Number, default: null },
-    billingUnit: {
+    changeType: { type: String, enum: CHANGE_TYPES, required: true },
+    itemKind: { type: String, enum: ITEM_KINDS, default: "Item" },
+    category: { type: String, required: true, trim: true },
+    item: { type: String, required: true, trim: true },
+    qty: { type: Number, default: 1, min: 1 },
+    status: {
       type: String,
-      enum: ["Per Event", "Per Hour", "Per Day", "Per Guest"],
-      default: "Per Event",
+      enum: CHANGE_REQUEST_STATUSES,
+      default: "Pending",
     },
-    lineItems: [CustomizedLineItemSchema],
-    totalAmount: { type: Number, default: 0 },
-    notes: { type: String, default: null },
-    customizedAt: { type: Date, default: Date.now },
-  },
-  { _id: false }
-);
-
-const ChargeSchema = new mongoose.Schema(
-  {
-    label: {
-      type: String,
-      required: true,
-    },
-    amount: {
-      type: Number,
-      required: true,
-    },
-    // "Base" = per-guest/package line, "Fee" = additional charge (cleaning, etc.)
-    type: {
-      type: String,
-      enum: ["Base", "Fee", "Discount", "Tax"],
-      default: "Fee",
-    },
+    requestedAt: { type: Date, default: Date.now },
+    respondedAt: { type: Date, default: null },
   },
   { _id: true }
 );
 
+/**
+ * Vendor-authored pricing. One cumulative figure per breakdown row — the
+ * vendor prices the whole set of additions, not each item — plus the discount
+ * and tax rate. Every row of the pricing breakdown comes from here; see
+ * `utils/pricingBreakdown.js`.
+ *
+ * All amounts are positive magnitudes. The breakdown applies the sign.
+ */
+const PricingSchema = new mongoose.Schema(
+  {
+    // Overrides packageSnapshot.price when the price was negotiated separately.
+    basePrice: { type: Number, default: null },
+
+    itemsAdded: { type: Number, default: 0, min: 0 },
+    addonsAdded: { type: Number, default: 0, min: 0 },
+    substituteItemsAdded: { type: Number, default: 0, min: 0 },
+
+    itemsRemoved: { type: Number, default: 0, min: 0 },
+    addonsRemoved: { type: Number, default: 0, min: 0 },
+
+    discountAmount: { type: Number, default: 0, min: 0 },
+    discountLabel: { type: String, default: "Discount Allowed" },
+    taxRatePct: { type: Number, default: 18, min: 0, max: 100 },
+    taxLabel: { type: String, default: "GST" },
+    updatedAt: { type: Date, default: null },
+  },
+  { _id: false }
+);
+
+/**
+ * One instalment of the payment plan. Titles are the vendor's own — a booking
+ * is not limited to a fixed set of instalments — and mirror the shape an
+ * enquiry proposal already uses, so converting one to the other is lossless.
+ */
 const PaymentMilestoneSchema = new mongoose.Schema(
   {
-    type: {
-      type: String,
-      enum: ["Token", "Advanced1", "Advanced2", "FinalClearance"],
-      required: true,
-    },
-    amount: {
-      type: Number,
-      required: true,
-    },
-    dueDate: {
-      type: Date,
-      default: null,
-    },
-    status: {
-      type: String,
-      enum: ["Pending", "PaymentDue", "Received"],
-      default: "Pending",
-    },
-    receivedDate: {
-      type: Date,
-      default: null,
-    },
+    title: { type: String, required: true, trim: true },
+    percentage: { type: Number, default: null, min: 0, max: 100 },
+    amount: { type: Number, required: true },
+    dueDate: { type: Date, default: null },
+    status: { type: String, enum: MILESTONE_STATUSES, default: "Pending" },
+    receivedDate: { type: Date, default: null },
   },
   { _id: true }
 );
@@ -99,7 +132,26 @@ const BookingSchema = new mongoose.Schema(
       required: true,
     },
 
-    // Customer info (embedded)
+    // Reference to the logged-in customer account this booking belongs to.
+    // Optional/nullable: bookings can exist without one (vendor-entered
+    // walk-in/offline bookings, enquiry-first bookings for a customer who
+    // never created an account) — only a customer-initiated checkout flow
+    // is expected to always set this. Existing bookings created before the
+    // Customer model existed will have this as null; backfilling them is a
+    // deliberate, separate decision (phone-number matching is not exact),
+    // not something this field's presence does automatically.
+    customerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Customer",
+      default: null,
+      index: true,
+    },
+
+    // Customer info (embedded) — this is the point-in-time snapshot of who
+    // booked (same intent as packageSnapshot below): it is NOT kept in sync
+    // with the Customer account after creation, and remains the source of
+    // truth for "who did this booking say it was for" even if customerId is
+    // null or the linked account's details later change.
     customer: {
       name: { type: String, required: true },
       phone: { type: String, default: null },
@@ -137,34 +189,44 @@ const BookingSchema = new mongoose.Schema(
       default: null,
     },
 
-    // Package snapshot (denormalized at booking time — never mutated after creation)
     packageSnapshot: {
-      name: { type: String },
-      price: { type: Number },
-      image: { type: String },
-      vendorType: { type: String },
-      variantType: { type: String },
+      type: PackageSnapshotSchema,
+      default: null,
     },
 
     // Booking metadata
     paymentType: {
       type: String,
-      enum: ["FreeBooking", "AdvancePaid", "FullPaid"],
+      enum: PAYMENT_TYPES,
       required: true,
     },
     status: {
       type: String,
-      enum: ["Pending", "Accepted", "Declined", "Cancelled", "Completed"],
-      default: "Pending",
+      enum: BOOKING_STATUSES,
+      default: "NewBooking",
+    },
+
+    // Status transition trail — backs the message card on the details screen
+    respondByAt: { type: Date, default: null },
+    confirmedAt: { type: Date, default: null },
+    declinedAt: { type: Date, default: null },
+    declineReason: { type: String, default: null },
+    cancelledAt: { type: Date, default: null },
+    cancelledBy: { type: String, enum: ["Vendor", "Customer"], default: null },
+    cancellationReason: { type: String, default: null },
+
+    // Customer-requested additions/removals, and the vendor's decision on each
+    changeRequests: [ChangeRequestSchema],
+
+    pricing: {
+      type: PricingSchema,
+      default: () => ({}),
     },
 
     // Payment milestones
     paymentMilestones: [PaymentMilestoneSchema],
 
-    // Itemized payment breakdown shown in the "Payment Details" section.
-    // Synced from customizedPackage.lineItems when the vendor customizes.
-    charges: [ChargeSchema],
-
+    // Derived from the pricing breakdown on every pricing-affecting change
     totalAmount: {
       type: Number,
       default: 0,
@@ -183,17 +245,42 @@ const BookingSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
-    // Vendor's per-booking package customization (null = using original packageSnapshot)
-    customizedPackage: {
-      type: CustomizedPackageSchema,
-      default: null,
+    // Set when the vendor's account is purged. The booking is the customer's
+    // record too, so it is retained and anonymised rather than deleted.
+    vendorDeleted: {
+      type: Boolean,
+      default: false,
     },
   },
   { timestamps: true }
 );
 
+// Best-effort auto-link: if a booking is saved without a customerId but has
+// a customer.phone, try to match it to an existing Customer account so
+// vendor-created bookings (walk-ins, enquiry-first, vendor manually typing
+// in a phone number) still end up linked when that phone happens to belong
+// to a registered customer — without vendorController/bookingController
+// (not touched by this change) needing any awareness of Customer accounts
+// at all. Never overwrites an already-set customerId, never fails the save
+// if no match is found or the lookup errors — this is purely additive.
+BookingSchema.pre("save", async function autoLinkCustomer() {
+  if (this.customerId || !this.customer?.phone) return;
+  try {
+    const normalized = normalizePhone(this.customer.phone);
+    if (!normalized) return;
+    const match = await Customer.findOne({ phone: normalized }).select("_id").lean();
+    if (match) this.customerId = match._id;
+  } catch (err) {
+    console.warn("[Booking.autoLinkCustomer] lookup failed, continuing without a link:", err.message);
+  }
+});
+
 // Compound indexes
 BookingSchema.index({ vendorId: 1, status: 1 });
 BookingSchema.index({ vendorId: 1, eventDate: 1 });
+// Supports the customer-facing "my bookings" dashboard (active/past/cancelled
+// tabs, sorted/filtered by status or event date) once that endpoint exists.
+BookingSchema.index({ customerId: 1, status: 1 });
+BookingSchema.index({ customerId: 1, eventDate: 1 });
 
 export default mongoose.model("Booking", BookingSchema);

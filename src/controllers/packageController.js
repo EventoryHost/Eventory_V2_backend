@@ -428,20 +428,58 @@ export const submitPackage = async (req, res) => {
 };
 
 /**
- * @desc Permanently delete a package. Irreversible — the document is removed.
+ * @desc Permanently delete ONE variant. Irreversible.
+ * Deleting a whole package is hardDeletePackage — this strands the siblings.
  */
-export const hardDeletePackage = async (req, res) => {
+export const hardDeleteVariant = async (req, res) => {
   try {
     const { packageId } = req.params;
     const deleted = await Package.findByIdAndDelete(packageId);
 
     if (!deleted) {
+      return res.status(404).json({ status: "FAILED", message: "Variant not found" });
+    }
+
+    return res.status(200).json({ status: "SUCCESS", message: "Variant permanently deleted" });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to permanently delete variant", error: error.message });
+  }
+};
+
+/**
+ * @desc Permanently delete a whole package — every variant in the group.
+ * Irreversible.
+ */
+export const hardDeletePackage = async (req, res) => {
+  try {
+    const { packageGroupId } = req.params;
+
+    if (!mongoose.Types.ObjectId.isValid(packageGroupId)) {
+      return res.status(400).json({
+        status: "FAILED",
+        message: `Invalid packageGroupId: ${packageGroupId}`,
+      });
+    }
+
+    const { deletedCount } = await Package.deleteMany({
+      packageGroupId: new mongoose.Types.ObjectId(packageGroupId),
+    });
+
+    if (deletedCount === 0) {
       return res.status(404).json({ status: "FAILED", message: "Package not found" });
     }
 
-    return res.status(200).json({ status: "SUCCESS", message: "Package permanently deleted" });
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Package permanently deleted",
+      count: deletedCount,
+    });
   } catch (error) {
-    return res.status(500).json({ status: "ERROR", message: "Failed to permanently delete package", error: error.message });
+    return res.status(500).json({
+      status: "ERROR",
+      message: "Failed to permanently delete package",
+      error: error.message,
+    });
   }
 };
 
@@ -481,8 +519,37 @@ const stripIds = (node) => {
   return node;
 };
 
+const copyName = (name) => `${name || "Untitled Package"} (Copy)`;
+
 /**
- * @desc Duplicate an existing package
+ * Lean document → unsaved copy: fresh subdocument ids, no timestamps, back to
+ * Draft. `completedSteps` is kept on purpose — the copy holds all of the
+ * source's data, so wiping its progress would show a finished package as an
+ * empty draft.
+ */
+const buildDuplicate = (leanPkg, { packageGroupId, variantType, packageName }) => {
+  const copy = stripIds(leanPkg);
+  delete copy.createdAt;
+  delete copy.updatedAt;
+  delete copy.__v;
+
+  copy.packageGroupId = packageGroupId;
+  copy.packageStatus = "Draft";
+  if (variantType) copy.variantType = variantType;
+
+  if (!copy.step1_eventAndCrew) copy.step1_eventAndCrew = {};
+  if (packageName !== undefined) {
+    copy.step1_eventAndCrew.packageName = packageName;
+  }
+  return copy;
+};
+
+/**
+ * @desc Duplicate a package — every variant of it.
+ *
+ * A package is the group, not the document, so this resolves the given id to its
+ * group and copies every sibling into ONE new group. Copying documents one at a
+ * time would split a three-variant package into three unrelated packages.
  */
 export const duplicatePackage = async (req, res) => {
   try {
@@ -493,31 +560,108 @@ export const duplicatePackage = async (req, res) => {
       return res.status(404).json({ status: "FAILED", message: "Package not found" });
     }
 
-    stripIds(originalPkg);
-    delete originalPkg.createdAt;
-    delete originalPkg.updatedAt;
+    // Documents predating packageGroupId have no siblings to find — copy the
+    // one document rather than failing the whole request.
+    const variants = originalPkg.packageGroupId
+      ? await Package.find({ packageGroupId: originalPkg.packageGroupId })
+          .sort({ createdAt: 1 })
+          .lean()
+      : [originalPkg];
 
-    originalPkg.packageGroupId = new mongoose.Types.ObjectId();
+    const newGroupId = new mongoose.Types.ObjectId();
+    const name = copyName(variants[0].step1_eventAndCrew?.packageName);
 
-    // Reset status and progress
-    originalPkg.packageStatus = "Draft";
-    originalPkg.completedSteps = [];
-    if (!originalPkg.step1_eventAndCrew) originalPkg.step1_eventAndCrew = {};
-    originalPkg.step1_eventAndCrew.packageName =
-      `${originalPkg.step1_eventAndCrew.packageName || "Untitled Package"} (Copy)`;
-
-    const Model = getModelForVendor(originalPkg.vendorType);
-    const duplicatedPkg = new Model(originalPkg);
-    await duplicatedPkg.save();
+    const created = [];
+    try {
+      for (const variant of variants) {
+        const Model = getModelForVendor(variant.vendorType);
+        const doc = new Model(
+          buildDuplicate(variant, { packageGroupId: newGroupId, packageName: name })
+        );
+        await doc.save();
+        created.push(doc._id);
+      }
+    } catch (error) {
+      // No transaction across the writes — undo the partial copy. Safe to delete
+      // by the new group id: it was minted here and holds nothing else.
+      await Package.deleteMany({ packageGroupId: newGroupId });
+      throw error;
+    }
 
     return res.status(201).json({
       status: "SUCCESS",
       message: "Package duplicated",
-      packageId: duplicatedPkg._id,
-      packageGroupId: duplicatedPkg.packageGroupId,
+      packageId: created[0],
+      packageGroupId: newGroupId,
+      count: created.length,
+      packageIds: created,
     });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to duplicate package", error: error.message });
+  }
+};
+
+/**
+ * @desc Duplicate one variant into the package it already belongs to: the copy
+ * keeps the source's packageGroupId and name, and takes variantType from body.
+ */
+export const duplicateVariant = async (req, res) => {
+  try {
+    const { packageId } = req.params;
+    const { variantType } = req.body;
+
+    if (typeof variantType !== "string" || !variantType.trim()) {
+      return res.status(400).json({
+        status: "FAILED",
+        message: "variantType must be a non-empty string",
+      });
+    }
+    const newVariant = variantType.trim();
+
+    const source = await Package.findById(packageId).lean();
+    if (!source) {
+      return res.status(404).json({ status: "FAILED", message: "Package not found" });
+    }
+
+    // Backfill documents predating packageGroupId, so the pair stays one package.
+    let groupId = source.packageGroupId;
+    if (!groupId) {
+      groupId = new mongoose.Types.ObjectId();
+      await Package.updateOne({ _id: source._id }, { $set: { packageGroupId: groupId } });
+    }
+
+    // Two variants with the same name are indistinguishable to the client.
+    const clash = await Package.findOne({
+      packageGroupId: groupId,
+      variantType: newVariant,
+      packageStatus: { $ne: "Deleted" },
+    }).select("_id");
+    if (clash) {
+      return res.status(409).json({
+        status: "FAILED",
+        message: `Variant "${newVariant}" already exists in this package`,
+      });
+    }
+
+    const Model = getModelForVendor(source.vendorType);
+    const duplicatedVariant = new Model(
+      buildDuplicate(source, { packageGroupId: groupId, variantType: newVariant })
+    );
+    await duplicatedVariant.save();
+
+    return res.status(201).json({
+      status: "SUCCESS",
+      message: "Variant duplicated",
+      packageId: duplicatedVariant._id,
+      packageGroupId: groupId,
+      variantType: duplicatedVariant.variantType,
+    });
+  } catch (error) {
+    return res.status(500).json({
+      status: "ERROR",
+      message: "Failed to duplicate variant",
+      error: error.message,
+    });
   }
 };
 
