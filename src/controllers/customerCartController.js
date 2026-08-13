@@ -7,6 +7,7 @@ import WishlistItem from "../models/WishlistItem.js";
 import { computeAvailability } from "../utils/packageAvailability.js";
 import { round2 } from "../utils/money.js";
 import { computeCartQuote } from "../services/cartPricingService.js";
+import { resolveVendorRefId } from "../utils/resolveVendor.js";
 
 /**
  * Cart CRUD — Phase 3 Step 13. Every route runs behind identifyCartOwner
@@ -211,7 +212,13 @@ export const addCartItem = async (req, res) => {
   try {
     const { packageId, eventType, guests, date, timeSlot, location, selectedAddOns, selectedItems, specialRequest, quantity } = req.body;
 
-    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" });
+    // .lean() matters here beyond the usual perf reason: ANOTHER layer of
+    // the same real bug (see the vendorId comment below) — Mongoose
+    // silently casts an un-castable vendorId to `undefined` while
+    // hydrating a full Document (even with no populate involved at all),
+    // but preserves the real raw stored value on a plain lean() object.
+    // Confirmed via direct testing while building this fix (testsuite.pdf).
+    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" }).lean();
     if (!pkg) {
       return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
     }
@@ -227,11 +234,27 @@ export const addCartItem = async (req, res) => {
       }
     }
 
+    // REAL BUG FOUND during end-to-end testing (2026-08-13, testsuite.pdf):
+    // pkg.vendorId is stored as the Vendor's business-id string (e.g.
+    // "VEN20260511163553528") rather than its Mongo _id for every
+    // currently-seeded package — copying it forward verbatim into
+    // CartItem.vendorId (a required ObjectId field) previously failed
+    // validation entirely (add-to-cart 500'd for every real package), and
+    // even if it hadn't, it would have saved a vendorId that never matches
+    // what the vendor's OWN dashboard queries by — meaning a real booking
+    // could exist that its vendor could never see. Resolved to the real
+    // Vendor._id here instead of trusting Package.vendorId's stored shape.
+    // See src/utils/resolveVendor.js for the full write-up.
+    const resolvedVendorId = await resolveVendorRefId(pkg.vendorId);
+    if (!resolvedVendorId) {
+      return res.status(500).json({ status: "ERROR", message: "This package's vendor could not be resolved — cannot add to cart" });
+    }
+
     const { cart, mintedGuestId } = await getOrCreateCart(req);
 
     const item = await CartItem.create({
       cartId: cart._id,
-      vendorId: pkg.vendorId,
+      vendorId: resolvedVendorId,
       packageId: pkg._id,
       packageSnapshot: {
         name: pkg.step1_eventAndCrew?.packageName,

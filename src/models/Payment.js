@@ -23,6 +23,13 @@ import mongoose from "mongoose";
  * flag for Step 19 to flip (idempotently — checked before creating a
  * Booking) so a webhook retry can never create two Bookings for the same
  * successful payment.
+ *
+ * Step 22 (Pay-milestone endpoint) exercises paymentType:"Milestone" for
+ * the first time: a milestone payment pays down an EXISTING Booking (Pay
+ * Advance 2 / Pay Remaining), not a CheckoutSession creating a new one —
+ * so checkoutSessionId is relaxed to optional and bookingId/milestoneId
+ * are added, set only on this path. Kept on this same model/collection
+ * rather than a parallel one, per this comment's own original plan above.
  */
 const WebhookEventSchema = new mongoose.Schema(
   {
@@ -35,11 +42,20 @@ const WebhookEventSchema = new mongoose.Schema(
 
 const PaymentSchema = new mongoose.Schema(
   {
-    checkoutSessionId: { type: mongoose.Schema.Types.ObjectId, ref: "CheckoutSession", required: true, index: true },
+    // Required for the checkout-time "Token" flow; null for a Step 22
+    // milestone payment, which pays down an existing Booking instead
+    // (bookingId/milestoneId below), not a CheckoutSession.
+    checkoutSessionId: { type: mongoose.Schema.Types.ObjectId, ref: "CheckoutSession", default: null, index: true },
     customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", required: true, index: true },
 
     paymentType: { type: String, enum: ["Token", "Remaining", "Milestone"], required: true },
-    milestoneLabel: { type: String, default: null }, // set only when paymentType:"Milestone" — not exercised until Phase 5 Step 22
+    milestoneLabel: { type: String, default: null }, // set only when paymentType:"Milestone"/"Remaining"
+
+    // Step 22 only — which existing Booking (and which of its
+    // paymentMilestones subdocuments) this payment is for. Null for the
+    // checkout-time "Token" flow, which has no Booking yet at payment time.
+    bookingId: { type: mongoose.Schema.Types.ObjectId, ref: "Booking", default: null, index: true },
+    milestoneId: { type: mongoose.Schema.Types.ObjectId, default: null }, // Booking.paymentMilestones[]._id
 
     amount: { type: Number, required: true, min: 0 },
     currency: { type: String, default: "INR" },

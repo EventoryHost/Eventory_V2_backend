@@ -83,6 +83,15 @@ const preferencesSchema = z.object({
   isDarkMode: z.boolean().optional(),
 });
 
+// Phase 5 Step 25 — changing an already-set email. Deliberately its own
+// endpoint/schema, not folded into updateCustomerSchema — email is an
+// identity field with a real side effect (isEmailVerified reset), same
+// reasoning as why it's excluded from SELF_UPDATABLE_FIELDS in
+// customerController.js.
+export const updateEmailSchema = z.object({
+  email: z.string().trim().toLowerCase().email("email must be a valid email address"),
+});
+
 export const updateCustomerSchema = z
   .object({
     name: z.string().trim().min(1).max(120).optional(),

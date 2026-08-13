@@ -119,6 +119,54 @@ export const updateCustomer = async (req, res, next) => {
   }
 };
 
+/**
+ * @desc Phase 5 Step 25 — change the customer's own email. Deliberately
+ * separate from updateCustomer/SELF_UPDATABLE_FIELDS: email is an identity
+ * field, changing it always resets isEmailVerified to false (and
+ * verificationStatus is recomputed off the customer's CURRENT phone
+ * verification only) — an unconfirmed new address is never left marked
+ * verified just because the old one was.
+ *
+ * NO real re-verification (OTP/confirmation link) is sent here — checked
+ * with the user first: no email-sending service (SMTP/SendGrid/SES) exists
+ * anywhere in this codebase to send one through. Honestly reflected via
+ * isEmailVerified:false rather than faking a "verified" state, or blocking
+ * email changes entirely (also considered, not chosen). Revisit once an
+ * email service exists — see info.txt.
+ */
+export const updateCustomerEmail = async (req, res, next) => {
+  try {
+    const { email } = req.body;
+
+    const taken = await Customer.findOne({ email, id: { $ne: req.params.id } });
+    if (taken) {
+      return res.status(409).json({ success: false, message: "This email is already linked to another account" });
+    }
+
+    const customer = await Customer.findOne({ id: req.params.id });
+    if (!customer) {
+      return res.status(404).json({ success: false, message: "Customer not found" });
+    }
+
+    customer.email = email;
+    customer.isEmailVerified = false;
+    customer.verificationStatus = customer.isPhoneVerified ? "PhoneVerified" : "Unverified";
+    await customer.save();
+
+    const { password, ...safeCustomer } = customer.toObject();
+    res.status(200).json({
+      success: true,
+      message: "Email updated — this address is not yet verified",
+      data: safeCustomer,
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ success: false, message: "This email is already linked to another account" });
+    }
+    next(error);
+  }
+};
+
 // Deactivate own account (soft delete — preserves booking/order history integrity)
 export const deactivateCustomer = async (req, res, next) => {
   try {

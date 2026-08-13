@@ -3,8 +3,10 @@ import mongoose from "mongoose";
 import cashfree from "../config/cashfree.js";
 import Payment from "../models/Payment.js";
 import CheckoutSession from "../models/CheckoutSession.js";
+import Booking from "../models/Booking.js";
 import { computeContactValidation, computeLinesValidation } from "../services/checkoutValidationService.js";
 import { createBookingsFromCheckoutSession } from "../services/bookingCreationService.js";
+import { applyMilestonePaymentToBooking } from "../services/milestonePaymentService.js";
 import { normalizePhone } from "../utils/phone.js";
 import { generatePaymentId } from "../utils/generateId.js";
 
@@ -177,6 +179,120 @@ export const createTokenPayment = async (req, res) => {
 };
 
 /**
+ * @desc Phase 5 Step 22 — creates (or, on retry, returns the existing) a
+ * Cashfree order for ONE milestone of an EXISTING Booking (Pay Advance 2 /
+ * Pay Remaining, or any not-yet-Received milestone the vendor's package
+ * configured). Unlike /token, this doesn't touch a CheckoutSession at all
+ * — the Booking already exists; this just collects money against one of
+ * its stored paymentMilestones entries. Customer-ownership-scoped, same
+ * "exists but not yours" -> 404 convention as the rest of this codebase.
+ */
+export const createMilestonePayment = async (req, res) => {
+  try {
+    const { bookingId, milestoneId } = req.body;
+
+    const booking = await Booking.findOne({ _id: bookingId, customerId: req.customer._id });
+    if (!booking) return res.status(404).json({ status: "FAILED", message: "Booking not found" });
+
+    if (["Cancelled", "Declined"].includes(booking.status)) {
+      return res.status(410).json({ status: "FAILED", message: `This booking is ${booking.status.toLowerCase()} — no further payment is due` });
+    }
+
+    const milestone = booking.paymentMilestones.id(milestoneId);
+    if (!milestone) return res.status(404).json({ status: "FAILED", message: "Milestone not found on this booking" });
+
+    if (milestone.status === "Received") {
+      return res.status(409).json({ status: "FAILED", message: "This milestone has already been paid" });
+    }
+    if (!milestone.amount || milestone.amount <= 0) {
+      return res.status(400).json({ status: "FAILED", message: "This milestone has no amount due" });
+    }
+
+    // Idempotency: same pattern as /token — a PENDING or PAID payment
+    // already exists for this exact (booking, milestone), return it rather
+    // than minting a second Cashfree order.
+    const existing = await Payment.findOne({
+      bookingId: booking._id,
+      milestoneId: milestone._id,
+      status: { $in: ["PENDING", "PAID"] },
+    }).sort({ createdAt: -1 });
+    if (existing) {
+      return res.status(200).json({
+        status: "SUCCESS",
+        message: existing.status === "PAID" ? "This milestone is already paid" : "Reusing an existing pending payment",
+        paymentId: existing._id,
+        cfOrderId: existing.cfOrderId,
+        paymentSessionId: existing.cfPaymentSessionId,
+        amount: existing.amount,
+        paymentStatus: existing.status,
+      });
+    }
+
+    const cfOrderId = generatePaymentId();
+    const idempotencyKey = `${booking._id}:${milestone._id}:${cfOrderId}`;
+
+    const payment = await Payment.create({
+      bookingId: booking._id,
+      milestoneId: milestone._id,
+      customerId: req.customer._id,
+      paymentType: milestone.type === "FinalClearance" ? "Remaining" : "Milestone",
+      milestoneLabel: milestone.type,
+      amount: milestone.amount,
+      cfOrderId,
+      idempotencyKey,
+      status: "PENDING",
+    });
+
+    const rawPhone = normalizePhone(booking.customer?.phone);
+    const cashfreePhone = rawPhone ? rawPhone.slice(-10) : "0000000000";
+
+    try {
+      const response = await cashfree.PGCreateOrder({
+        order_id: cfOrderId,
+        order_amount: milestone.amount,
+        order_currency: "INR",
+        customer_details: {
+          customer_id: req.customer.id,
+          customer_phone: cashfreePhone,
+          customer_email: booking.customer?.email || undefined,
+          customer_name: booking.customer?.name || undefined,
+        },
+        order_tags: {
+          bookingId: String(booking._id),
+          milestoneId: String(milestone._id),
+          milestoneType: milestone.type,
+          paymentType: payment.paymentType,
+        },
+      });
+
+      payment.cfPaymentSessionId = response.data?.payment_session_id || null;
+      await payment.save();
+
+      return res.status(201).json({
+        status: "SUCCESS",
+        message: "Payment order created",
+        paymentId: payment._id,
+        cfOrderId: payment.cfOrderId,
+        paymentSessionId: payment.cfPaymentSessionId,
+        amount: payment.amount,
+        paymentStatus: payment.status,
+      });
+    } catch (cfError) {
+      payment.status = "FAILED";
+      payment.failureReason = cfError?.response?.data?.message || cfError.message;
+      await payment.save();
+      return res.status(502).json({
+        status: "FAILED",
+        message: "Cashfree order creation failed",
+        error: payment.failureReason,
+      });
+    }
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to create milestone payment", error: error.message });
+  }
+};
+
+/**
  * @desc Cashfree webhook receiver — PUBLIC (Cashfree calls this directly,
  * no customer session). Verifies the signature cryptographically before
  * touching anything, then re-confirms with Cashfree's own PGFetchOrder
@@ -231,16 +347,27 @@ export const handleCashfreeWebhook = async (req, res) => {
       payment.paidAt = new Date();
       await payment.save();
 
-      const session = await CheckoutSession.findById(payment.checkoutSessionId);
-      if (session && session.status !== "Completed") {
-        session.status = "Completed";
-        await session.save();
-      }
-      // Phase 4 Step 19 — bookingCreated guards against a Cashfree webhook
-      // retry (or a GET poll landing right after) creating the same
-      // booking twice; this branch only runs once per Payment ever.
-      if (session && !payment.bookingCreated) {
-        await createBookingsFromCheckoutSession(session, payment);
+      if (payment.bookingId) {
+        // Step 22 milestone payment — pays down an EXISTING Booking, no
+        // CheckoutSession involved. bookingCreated is reused as "applied
+        // to its booking" here (see Payment.js/milestonePaymentService.js
+        // comments) so a webhook retry can never double-credit the same
+        // milestone.
+        if (!payment.bookingCreated) {
+          await applyMilestonePaymentToBooking(payment);
+        }
+      } else {
+        const session = await CheckoutSession.findById(payment.checkoutSessionId);
+        if (session && session.status !== "Completed") {
+          session.status = "Completed";
+          await session.save();
+        }
+        // Phase 4 Step 19 — bookingCreated guards against a Cashfree webhook
+        // retry (or a GET poll landing right after) creating the same
+        // booking twice; this branch only runs once per Payment ever.
+        if (session && !payment.bookingCreated) {
+          await createBookingsFromCheckoutSession(session, payment);
+        }
       }
     } else if (["EXPIRED", "TERMINATED", "TERMINATION_REQUESTED"].includes(orderStatus) || type === "PAYMENT_FAILED_WEBHOOK") {
       payment.status = "FAILED";
@@ -287,13 +414,19 @@ export const getPaymentStatus = async (req, res) => {
           payment.paidAt = new Date();
           await payment.save();
 
-          const session = await CheckoutSession.findById(payment.checkoutSessionId);
-          if (session && session.status !== "Completed") {
-            session.status = "Completed";
-            await session.save();
-          }
-          if (session && !payment.bookingCreated) {
-            await createBookingsFromCheckoutSession(session, payment);
+          if (payment.bookingId) {
+            if (!payment.bookingCreated) {
+              await applyMilestonePaymentToBooking(payment);
+            }
+          } else {
+            const session = await CheckoutSession.findById(payment.checkoutSessionId);
+            if (session && session.status !== "Completed") {
+              session.status = "Completed";
+              await session.save();
+            }
+            if (session && !payment.bookingCreated) {
+              await createBookingsFromCheckoutSession(session, payment);
+            }
           }
         } else if (["EXPIRED", "TERMINATED", "TERMINATION_REQUESTED"].includes(orderStatus)) {
           payment.status = "FAILED";
@@ -311,6 +444,8 @@ export const getPaymentStatus = async (req, res) => {
       status: "SUCCESS",
       paymentId: payment._id,
       checkoutSessionId: payment.checkoutSessionId,
+      bookingId: payment.bookingId,
+      milestoneLabel: payment.milestoneLabel,
       paymentType: payment.paymentType,
       amount: payment.amount,
       paymentStatus: payment.status,

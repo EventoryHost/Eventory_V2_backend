@@ -5,6 +5,7 @@ import Package from "../models/Package.js";
 import Vendor from "../models/Vendor.js";
 import Customer from "../models/Customer.js";
 import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
+import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 
 /**
  * Authenticated wishlist CRUD + a public read-only share link — Phase 2
@@ -68,25 +69,37 @@ export const addWishlistItem = async (req, res) => {
  */
 export const getWishlist = async (req, res) => {
   try {
+    // NOT nesting a "vendorId" populate under packageId — see
+    // src/utils/resolveVendor.js: every currently-seeded Package.vendorId
+    // fails that populate's implicit ObjectId cast (real bug found via
+    // end-to-end testing, testsuite.pdf). Resolved manually below instead,
+    // which the direct item.vendorId populate (itemType:"Vendor" saves,
+    // always a real Vendor._id set at add-time, not derived from
+    // Package.vendorId) doesn't need and is left as a normal populate.
     const items = await WishlistItem.find({ customerId: req.customer._id })
       .sort({ createdAt: -1 })
-      .populate({ path: "packageId", select: PACKAGE_CARD_FIELDS, populate: { path: "vendorId", select: PUBLIC_VENDOR_FIELDS } })
+      .populate({ path: "packageId", select: PACKAGE_CARD_FIELDS })
       .populate({ path: "vendorId", select: PUBLIC_VENDOR_FIELDS })
       .lean();
 
-    const enriched = items.map((item) => {
-      if (item.itemType !== "Package") return item;
-      // The package may have been taken down/deleted since it was saved —
-      // populate leaves packageId null in that case, handled here rather
-      // than surfacing a confusing partial object to the client.
-      const currentPrice = item.packageId?.step3_policiesAndCharges?.packagePricing?.price ?? null;
-      return {
-        ...item,
-        packageStillAvailable: Boolean(item.packageId),
-        currentPrice,
-        priceChanged: item.priceSnapshot != null && currentPrice != null && currentPrice !== item.priceSnapshot,
-      };
-    });
+    const enriched = await Promise.all(
+      items.map(async (item) => {
+        if (item.itemType !== "Package") return item;
+        // The package may have been taken down/deleted since it was saved —
+        // populate leaves packageId null in that case, handled here rather
+        // than surfacing a confusing partial object to the client.
+        if (item.packageId) {
+          item.packageId.vendorId = await resolveVendorForPackage(item.packageId.vendorId);
+        }
+        const currentPrice = item.packageId?.step3_policiesAndCharges?.packagePricing?.price ?? null;
+        return {
+          ...item,
+          packageStillAvailable: Boolean(item.packageId),
+          currentPrice,
+          priceChanged: item.priceSnapshot != null && currentPrice != null && currentPrice !== item.priceSnapshot,
+        };
+      })
+    );
 
     return res.status(200).json({ status: "SUCCESS", count: enriched.length, items: enriched });
   } catch (error) {
@@ -231,9 +244,18 @@ export const getSharedWishlist = async (req, res) => {
     const items = await WishlistItem.find({ customerId: customer._id })
       .select("-note")
       .sort({ createdAt: -1 })
-      .populate({ path: "packageId", select: PACKAGE_CARD_FIELDS, populate: { path: "vendorId", select: PUBLIC_VENDOR_FIELDS } })
+      .populate({ path: "packageId", select: PACKAGE_CARD_FIELDS })
       .populate({ path: "vendorId", select: PUBLIC_VENDOR_FIELDS })
       .lean();
+
+    // Same manual resolution as getWishlist — see its comment / resolveVendor.js.
+    await Promise.all(
+      items.map(async (item) => {
+        if (item.itemType === "Package" && item.packageId) {
+          item.packageId.vendorId = await resolveVendorForPackage(item.packageId.vendorId);
+        }
+      })
+    );
 
     return res.status(200).json({
       status: "SUCCESS",

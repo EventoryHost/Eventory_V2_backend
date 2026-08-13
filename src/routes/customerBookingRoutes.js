@@ -1,5 +1,5 @@
 import express from "express";
-import { getBookings, getBookingDetail } from "../controllers/customerBookingController.js";
+import { getBookings, getBookingDetail, cancelBooking, getInvoicePdf } from "../controllers/customerBookingController.js";
 import { protectCustomer } from "../middlewares/customerAuth.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
 import { bookingsQuerySchema } from "../validators/customerBookingValidators.js";
@@ -70,5 +70,59 @@ router.get("/", protectCustomer, validateRequest(bookingsQuerySchema, "query"), 
  *       404: { description: Not found (or not owned by this customer) }
  */
 router.get("/:bookingId", protectCustomer, getBookingDetail);
+
+/**
+ * @swagger
+ * /api/customer/bookings/{bookingId}/cancel:
+ *   post:
+ *     summary: Cancel a booking — Phase 5 Step 23
+ *     description: |
+ *       Scoped to what's actually decided today (see info.txt): marks the
+ *       booking Cancelled and returns a refund ESTIMATE (= totalReceived,
+ *       everything paid so far) plus the raw cancellation policy text — it
+ *       does NOT compute a real policy-based refund amount (the stored
+ *       policy is freeform text, not structured rules), does NOT call
+ *       Cashfree's refund API (no money actually moves here), and does NOT
+ *       send any vendor/admin notification (no notification system exists
+ *       in this codebase yet — logged server-side only).
+ *     tags: [Customer Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Booking cancelled — refundEstimate + cancellationPolicy returned }
+ *       400: { description: Invalid bookingId }
+ *       404: { description: Not found (or not owned by this customer) }
+ *       409: { description: Booking is already Cancelled/Declined/Completed — cannot cancel }
+ */
+router.post("/:bookingId/cancel", protectCustomer, cancelBooking);
+
+/**
+ * @swagger
+ * /api/customer/bookings/{bookingId}/invoice:
+ *   get:
+ *     summary: Download this booking's invoice as a PDF — Phase 5 Step 24
+ *     description: |
+ *       ONE INVOICE PER BOOKING (per vendor) — see Invoice.js for why a
+ *       consolidated multi-vendor invoice isn't built (open BRD question
+ *       #6, and no cross-Booking groupId exists yet). Requires at least
+ *       some payment received. Idempotent: the first call issues and
+ *       freezes the invoice snapshot; later calls re-render that SAME
+ *       snapshot — it is not automatically updated by payments made after
+ *       the first call.
+ *     tags: [Customer Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: PDF file stream (application/pdf) }
+ *       400: { description: Invalid bookingId, or no payment received yet }
+ *       404: { description: Not found (or not owned by this customer) }
+ */
+router.get("/:bookingId/invoice", protectCustomer, getInvoicePdf);
 
 export default router;

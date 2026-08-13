@@ -3,12 +3,13 @@ const router = express.Router();
 import {
   getCustomerById,
   updateCustomer,
+  updateCustomerEmail,
   deactivateCustomer,
   reactivateCustomer,
 } from "../controllers/customerController.js";
 import { protectCustomer, requireSelf } from "../middlewares/customerAuth.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
-import { updateCustomerSchema } from "../validators/customerValidators.js";
+import { updateCustomerSchema, updateEmailSchema } from "../validators/customerValidators.js";
 
 /**
  * GET/PATCH/deactivate below require a valid customer access token
@@ -84,6 +85,39 @@ router
   .route("/:id")
   .get(protectCustomer, requireSelf, getCustomerById)
   .patch(protectCustomer, requireSelf, validateRequest(updateCustomerSchema), updateCustomer);
+
+/**
+ * @swagger
+ * /api/customers/{id}/email:
+ *   patch:
+ *     summary: Change the customer's own email — Phase 5 Step 25
+ *     description: |
+ *       Always resets isEmailVerified to false on change — NO real
+ *       re-verification is sent (no email service exists in this codebase
+ *       yet, see info.txt). The new address is honestly reported as
+ *       unverified rather than faked as verified or blocked outright.
+ *     tags:
+ *       - Customers
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email]
+ *             properties:
+ *               email: { type: string, format: email }
+ *     responses:
+ *       200: { description: Email updated (isEmailVerified now false) }
+ *       404: { description: Customer not found }
+ *       409: { description: This email is already linked to another account }
+ */
+router.patch("/:id/email", protectCustomer, requireSelf, validateRequest(updateEmailSchema), updateCustomerEmail);
 
 router.patch("/:id/deactivate", protectCustomer, requireSelf, deactivateCustomer);
 router.patch("/:id/reactivate", reactivateCustomer);

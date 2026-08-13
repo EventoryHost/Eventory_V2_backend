@@ -6,6 +6,7 @@ import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
 import { utcDayRange } from "../utils/dateRange.js";
 import { computeAvailability } from "../utils/packageAvailability.js";
 import { round2 } from "../utils/money.js";
+import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 
 /**
  * Public (no-auth), read-only discovery endpoints for the customer side:
@@ -18,6 +19,29 @@ import { round2 } from "../utils/money.js";
  * response here is built from an explicit field whitelist (PUBLIC_VENDOR_FIELDS,
  * src/utils/publicFields.js) rather than projecting the full document —
  * that's enforced here, not left to callers.
+ */
+
+/**
+ * REAL BUG FOUND during end-to-end testing (2026-08-13, testsuite.pdf): every
+ * one of the (then) 8 Live packages in the DB has a Package.vendorId that
+ * does NOT hold the Vendor's Mongo _id (what the schema declares/expects —
+ * `type: ObjectId, ref: "Vendor"`) but instead holds the Vendor's own
+ * separate business-facing `id` string (e.g. "VEN20260511163553528") — a
+ * seed-data mismatch, not something introduced here. The practical effect:
+ * `.populate("vendorId")` silently leaves vendorId undefined (browsePackages
+ * — no crash, just missing vendor info), but `.populate("vendorId").lean()`
+ * THROWS a CastError trying to cast that string to an ObjectId (getPackageDetail
+ * — a hard 500 on every single Live package's PDP, found via a real curl
+ * against the live server, not just reasoning about the code).
+ *
+ * Fixed here by never relying on populate/$lookup's implicit ObjectId cast
+ * for this field: resolve the vendor manually, trying the real relation
+ * (Vendor._id) first and falling back to Vendor.id (the string the actual
+ * data uses) — this SALVAGES full vendor info instead of merely avoiding
+ * the crash, since these business-id strings do correctly resolve to a real
+ * Vendor document once looked up on the right field. Moved into
+ * src/utils/resolveVendor.js so Wishlist/Compare/Cart/Booking (which hit
+ * the exact same crash — see testsuite.pdf) can share one implementation.
  */
 
 /**
@@ -90,14 +114,20 @@ export const browsePackages = async (req, res) => {
       // .find().sort() — that only sorts on the Package document's own
       // fields, and rating lives on Vendor. $lookup + $sort in one
       // aggregation is the only way to order by a joined field.
+      // _rawVendorId preserves the pre-$lookup value (see
+      // resolveVendorForPackage's comment) so the fallback pass below can
+      // still resolve a vendor for a Package whose vendorId is stored as
+      // Vendor.id rather than Vendor._id, which $lookup's exact-field-match
+      // silently returns nothing for (not a crash, just empty).
       packages = await Package.aggregate([
         { $match: query },
+        { $addFields: { _rawVendorId: "$vendorId" } },
         { $lookup: { from: "vendors", localField: "vendorId", foreignField: "_id", as: "vendorId" } },
         { $unwind: { path: "$vendorId", preserveNullAndEmptyArrays: true } },
         { $sort: { "vendorId.rating": -1, "vendorId.reviewsCount": -1, createdAt: -1 } },
         { $skip: (page - 1) * limit },
         { $limit: limit },
-        { $project: projectionFromFieldList(PACKAGE_FIELDS, PUBLIC_VENDOR_FIELDS) },
+        { $project: { ...projectionFromFieldList(PACKAGE_FIELDS, PUBLIC_VENDOR_FIELDS), _rawVendorId: 1 } },
       ]);
     } else {
       const sortMap = {
@@ -105,13 +135,32 @@ export const browsePackages = async (req, res) => {
         price_asc: { "step3_policiesAndCharges.packagePricing.price": 1 },
         price_desc: { "step3_policiesAndCharges.packagePricing.price": -1 },
       };
+      // NOT using .populate() here — see resolveVendorForPackage's comment:
+      // populate silently drops vendorId to undefined whenever it's stored
+      // as Vendor.id rather than Vendor._id, which is true of every
+      // currently-seeded Live package. Fetch raw + resolve manually instead
+      // so vendor info is never silently missing when it's actually
+      // resolvable.
       packages = await Package.find(query)
         .select(PACKAGE_FIELDS)
-        .populate({ path: "vendorId", select: PUBLIC_VENDOR_FIELDS })
         .sort(sortMap[sort] || sortMap.newest)
         .skip((page - 1) * limit)
-        .limit(limit);
+        .limit(limit)
+        .lean();
     }
+
+    // Fallback vendor resolution — covers both paths above: the "rating"
+    // aggregate's $lookup miss (vendorId still an empty object after
+    // $unwind) and the plain find()'s un-populated raw vendorId.
+    await Promise.all(
+      packages.map(async (pkg) => {
+        const alreadyResolved = pkg.vendorId && typeof pkg.vendorId === "object" && pkg.vendorId.businessName;
+        if (alreadyResolved) return;
+        const raw = pkg._rawVendorId ?? pkg.vendorId;
+        pkg.vendorId = await resolveVendorForPackage(raw);
+        delete pkg._rawVendorId;
+      })
+    );
 
     return res.status(200).json({
       status: "SUCCESS",
@@ -141,14 +190,19 @@ export const getPackageDetail = async (req, res) => {
       return res.status(400).json({ status: "FAILED", message: "Invalid packageId" });
     }
 
+    // NOT using .populate() — see resolveVendorForPackage's comment: with
+    // .lean(), populate() actually THROWS (a 500) when vendorId is stored
+    // as Vendor.id rather than Vendor._id, which real-world testing found
+    // is true of every currently-seeded Live package. Fetch raw + resolve
+    // manually instead.
     const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" })
-      .populate({ path: "vendorId", select: PUBLIC_VENDOR_FIELDS })
       .select("-__v")
       .lean();
 
     if (!pkg) {
       return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
     }
+    pkg.vendorId = await resolveVendorForPackage(pkg.vendorId);
 
     const { date, guests, time } = req.query;
     const [availability, pricingPreview, reviews] = await Promise.all([

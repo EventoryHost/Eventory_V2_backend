@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import CompareSession from "../models/CompareSession.js";
 import Package from "../models/Package.js";
 import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
+import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 
 /**
  * Compare-up-to-3-packages — Phase 2 Step 11. Packages only (see
@@ -79,10 +80,18 @@ function buildComparisonPayload(packages) {
 
 async function loadComparisonForSession(session) {
   if (session.packageIds.length === 0) return { vendorType: null, count: 0, items: [] };
+  // NOT using .populate("vendorId") — see src/utils/resolveVendor.js: every
+  // currently-seeded Package.vendorId fails that populate's implicit
+  // ObjectId cast (real bug found via end-to-end testing, testsuite.pdf).
+  // Resolved manually below instead.
   const packages = await Package.find({ _id: { $in: session.packageIds } })
     .select(COMPARE_PACKAGE_FIELDS)
-    .populate({ path: "vendorId", select: PUBLIC_VENDOR_FIELDS })
     .lean();
+  await Promise.all(
+    packages.map(async (pkg) => {
+      pkg.vendorId = await resolveVendorForPackage(pkg.vendorId);
+    })
+  );
   // Preserve the order the customer added items in, not Mongo's return order.
   const byId = new Map(packages.map((p) => [String(p._id), p]));
   const ordered = session.packageIds.map((id) => byId.get(String(id))).filter(Boolean);

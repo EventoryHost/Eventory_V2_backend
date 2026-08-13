@@ -3,6 +3,7 @@ import Vendor from "../models/Vendor.js";
 import Booking from "../models/Booking.js";
 import Package from "../models/Package.js";
 import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
+import { getOrCreateInvoiceForBooking, renderInvoicePdf } from "../services/invoiceService.js";
 
 /**
  * "My Bookings" dashboard — Phase 5 Step 20. Pure read-only projection over
@@ -39,6 +40,38 @@ const BOOKING_LIST_FIELDS =
 
 function escapeRegex(str) {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Shared by getBookingDetail (Step 21) and cancelBooking (Step 23) — fetched
+// LIVE from the package's CURRENT policy fields, not a locked snapshot (see
+// the "FLAGGED" note on this in getBookingDetail below for why).
+async function getLiveCancellationPolicy(packageId) {
+  const pkg = await Package.findById(packageId)
+    .select("step3_policiesAndCharges.cancellationPolicy step3_policiesAndCharges.lastMinutePolicy step3_policiesAndCharges.generalPolicies")
+    .lean();
+  return {
+    cancellationPolicy: pkg?.step3_policiesAndCharges?.cancellationPolicy || null,
+    lastMinutePolicy: pkg?.step3_policiesAndCharges?.lastMinutePolicy || null,
+    generalPolicies: pkg?.step3_policiesAndCharges?.generalPolicies || [],
+    note: pkg
+      ? "Live policy from the vendor's current package settings — not a locked snapshot from when this booking was made."
+      : "The original package could not be found — no policy available.",
+  };
+}
+
+// Same dual-lookup convention used throughout this file/the vendor's own
+// getBookingById — accepts either the human-readable bookingId ("EVT...")
+// or the MongoDB _id.
+function bookingLookupQuery(bookingIdParam, customerId) {
+  const query = { customerId };
+  if (bookingIdParam.startsWith("EVT")) {
+    query.bookingId = bookingIdParam;
+  } else if (mongoose.Types.ObjectId.isValid(bookingIdParam)) {
+    query._id = bookingIdParam;
+  } else {
+    return null;
+  }
+  return query;
 }
 
 /**
@@ -119,14 +152,8 @@ export const getBookings = async (req, res) => {
 export const getBookingDetail = async (req, res) => {
   try {
     const { bookingId } = req.params;
-    const query = { customerId: req.customer._id };
-    if (bookingId.startsWith("EVT")) {
-      query.bookingId = bookingId;
-    } else if (mongoose.Types.ObjectId.isValid(bookingId)) {
-      query._id = bookingId;
-    } else {
-      return res.status(400).json({ status: "FAILED", message: "Invalid bookingId" });
-    }
+    const query = bookingLookupQuery(bookingId, req.customer._id);
+    if (!query) return res.status(400).json({ status: "FAILED", message: "Invalid bookingId" });
 
     const booking = await Booking.findOne(query).populate({ path: "vendorId", select: PUBLIC_VENDOR_FIELDS }).lean();
     if (!booking) return res.status(404).json({ status: "FAILED", message: "Booking not found" });
@@ -168,17 +195,7 @@ export const getBookingDetail = async (req, res) => {
     // necessarily what applied when the customer actually booked. Not
     // retrofitted into Step 19 without confirming that's wanted — a real,
     // known limitation, not silently glossed over.
-    const pkg = await Package.findById(booking.packageId)
-      .select("step3_policiesAndCharges.cancellationPolicy step3_policiesAndCharges.lastMinutePolicy step3_policiesAndCharges.generalPolicies")
-      .lean();
-    const cancellationPolicy = {
-      cancellationPolicy: pkg?.step3_policiesAndCharges?.cancellationPolicy || null,
-      lastMinutePolicy: pkg?.step3_policiesAndCharges?.lastMinutePolicy || null,
-      generalPolicies: pkg?.step3_policiesAndCharges?.generalPolicies || [],
-      note: pkg
-        ? "Live policy from the vendor's current package settings — not a locked snapshot from when this booking was made."
-        : "The original package could not be found — no policy available.",
-    };
+    const cancellationPolicy = await getLiveCancellationPolicy(booking.packageId);
 
     // EM contact — genuinely blocked, not guessed at. See info.txt PART 5
     // Flag #2: no EM/Admin model or em_owner-style field exists anywhere
@@ -199,5 +216,115 @@ export const getBookingDetail = async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to fetch booking detail", error: error.message });
+  }
+};
+
+/**
+ * @desc Phase 5 Step 23 — cancel-booking endpoint, scoped to what's
+ * actually decided/possible today (see info.txt for the full writeup of
+ * what was explicitly deferred and why, confirmed with the user before
+ * building this):
+ *
+ * - Refund ESTIMATE only, not a policy-computed amount: the only stored
+ *   cancellation policy (Package.step3_policiesAndCharges.cancellationPolicy,
+ *   models/schemas/policySchema.js) is a vendor-picked template/uploaded
+ *   document/written text — files[]/writtenText/templateId, no structured
+ *   percentage-by-tier field — so there is no safe way to compute a real
+ *   refund number off it without inventing a parsing rule nobody specified.
+ *   The estimate returned is simply totalReceived (everything paid so
+ *   far), shown alongside the raw policy object and an explicit disclaimer
+ *   that the real amount is subject to that policy, not derived from it.
+ * - NO real refund is executed here — no Cashfree refund API call. This
+ *   only marks the Booking Cancelled and reports what would be owed back;
+ *   actually returning money needs a confirmed policy AND a process to
+ *   apply it, neither of which exists yet (also ties into PART 5 Flag #2 —
+ *   no EM/Admin/finance system this backend could hand the refund off to).
+ * - NO vendor/admin notification: no email/SMS/notification system exists
+ *   anywhere in this codebase to notify anyone through. Logged server-side
+ *   only (console.warn) so it's visible in logs, not silently dropped, but
+ *   not a real notification.
+ */
+export const cancelBooking = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const query = bookingLookupQuery(bookingId, req.customer._id);
+    if (!query) return res.status(400).json({ status: "FAILED", message: "Invalid bookingId" });
+
+    const booking = await Booking.findOne(query);
+    if (!booking) return res.status(404).json({ status: "FAILED", message: "Booking not found" });
+
+    if (["Cancelled", "Declined", "Completed"].includes(booking.status)) {
+      return res.status(409).json({
+        status: "FAILED",
+        message: `This booking is already ${booking.status.toLowerCase()} — it cannot be cancelled`,
+      });
+    }
+
+    const cancellationPolicy = await getLiveCancellationPolicy(booking.packageId);
+    const refundEstimate = {
+      amount: booking.totalReceived || 0,
+      note:
+        "This is the full amount paid so far, NOT a policy-computed refund — the stored cancellation policy is a vendor-set document/template/written text, not structured rules this system can apply automatically. The actual refund amount is subject to the policy shown below and is not processed automatically by this endpoint.",
+    };
+
+    booking.status = "Cancelled";
+    await booking.save();
+
+    // No notification system exists in this codebase yet (no email/SMS,
+    // no EM/Admin portal) — logged so it's visible, not silently dropped.
+    console.warn(
+      `[cancelBooking] Booking ${booking.bookingId} (vendor ${booking.vendorId}) cancelled by customer ${req.customer._id}. ` +
+        `Refund estimate: ${refundEstimate.amount}. No vendor/admin notification sent — no notification system exists yet.`
+    );
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Booking cancelled",
+      bookingId: booking.bookingId,
+      bookingStatus: booking.status,
+      refundEstimate,
+      cancellationPolicy,
+    });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to cancel booking", error: error.message });
+  }
+};
+
+/**
+ * @desc Phase 5 Step 24 — invoice PDF download for a booking. ONE INVOICE
+ * PER BOOKING (per vendor), confirmed with the user first — see Invoice.js
+ * for why (open BRD question #6 on invoice consolidation, and no
+ * cross-Booking groupId exists yet to build a consolidated one on top of).
+ * Requires at least some payment received (totalReceived > 0) — an
+ * invoice for money never actually paid isn't a real invoice, just a
+ * pending quote (which the checkout session's own priceBreakdown already
+ * covers). Idempotent: the FIRST call for a booking creates and freezes
+ * the Invoice snapshot; every later call re-renders the SAME stored
+ * snapshot to PDF rather than creating a new one or reflecting since-made
+ * payments — see invoiceService.js's own comment on why re-issuing isn't
+ * automatic.
+ */
+export const getInvoicePdf = async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const query = bookingLookupQuery(bookingId, req.customer._id);
+    if (!query) return res.status(400).json({ status: "FAILED", message: "Invalid bookingId" });
+
+    const booking = await Booking.findOne(query);
+    if (!booking) return res.status(404).json({ status: "FAILED", message: "Booking not found" });
+
+    if (!booking.totalReceived || booking.totalReceived <= 0) {
+      return res.status(400).json({ status: "FAILED", message: "No payment has been received for this booking yet — nothing to invoice" });
+    }
+
+    const vendor = await Vendor.findById(booking.vendorId).select("businessName city").lean();
+    const invoice = await getOrCreateInvoiceForBooking(booking, vendor);
+    const pdfBuffer = await renderInvoicePdf(invoice, booking);
+
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader("Content-Disposition", `attachment; filename="invoice-${invoice.invoiceNumber}.pdf"`);
+    return res.status(200).send(pdfBuffer);
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to generate invoice", error: error.message });
   }
 };

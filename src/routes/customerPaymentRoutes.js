@@ -1,13 +1,14 @@
 import express from "express";
 import {
   createTokenPayment,
+  createMilestonePayment,
   handleCashfreeWebhook,
   getPaymentStatus,
   confirmFreeCheckout,
 } from "../controllers/customerPaymentController.js";
 import { protectCustomer } from "../middlewares/customerAuth.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
-import { createTokenPaymentSchema } from "../validators/customerPaymentValidators.js";
+import { createTokenPaymentSchema, createMilestonePaymentSchema } from "../validators/customerPaymentValidators.js";
 
 const router = express.Router();
 
@@ -79,6 +80,44 @@ router.post("/token", protectCustomer, validateRequest(createTokenPaymentSchema)
  *       410: { description: Checkout session is no longer Active }
  */
 router.post("/confirm-free", protectCustomer, validateRequest(createTokenPaymentSchema), confirmFreeCheckout);
+
+/**
+ * @swagger
+ * /api/customer/payments/milestone:
+ *   post:
+ *     summary: Pay one milestone of an existing booking (Pay Advance 2 / Pay Remaining)
+ *     description: |
+ *       Phase 5 Step 22. Unlike /token, this doesn't touch a
+ *       CheckoutSession — it collects money against ONE entry in an
+ *       already-created Booking's paymentMilestones (find its _id via the
+ *       booking-detail endpoint's paymentTimeline). Idempotent per
+ *       (bookingId, milestoneId) — a retry/double-click while a payment is
+ *       still PENDING or already PAID returns the existing one instead of
+ *       creating a duplicate Cashfree order. On confirmed PAID (via
+ *       webhook or the status-poll live-recheck), the milestone is marked
+ *       Received and the Booking's totalReceived is updated — never a new
+ *       Booking.
+ *     tags: [Customer Payments]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [bookingId, milestoneId]
+ *             properties:
+ *               bookingId: { type: string }
+ *               milestoneId: { type: string }
+ *     responses:
+ *       201: { description: New payment order created }
+ *       200: { description: Existing pending/paid payment returned instead }
+ *       400: { description: Milestone has no amount due }
+ *       404: { description: Booking or milestone not found (or not owned by this customer) }
+ *       409: { description: This milestone has already been paid }
+ *       410: { description: Booking is Cancelled/Declined — no further payment due }
+ *       502: { description: Cashfree order creation failed }
+ */
+router.post("/milestone", protectCustomer, validateRequest(createMilestonePaymentSchema), createMilestonePayment);
 
 /**
  * @swagger
