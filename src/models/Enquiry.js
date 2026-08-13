@@ -1,4 +1,7 @@
 import mongoose from "mongoose";
+import Customer from "./Customer.js";
+import { normalizePhone } from "../utils/phone.js";
+
 const EnquirySchema = new mongoose.Schema(
   {
     enquiryId: {
@@ -13,7 +16,18 @@ const EnquirySchema = new mongoose.Schema(
       required: true,
       index: true,
     },
-    // Customer info (embedded)
+    // Reference to the logged-in customer account this enquiry belongs to.
+    // Optional/nullable — see the matching comment on Booking.customerId for
+    // why (vendor-entered/offline enquiries may have no linked account, and
+    // backfilling existing records is a separate decision, not automatic).
+    customerId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "Customer",
+      default: null,
+      index: true,
+    },
+    // Customer info (embedded) — point-in-time snapshot, not synced with the
+    // Customer account afterwards. See Booking.customer for the same intent.
     customer: {
       name: { type: String, required: true },
       phone: { type: String, default: null },
@@ -253,6 +267,24 @@ const EnquirySchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// Best-effort auto-link — see the identical hook on Booking.js for the full
+// rationale. Additive only: never overwrites an existing customerId, never
+// fails the save if no match is found or the lookup errors.
+EnquirySchema.pre("save", async function autoLinkCustomer() {
+  if (this.customerId || !this.customer?.phone) return;
+  try {
+    const normalized = normalizePhone(this.customer.phone);
+    if (!normalized) return;
+    const match = await Customer.findOne({ phone: normalized }).select("_id").lean();
+    if (match) this.customerId = match._id;
+  } catch (err) {
+    console.warn("[Enquiry.autoLinkCustomer] lookup failed, continuing without a link:", err.message);
+  }
+});
+
 // Compound indexes
 EnquirySchema.index({ vendorId: 1, status: 1 });
+// Supports a future customer-facing "my enquiries" view.
+EnquirySchema.index({ customerId: 1, status: 1 });
 export default mongoose.model("Enquiry", EnquirySchema);
