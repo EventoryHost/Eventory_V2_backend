@@ -7,9 +7,8 @@ import {
   acceptBooking,
   declineBooking,
   cancelBooking,
-  updateMilestoneStatus,
-  updateCalendarNote,
-  customizeBookingPackage,
+  requestPackageChanges,
+  updateBooking,
 } from "../controllers/bookingController.js";
 
 /**
@@ -18,14 +17,91 @@ import {
  *   name: Bookings
  *   description: |
  *     Vendor booking management — create bookings, accept/decline, cancel,
- *     and manage payment milestones. Each booking captures a customer's
- *     reservation of a vendor's package for a specific event date.
+ *     negotiate package changes, price them, and manage payment milestones.
+ *     Each booking captures a customer's reservation of a vendor's package for
+ *     a specific event date, together with an immutable snapshot of that
+ *     package as it was sold.
  */
 
 /**
  * @swagger
  * components:
  *   schemas:
+ *     ChangeRequest:
+ *       type: object
+ *       properties:
+ *         _id:
+ *           type: string
+ *         changeType:
+ *           type: string
+ *           enum: [Add, Remove]
+ *         itemKind:
+ *           type: string
+ *           enum: [Item, Addon, Substitute]
+ *         category:
+ *           type: string
+ *           example: "Performance Type"
+ *         item:
+ *           type: string
+ *           example: "Live Mixing Set"
+ *         qty:
+ *           type: number
+ *         status:
+ *           type: string
+ *           enum: [Pending, Accepted, Rejected]
+ *         requestedAt:
+ *           type: string
+ *           format: date-time
+ *         respondedAt:
+ *           type: string
+ *           format: date-time
+ *     PricingBreakdown:
+ *       type: object
+ *       description: |
+ *         Derived, never stored — the signed, rendered form of `pricing`.
+ *         Rows that come to zero are omitted.
+ *       properties:
+ *         originalPackagePrice:
+ *           type: number
+ *         additions:
+ *           type: array
+ *           items:
+ *             type: object
+ *             properties:
+ *               key:
+ *                 type: string
+ *                 enum: [itemsAdded, addonsAdded, substituteItemsAdded]
+ *               label:
+ *                 type: string
+ *               amount:
+ *                 type: number
+ *         deductions:
+ *           type: array
+ *           items:
+ *             type: object
+ *             properties:
+ *               key:
+ *                 type: string
+ *                 enum: [itemsRemoved, addonsRemoved, discountAllowed]
+ *               label:
+ *                 type: string
+ *               amount:
+ *                 type: number
+ *                 description: Negative.
+ *         subtotal:
+ *           type: number
+ *         tax:
+ *           type: object
+ *           properties:
+ *             label:
+ *               type: string
+ *               example: "Taxes (18% GST)"
+ *             ratePct:
+ *               type: number
+ *             amount:
+ *               type: number
+ *         finalAmount:
+ *           type: number
  *     Booking:
  *       type: object
  *       properties:
@@ -70,6 +146,9 @@ import {
  *           type: string
  *         packageSnapshot:
  *           type: object
+ *           description: |
+ *             The package as sold. Immutable — a vendor editing the underlying
+ *             Package later does not change past bookings.
  *           properties:
  *             name:
  *               type: string
@@ -81,20 +160,83 @@ import {
  *               type: string
  *             variantType:
  *               type: string
+ *             deliverables:
+ *               type: object
+ *               description: |
+ *                 The vendor-type-specific step-2 payload — `spaces` +
+ *                 `inHouseServices` for venues, `items` + `equipments` for DJs,
+ *                 `setups` for decorators, `menus` for caterers,
+ *                 `packageItems` for PAV — plus `addOns`, `included` and
+ *                 `notIncluded`. Backs "What You'll Deliver".
  *         paymentType:
  *           type: string
  *           enum: [FreeBooking, AdvancePaid, FullPaid]
  *         status:
  *           type: string
- *           enum: [Pending, Accepted, Declined, Cancelled, Completed]
+ *           enum: [NewBooking, Viewed, InDiscussion, Confirmed, Declined, Cancelled, Completed]
+ *         respondByAt:
+ *           type: string
+ *           format: date-time
+ *         confirmedAt:
+ *           type: string
+ *           format: date-time
+ *         declinedAt:
+ *           type: string
+ *           format: date-time
+ *         declineReason:
+ *           type: string
+ *         cancelledAt:
+ *           type: string
+ *           format: date-time
+ *         cancelledBy:
+ *           type: string
+ *           enum: [Vendor, Customer]
+ *         cancellationReason:
+ *           type: string
+ *         changeRequests:
+ *           type: array
+ *           items:
+ *             $ref: '#/components/schemas/ChangeRequest'
+ *         pricing:
+ *           type: object
+ *           description: |
+ *             Vendor-authored inputs the breakdown is derived from — one
+ *             cumulative figure per row, all positive magnitudes.
+ *           properties:
+ *             basePrice:
+ *               type: number
+ *               description: Overrides packageSnapshot.price when negotiated separately.
+ *             itemsAdded:
+ *               type: number
+ *             addonsAdded:
+ *               type: number
+ *             substituteItemsAdded:
+ *               type: number
+ *             itemsRemoved:
+ *               type: number
+ *             addonsRemoved:
+ *               type: number
+ *             discountAmount:
+ *               type: number
+ *             discountLabel:
+ *               type: string
+ *             taxRatePct:
+ *               type: number
+ *             taxLabel:
+ *               type: string
+ *         pricingBreakdown:
+ *           $ref: '#/components/schemas/PricingBreakdown'
  *         paymentMilestones:
  *           type: array
  *           items:
  *             type: object
  *             properties:
- *               type:
+ *               title:
  *                 type: string
- *                 enum: [Token, Advanced1, Advanced2, FinalClearance]
+ *                 example: "Token"
+ *               percentage:
+ *                 type: number
+ *                 example: 20
  *               amount:
  *                 type: number
  *               dueDate:
@@ -106,20 +248,9 @@ import {
  *               receivedDate:
  *                 type: string
  *                 format: date-time
- *         charges:
- *           type: array
- *           items:
- *             type: object
- *             properties:
- *               label:
- *                 type: string
- *               amount:
- *                 type: number
- *               type:
- *                 type: string
- *                 enum: [Base, Fee, Discount, Tax]
  *         totalAmount:
  *           type: number
+ *           description: Derived — mirrors pricingBreakdown.finalAmount.
  *         totalReceived:
  *           type: number
  *         notes:
@@ -144,9 +275,10 @@ import {
  *   post:
  *     summary: Create a new booking
  *     description: |
- *       Creates a booking for the vendor's package. Snapshots the package
- *       data (name, price, image) at creation time. Checks for date conflicts
- *       with other bookings or calendar blocks.
+ *       Creates a booking for the vendor's package and snapshots that package —
+ *       name, price, media and the full per-vendor-type deliverables list — so
+ *       later edits to the package never rewrite what this customer was sold.
+ *       Checks for date conflicts with other bookings or calendar blocks.
  *     tags: [Bookings]
  *     parameters:
  *       - in: path
@@ -209,38 +341,31 @@ import {
  *                 type: string
  *                 enum: [FreeBooking, AdvancePaid, FullPaid]
  *                 example: "FreeBooking"
- *               totalAmount:
+ *               respondByAt:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Defaults to 24 hours from creation.
+ *               basePrice:
  *                 type: number
- *                 example: 25000
+ *                 description: Overrides the package price when negotiated separately.
+ *               taxRatePct:
+ *                 type: number
+ *                 default: 18
  *               paymentMilestones:
  *                 type: array
  *                 items:
  *                   type: object
  *                   properties:
- *                     type:
+ *                     title:
  *                       type: string
- *                       enum: [Token, Advanced1, Advanced2, FinalClearance]
+ *                       example: "Token"
+ *                     percentage:
+ *                       type: number
  *                     amount:
  *                       type: number
  *                     dueDate:
  *                       type: string
  *                       format: date
- *               charges:
- *                 type: array
- *                 items:
- *                   type: object
- *                   required: [label, amount]
- *                   properties:
- *                     label:
- *                       type: string
- *                       example: "₹500 x 240 guests"
- *                     amount:
- *                       type: number
- *                       example: 120000
- *                     type:
- *                       type: string
- *                       enum: [Base, Fee, Discount, Tax]
- *                       example: "Base"
  *               notes:
  *                 type: string
  *               calendarNote:
@@ -263,8 +388,9 @@ router.post("/vendor/:vendorId", createBooking);
  *   get:
  *     summary: Get vendor bookings (filtered, paginated)
  *     description: |
- *       Returns a paginated list of bookings for the vendor.
- *       Each booking is annotated with `conflictDetected` flag.
+ *       Returns a paginated list of bookings for the vendor. Each booking is
+ *       annotated with a `conflictDetected` flag and its derived
+ *       `pricingBreakdown`.
  *     tags: [Bookings]
  *     parameters:
  *       - in: path
@@ -276,7 +402,12 @@ router.post("/vendor/:vendorId", createBooking);
  *         name: status
  *         schema:
  *           type: string
- *           enum: [Pending, Accepted, Declined, Cancelled, Completed]
+ *           enum: [NewBooking, Viewed, InDiscussion, Confirmed, Declined, Cancelled, Completed]
+ *       - in: query
+ *         name: paymentType
+ *         schema:
+ *           type: string
+ *           enum: [FreeBooking, AdvancePaid, FullPaid]
  *       - in: query
  *         name: startDate
  *         schema:
@@ -312,7 +443,10 @@ router.get("/vendor/:vendorId", getVendorBookings);
  * /api/bookings/{bookingId}:
  *   get:
  *     summary: Get a single booking by ID
- *     description: Supports both MongoDB _id and human-readable bookingId (EVT...).
+ *     description: |
+ *       Supports both MongoDB _id and human-readable bookingId (EVT...).
+ *       Returns the package snapshot, every change request and the derived
+ *       pricing breakdown.
  *     tags: [Bookings]
  *     parameters:
  *       - in: path
@@ -338,10 +472,11 @@ router.get("/:bookingId", getBookingById);
  * @swagger
  * /api/bookings/{bookingId}/accept:
  *   put:
- *     summary: Accept a pending booking
+ *     summary: Accept a booking
  *     description: |
- *       Sets booking status to "Accepted". Only Pending bookings can be accepted.
- *       Updates the package's availabilityCalendar to "Booked" for the event date.
+ *       Sets booking status to "Confirmed". Allowed from NewBooking, Viewed or
+ *       InDiscussion. Updates the package's availabilityCalendar to "Booked"
+ *       for the event date.
  *     tags: [Bookings]
  *     parameters:
  *       - in: path
@@ -353,7 +488,7 @@ router.get("/:bookingId", getBookingById);
  *       200:
  *         description: Booking accepted
  *       400:
- *         description: Booking not in Pending status
+ *         description: Booking already resolved
  *       404:
  *         description: Booking not found
  *       500:
@@ -365,8 +500,10 @@ router.put("/:bookingId/accept", acceptBooking);
  * @swagger
  * /api/bookings/{bookingId}/decline:
  *   put:
- *     summary: Decline a pending booking
- *     description: Sets booking status to "Declined". Only Pending bookings can be declined.
+ *     summary: Decline a booking
+ *     description: |
+ *       Sets booking status to "Declined" and records when and why. Allowed
+ *       from NewBooking, Viewed or InDiscussion.
  *     tags: [Bookings]
  *     parameters:
  *       - in: path
@@ -374,11 +511,20 @@ router.put("/:bookingId/accept", acceptBooking);
  *         required: true
  *         schema:
  *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               reason:
+ *                 type: string
+ *                 example: "Already booked for that date"
  *     responses:
  *       200:
  *         description: Booking declined
  *       400:
- *         description: Booking not in Pending status
+ *         description: Booking already resolved
  *       404:
  *         description: Booking not found
  *       500:
@@ -392,8 +538,9 @@ router.put("/:bookingId/decline", declineBooking);
  *   put:
  *     summary: Cancel a booking
  *     description: |
- *       Sets booking status to "Cancelled". Can cancel Pending or Accepted bookings.
- *       If the booking was Accepted, reverts the package availability to "Available".
+ *       Sets booking status to "Cancelled" and records who cancelled it and
+ *       why. If the booking was Confirmed, reverts the package availability to
+ *       "Available".
  *     tags: [Bookings]
  *     parameters:
  *       - in: path
@@ -401,6 +548,18 @@ router.put("/:bookingId/decline", declineBooking);
  *         required: true
  *         schema:
  *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               cancelledBy:
+ *                 type: string
+ *                 enum: [Vendor, Customer]
+ *                 default: Vendor
+ *               reason:
+ *                 type: string
  *     responses:
  *       200:
  *         description: Booking cancelled
@@ -414,18 +573,21 @@ router.put("/:bookingId/decline", declineBooking);
 router.put("/:bookingId/cancel", cancelBooking);
 
 // ============================================================
-//  PAYMENT MILESTONES
+//  PACKAGE CHANGE REQUESTS
 // ============================================================
 
 /**
  * @swagger
- * /api/bookings/{bookingId}/milestone:
- *   put:
- *     summary: Update a payment milestone status
+ * /api/bookings/{bookingId}/change-requests:
+ *   post:
+ *     summary: Submit the customer's requested package changes
  *     description: |
- *       Updates a specific milestone (Token, Advanced1, Advanced2, FinalClearance)
- *       to a new status. When marking as "Received", automatically creates a
- *       Transaction record and updates totalReceived on the booking.
+ *       The customer asks for items to be added to or removed from the booked
+ *       package. Each change names a `category` and the `item` within it — a
+ *       caterer's "Cuisine: North Indian", a DJ's "Equipment: Par Lights".
+ *
+ *       Requests land as Pending and do not affect the price until the vendor
+ *       accepts them. A pre-acceptance booking moves to "InDiscussion".
  *     tags: [Bookings]
  *     parameters:
  *       - in: path
@@ -439,132 +601,136 @@ router.put("/:bookingId/cancel", cancelBooking);
  *         application/json:
  *           schema:
  *             type: object
- *             required: [milestoneType, status]
+ *             required: [changes]
  *             properties:
- *               milestoneType:
- *                 type: string
- *                 enum: [Token, Advanced1, Advanced2, FinalClearance]
- *                 example: "Token"
- *               status:
- *                 type: string
- *                 enum: [Pending, PaymentDue, Received]
- *                 example: "Received"
- *     responses:
- *       200:
- *         description: Milestone updated
- *       400:
- *         description: Validation failed
- *       404:
- *         description: Booking or milestone not found
- *       500:
- *         description: Server error
- */
-router.put("/:bookingId/milestone", updateMilestoneStatus);
-
-/**
- * @swagger
- * /api/bookings/{bookingId}/note:
- *   put:
- *     summary: Save the vendor's calendar note on a booking
- *     description: |
- *       Saves/updates the vendor-private calendar note shown in the
- *       "Calendar Note" section of the booking details screen.
- *     tags: [Bookings]
- *     parameters:
- *       - in: path
- *         name: bookingId
- *         required: true
- *         schema:
- *           type: string
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [calendarNote]
- *             properties:
- *               calendarNote:
- *                 type: string
- *                 example: "Confirm parking access with the venue."
- *     responses:
- *       200:
- *         description: Calendar note saved
- *       400:
- *         description: calendarNote is required
- *       404:
- *         description: Booking not found
- *       500:
- *         description: Server error
- */
-router.put("/:bookingId/note", updateCalendarNote);
-
-/**
- * @swagger
- * /api/bookings/{bookingId}/customize:
- *   put:
- *     summary: Customize the package for a specific booking
- *     description: |
- *       Lets the vendor override package details (name, price, addons) for one booking
- *       without touching the original Package document. Writes to booking.customizedPackage
- *       and syncs booking.charges[] + booking.totalAmount. Only Accepted bookings can be
- *       customized. Idempotent — calling again overwrites the previous customization.
- *     tags: [Bookings]
- *     parameters:
- *       - in: path
- *         name: bookingId
- *         required: true
- *         schema:
- *           type: string
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               packageName:
- *                 type: string
- *                 example: "Corporate Premium (Custom)"
- *               basePrice:
- *                 type: number
- *                 example: 25000
- *               billingUnit:
- *                 type: string
- *                 enum: [Per Event, Per Hour, Per Day, Per Guest]
- *                 example: "Per Event"
- *               lineItems:
+ *               changes:
  *                 type: array
  *                 items:
  *                   type: object
- *                   required: [label, amount]
+ *                   required: [changeType, category, item]
  *                   properties:
- *                     label:
+ *                     changeType:
  *                       type: string
- *                       example: "Base Package"
- *                     amount:
- *                       type: number
- *                       example: 25000
+ *                       enum: [Add, Remove]
+ *                     itemKind:
+ *                       type: string
+ *                       enum: [Item, Addon, Substitute]
+ *                     category:
+ *                       type: string
+ *                       example: "Cuisine"
+ *                     item:
+ *                       type: string
+ *                       example: "North Indian"
  *                     qty:
  *                       type: number
  *                       default: 1
- *                     type:
- *                       type: string
- *                       enum: [Base, Addon, Fee, Discount, Tax]
- *                       default: Addon
- *               notes:
- *                 type: string
- *                 example: "Client requested fog machine for entrance"
  *     responses:
- *       200:
- *         description: Package customized successfully
+ *       201:
+ *         description: Change requests submitted
  *       400:
- *         description: Booking not Accepted, or validation failed
+ *         description: Validation failed, unresolvable path, or booking already resolved
  *       404:
  *         description: Booking not found
  *       500:
  *         description: Server error
  */
-router.put("/:bookingId/customize", customizeBookingPackage);
+router.post("/:bookingId/change-requests", requestPackageChanges);
+
+/**
+ * @swagger
+ * /api/bookings/{bookingId}:
+ *   put:
+ *     summary: Apply the vendor's edits to a booking
+ *     description: |
+ *       Everything the vendor changes on the booking details screen is saved in
+ *       one call — the decision on each change request, the pricing rows, the
+ *       payment plan and the calendar note. Every field is optional; send only
+ *       what changed.
+ *
+ *       Decisions and the price they were agreed at land together, so a
+ *       half-applied edit is not reachable. Milestones already marked Received
+ *       are preserved and any incoming `Received` is coerced down — editing the
+ *       plan never marks money as received. `totalAmount` and the pricing
+ *       breakdown are re-derived.
+ *     tags: [Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               changeRequests:
+ *                 type: array
+ *                 description: The vendor's decision on each request, by id.
+ *                 items:
+ *                   type: object
+ *                   required: [id]
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     status:
+ *                       type: string
+ *                       enum: [Pending, Accepted, Rejected]
+ *                     qty:
+ *                       type: number
+ *               pricing:
+ *                 type: object
+ *                 properties:
+ *                   basePrice:
+ *                     type: number
+ *                   itemsAdded:
+ *                     type: number
+ *                   addonsAdded:
+ *                     type: number
+ *                   substituteItemsAdded:
+ *                     type: number
+ *                   itemsRemoved:
+ *                     type: number
+ *                   addonsRemoved:
+ *                     type: number
+ *                   discountAmount:
+ *                     type: number
+ *                   discountLabel:
+ *                     type: string
+ *                   taxRatePct:
+ *                     type: number
+ *               paymentMilestones:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   required: [title, amount]
+ *                   properties:
+ *                     title:
+ *                       type: string
+ *                     percentage:
+ *                       type: number
+ *                     amount:
+ *                       type: number
+ *                     dueDate:
+ *                       type: string
+ *                       format: date
+ *                     status:
+ *                       type: string
+ *                       enum: [Pending, PaymentDue]
+ *               calendarNote:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Booking updated
+ *       400:
+ *         description: Validation failed, or booking already resolved
+ *       404:
+ *         description: Booking or change request not found
+ *       500:
+ *         description: Server error
+ */
+router.put("/:bookingId", updateBooking);
 
 export default router;
