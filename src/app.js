@@ -21,33 +21,12 @@ app.use(helmet({ contentSecurityPolicy: false }));
 
 // CORS — customer auth now relies on httpOnly cookies, which browsers only
 // send cross-origin when credentials:true AND a specific (non-wildcard)
-// origin are both set. FRONTEND_URL covers the deployed frontend; the
-// localhost/127.0.0.1/private-LAN-IP allowance mirrors the frontend's own
-// dev-detection pattern (src/lib/api.ts) so testing from a phone/another
-// device on the same network still works during local development.
-const isDevOrigin = (origin) => {
-  if (!origin) return true; // same-origin / non-browser tools (curl, Postman)
-  try {
-    const { hostname } = new URL(origin);
-    return (
-      hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
-      /^10\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
-      /^192\.168\.\d{1,3}\.\d{1,3}$/.test(hostname) ||
-      /^172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3}$/.test(hostname)
-    );
-  } catch {
-    return false;
-  }
-};
+// origin are both set. Setting origin: true dynamically reflects the
+// requesting origin back in the Access-Control-Allow-Origin header,
+// which satisfies the requirement for credentials while allowing all origins.
 app.use(
   cors({
-    origin: (origin, callback) => {
-      if (origin === process.env.FRONTEND_URL || isDevOrigin(origin)) {
-        return callback(null, true);
-      }
-      callback(new Error("Not allowed by CORS"));
-    },
+    origin: true,
     credentials: true,
   })
 );
