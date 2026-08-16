@@ -436,7 +436,8 @@ router.get("/vendor/:vendorId", getVendorPackages);
  *     description: |
  *       Updates fields within a specific step using deep merge (dot-notation $set).
  *       Only the fields you send are updated — missing fields are NOT wiped.
- *       Automatically adds the stepNumber to completedSteps.
+ *       Automatically adds the stepNumber to completedSteps, unless
+ *       `markCompleted=false` is passed (Save & Exit: stash partial data only).
  *
  *       **Important**: Send ONLY the fields you want to update, not the full step object.
  *
@@ -488,6 +489,15 @@ router.get("/vendor/:vendorId", getVendorPackages);
  *           minimum: 1
  *           maximum: 4
  *         description: "Step to update: 1, 2, 3, or 4"
+ *       - in: query
+ *         name: markCompleted
+ *         required: false
+ *         schema:
+ *           type: boolean
+ *           default: true
+ *         description: >
+ *           Set to false to save the step data without recording the step as
+ *           completed (Save & Exit).
  *     requestBody:
  *       required: true
  *       content:
