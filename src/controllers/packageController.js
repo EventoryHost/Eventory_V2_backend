@@ -143,8 +143,8 @@ export const getPackageById = async (req, res) => {
 
 // Steps 1-4 are the package setup; 5-8 are the booking settings sections,
 // which live at the top level rather than under a stepN_ key. Saving through a
-// step also records it in completedSteps, so the vendor can resume from
-// wherever they left off.
+// step also records it in completedSteps (unless the caller opts out), so the
+// vendor can resume from wherever they left off.
 const STEP_FIELDS = {
   1: "step1_eventAndCrew",
   2: "step2_productsAndPricing",
@@ -183,15 +183,29 @@ export const updatePackageStep = async (req, res) => {
       flatUpdates[`${updateField}.${key}`] = stepData[key];
     });
 
-    // Also update completedSteps if not already there
-    const updatedPackage = await Model.findByIdAndUpdate(
-      packageId,
-      {
-        $set: flatUpdates,
-        $addToSet: { completedSteps: parseInt(stepNumber) }
-      },
-      { new: true, runValidators: true }
-    );
+    // `?markCompleted=false` persists the partially filled step without
+    // recording progress — used by Save & Exit, where the vendor is only
+    // stashing what they typed so far.
+    const markCompleted = req.query.markCompleted !== "false";
+
+    const update = {};
+    if (Object.keys(flatUpdates).length > 0) update.$set = flatUpdates;
+    if (markCompleted) {
+      update.$addToSet = { completedSteps: parseInt(stepNumber) };
+    }
+
+    if (Object.keys(update).length === 0) {
+      return res.status(200).json({
+        status: "SUCCESS",
+        message: `Step ${stepNumber} unchanged`,
+        package: basePkg,
+      });
+    }
+
+    const updatedPackage = await Model.findByIdAndUpdate(packageId, update, {
+      new: true,
+      runValidators: true,
+    });
 
     if (!updatedPackage) {
       return res.status(404).json({ status: "FAILED", message: "Package not found" });
