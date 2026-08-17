@@ -18,9 +18,25 @@ export const customerSignupSchema = z.object({
   password: z.string().min(8, "password must be at least 8 characters"),
 });
 
-export const customerLoginSchema = z.object({
-  email: z.string().trim().toLowerCase().email("email must be a valid email address"),
-  password: z.string().min(1, "password is required"),
+// Accepts EITHER {email,password} or {mobile,password} — 2026-08-17
+// frontend handoff's STEP "phone-password" alternate login. superRefine
+// enforces exactly one identity field is present rather than silently
+// preferring one if a caller sends both.
+export const customerLoginSchema = z
+  .object({
+    email: z.string().trim().toLowerCase().email("email must be a valid email address").optional(),
+    mobile: z.string().trim().regex(MOBILE_REGEX, "mobile must be a valid 10-digit Indian mobile number").optional(),
+    password: z.string().min(1, "password is required"),
+  })
+  .superRefine((data, ctx) => {
+    if (Boolean(data.email) === Boolean(data.mobile)) {
+      ctx.addIssue({ code: "custom", path: ["email"], message: "Provide exactly one of email or mobile" });
+    }
+  });
+
+// POST /customer/auth/set-password — 2026-08-17 frontend handoff.
+export const setPasswordSchema = z.object({
+  password: z.string().min(8, "password must be at least 8 characters"),
 });
 
 export const customerRefreshTokenSchema = z.object({
