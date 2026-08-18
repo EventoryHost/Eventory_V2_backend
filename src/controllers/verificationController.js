@@ -370,6 +370,7 @@ export const verifyBankDetails = async (req, res) => {
         const vendor = await Vendor.findOne({ id: vendor_id });
         if (vendor) {
           const newBankAccount = {
+            beneficiaryName: name,
             accountNumber: cleanedAcc,
             ifscCode: cleanedIfsc,
             bankName: "Test Bank",
@@ -452,6 +453,7 @@ export const verifyBankDetails = async (req, res) => {
           const vendor = await Vendor.findOne({ id: vendor_id });
           if (vendor) {
             const newBankAccount = {
+              beneficiaryName: name,
               accountNumber: cleanedAcc,
               ifscCode: cleanedIfsc,
               bankName: data.bank_name,
