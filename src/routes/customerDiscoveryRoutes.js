@@ -5,6 +5,7 @@ import {
   getPackageFilters,
   getVendorFilters,
   getPackageDetail,
+  getPackageGroupVariants,
   getPackageReviews,
   getVendorReviews,
 } from "../controllers/customerDiscoveryController.js";
@@ -94,6 +95,30 @@ router.get("/packages", publicBrowseLimiter, validateRequest(browsePackagesQuery
  *       200: { description: Available filter facets and sort options }
  */
 router.get("/packages/filters", publicBrowseLimiter, getPackageFilters);
+
+/**
+ * @swagger
+ * /api/customer/packages/group/{packageGroupId}:
+ *   get:
+ *     summary: Sibling variants of one logical package (PDP's variant picker)
+ *     description: |
+ *       Public, read-only. Live-only replacement for the vendor-management
+ *       router's internal GET /api/packages/group/:packageGroupId, which the
+ *       PDP frontend was using as a stopgap (no packageStatus filter there —
+ *       could leak Draft/Under Review/Deleted variants to a customer, and no
+ *       vendor field whitelist). Added 2026-08-17.
+ *     tags: [Customer Discovery]
+ *     parameters:
+ *       - in: path
+ *         name: packageGroupId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Every Live variant of this package group, oldest first }
+ *       400: { description: Invalid packageGroupId }
+ *       404: { description: No Live variants found for this package group }
+ */
+router.get("/packages/group/:packageGroupId", publicBrowseLimiter, getPackageGroupVariants);
 
 /**
  * @swagger
