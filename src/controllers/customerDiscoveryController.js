@@ -457,6 +457,43 @@ export const getPackageGroupVariants = async (req, res) => {
 };
 
 /**
+ * @desc Single vendor's public profile — REAL GAP FOUND 2026-08-21 while
+ * auditing the Cart page (Eventory_V2_frontend's src/lib/vendorPublicApi.ts,
+ * used by customer-cart's getCartPageData.ts to resolve a vendorName/avatar
+ * per cart line). No /customer/vendors/:id endpoint existed, so the
+ * frontend was calling the VENDOR-MANAGEMENT router's internal
+ * GET /vendors/:id (its own code comment says as much) — confirmed via a
+ * live call that WITHOUT its optional ?select= param, that route returns
+ * the FULL vendor document: phone, email, bankDetails, aadharNumber,
+ * panNumber, gstNumber, gstCertificate/fssaiLicense/tradeLicense document
+ * URLs, agreementDocUrl, faceMatchScore — the entire KYC/banking surface,
+ * on a public unauthenticated route, only "safe" today because every
+ * current caller happens to always pass the right ?select=. This endpoint
+ * is the proper, safe replacement: server-enforced PUBLIC_VENDOR_FIELDS,
+ * never a client-controlled field list.
+ */
+export const getVendorDetail = async (req, res) => {
+  try {
+    const { vendorId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(vendorId)) {
+      return res.status(400).json({ status: "FAILED", message: "Invalid vendorId" });
+    }
+
+    const vendor = await Vendor.findOne({ _id: vendorId, isDeactivated: { $ne: true } })
+      .select(PUBLIC_VENDOR_FIELDS)
+      .lean();
+
+    if (!vendor) {
+      return res.status(404).json({ status: "FAILED", message: "Vendor not found" });
+    }
+
+    return res.status(200).json({ status: "SUCCESS", vendor });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to fetch vendor", error: error.message });
+  }
+};
+
+/**
  * @desc Standalone, paginated/filterable/sortable review listing for a
  * vendor (across every one of their packages) — the "Review Page" /
  * vendor-profile use case the PDP's embedded top-10 (Step 8) doesn't cover.
