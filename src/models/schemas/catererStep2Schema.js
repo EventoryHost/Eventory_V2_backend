@@ -38,6 +38,7 @@ const catererStep2Schema = new mongoose.Schema({
       category: String,
       subCategory: String,
       quantity: String,
+      isNonVeg: Boolean,
       description: String,
       price: Number,
       billingUnit: String,
