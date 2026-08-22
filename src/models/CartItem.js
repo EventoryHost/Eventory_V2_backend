@@ -20,7 +20,19 @@ import mongoose from "mongoose";
 // becomes a real booking line.
 const SelectedAddOnSchema = new mongoose.Schema(
   {
-    addOnId: { type: mongoose.Schema.Types.ObjectId }, // the vendor's step2 add-on subdocument _id, if it has one
+    // String, NOT ObjectId — REAL BUG FOUND 2026-08-21 (frontend-reported):
+    // the vendor's step2 add-on subdocuments are plain array entries with
+    // NO explicit _id enforcement at the write path, and in practice almost
+    // every currently-seeded package's add-ons/setups/packageItems have no
+    // _id at all (confirmed against the real dev DB — 7 of 8 Live packages'
+    // addOns entirely lack one). The frontend correctly falls back to a
+    // synthetic id ("addon-0") when none exists — this field was previously
+    // typed as ObjectId, so that synthetic value failed to cast on save
+    // ("Cast to ObjectId failed ... at path addOnId"). Never used as an
+    // actual lookup/ref anywhere downstream (cartPricingService.js etc. —
+    // checked), purely a display/tracking tag, so there's no correctness
+    // reason to constrain its shape.
+    addOnId: { type: String, default: null },
     name: { type: String, required: true },
     price: { type: Number, required: true, default: 0 },
     quantity: { type: Number, default: 1, min: 1 },
@@ -37,7 +49,8 @@ const SelectedAddOnSchema = new mongoose.Schema(
 const SelectedItemSchema = new mongoose.Schema(
   {
     groupKey: { type: String, required: true },
-    itemId: { type: mongoose.Schema.Types.ObjectId },
+    // String, NOT ObjectId — same reasoning/fix as SelectedAddOnSchema.addOnId above.
+    itemId: { type: String, default: null },
     itemName: { type: String, required: true },
     price: { type: Number, default: 0 },
     isChargeable: { type: Boolean, default: false },
