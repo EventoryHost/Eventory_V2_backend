@@ -114,6 +114,7 @@ const catererStep2Schema = new mongoose.Schema({
   ],
   included: [{ type: String }],
   notIncluded: [{ type: String }],
+  minMealsPreference: { type: Number },
 }, { _id: false });
 
 export default catererStep2Schema;
