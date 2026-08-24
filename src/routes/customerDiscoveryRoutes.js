@@ -5,7 +5,9 @@ import {
   getPackageFilters,
   getVendorFilters,
   getPackageDetail,
+  getPackageGroupVariants,
   getPackageReviews,
+  getVendorDetail,
   getVendorReviews,
 } from "../controllers/customerDiscoveryController.js";
 import { publicBrowseLimiter } from "../middlewares/rateLimiters.js";
@@ -94,6 +96,30 @@ router.get("/packages", publicBrowseLimiter, validateRequest(browsePackagesQuery
  *       200: { description: Available filter facets and sort options }
  */
 router.get("/packages/filters", publicBrowseLimiter, getPackageFilters);
+
+/**
+ * @swagger
+ * /api/customer/packages/group/{packageGroupId}:
+ *   get:
+ *     summary: Sibling variants of one logical package (PDP's variant picker)
+ *     description: |
+ *       Public, read-only. Live-only replacement for the vendor-management
+ *       router's internal GET /api/packages/group/:packageGroupId, which the
+ *       PDP frontend was using as a stopgap (no packageStatus filter there —
+ *       could leak Draft/Under Review/Deleted variants to a customer, and no
+ *       vendor field whitelist). Added 2026-08-17.
+ *     tags: [Customer Discovery]
+ *     parameters:
+ *       - in: path
+ *         name: packageGroupId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Every Live variant of this package group, oldest first }
+ *       400: { description: Invalid packageGroupId }
+ *       404: { description: No Live variants found for this package group }
+ */
+router.get("/packages/group/:packageGroupId", publicBrowseLimiter, getPackageGroupVariants);
 
 /**
  * @swagger
@@ -231,6 +257,33 @@ router.get("/vendors", publicBrowseLimiter, validateRequest(browseVendorsQuerySc
  *       200: { description: Available filter facets and sort options }
  */
 router.get("/vendors/filters", publicBrowseLimiter, getVendorFilters);
+
+/**
+ * @swagger
+ * /api/customer/vendors/{vendorId}:
+ *   get:
+ *     summary: Single vendor's public profile
+ *     description: |
+ *       Public, read-only, excludes deactivated vendors. Server-enforced
+ *       public-safe field whitelist (PUBLIC_VENDOR_FIELDS) — never a
+ *       client-controlled ?select=, unlike the vendor-management router's
+ *       internal GET /vendors/:id. Added 2026-08-21 after auditing the Cart
+ *       page: no proper customer-facing single-vendor-detail endpoint
+ *       existed, so the frontend was calling that internal route directly,
+ *       which returns the FULL vendor document (phone/email/bank details/
+ *       KYC documents) whenever ?select= is omitted.
+ *     tags: [Customer Discovery]
+ *     parameters:
+ *       - in: path
+ *         name: vendorId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Vendor's public profile }
+ *       400: { description: Invalid vendorId }
+ *       404: { description: Vendor not found (or deactivated) }
+ */
+router.get("/vendors/:vendorId", publicBrowseLimiter, getVendorDetail);
 
 /**
  * @swagger

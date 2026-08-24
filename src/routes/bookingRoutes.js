@@ -37,7 +37,7 @@ import {
  *           enum: [Add, Remove]
  *         itemKind:
  *           type: string
- *           enum: [Item, Addon, Substitute]
+ *           enum: [Item, Addon]
  *         category:
  *           type: string
  *           example: "Performance Type"
@@ -70,7 +70,7 @@ import {
  *             properties:
  *               key:
  *                 type: string
- *                 enum: [itemsAdded, addonsAdded, substituteItemsAdded]
+ *                 enum: [itemsAdded, addonsAdded]
  *               label:
  *                 type: string
  *               amount:
@@ -209,8 +209,6 @@ import {
  *             itemsAdded:
  *               type: number
  *             addonsAdded:
- *               type: number
- *             substituteItemsAdded:
  *               type: number
  *             itemsRemoved:
  *               type: number
@@ -614,7 +612,7 @@ router.put("/:bookingId/cancel", cancelBooking);
  *                       enum: [Add, Remove]
  *                     itemKind:
  *                       type: string
- *                       enum: [Item, Addon, Substitute]
+ *                       enum: [Item, Addon]
  *                     category:
  *                       type: string
  *                       example: "Cuisine"
@@ -688,8 +686,6 @@ router.post("/:bookingId/change-requests", requestPackageChanges);
  *                   itemsAdded:
  *                     type: number
  *                   addonsAdded:
- *                     type: number
- *                   substituteItemsAdded:
  *                     type: number
  *                   itemsRemoved:
  *                     type: number

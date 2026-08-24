@@ -154,7 +154,9 @@ const PackageSchema = new mongoose.Schema(
         security: { type: Boolean, default: false },
         customText: { type: String },
       },
+      venueNeedsList: [{ type: String }],
       tastingSession: { type: Boolean, default: false },
+      tastingSessionCost: { type: Number },
       // Makeup Artist specific
       durationPerPerson: { type: Number },
       durationOfSetup: { type: Number },

@@ -407,6 +407,93 @@ async function computeReviewAggregate(match) {
 }
 
 /**
+ * @desc Sibling variants of one logical package (packageGroupId) — the PDP's
+ * "Standard / Premium / Deluxe" variant picker. Added for the 2026-08-17
+ * PDP handoff: the frontend was calling the VENDOR-management router's
+ * internal GET /api/packages/group/:packageGroupId as a stopgap (their own
+ * code comment flagged this — "no /customer counterpart exists ... used
+ * here strictly as a stopgap"), which is a real problem, not just a style
+ * issue: that route has no packageStatus filter at all, so a customer could
+ * see Draft/Under Review/Deleted sibling variants alongside Live ones, and
+ * it returns the full raw document with no vendor field whitelist. This
+ * endpoint is the proper customer-safe replacement: Live-only, same
+ * resolveVendorForPackage handling as every other customer discovery route.
+ * Public, no auth — same as every other package read here.
+ */
+export const getPackageGroupVariants = async (req, res) => {
+  try {
+    const { packageGroupId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(packageGroupId)) {
+      return res.status(400).json({ status: "FAILED", message: "Invalid packageGroupId" });
+    }
+
+    const PACKAGE_FIELDS =
+      "vendorId vendorType variantType packageGroupId packageStatus " +
+      "step1_eventAndCrew.packageName step1_eventAndCrew.eventCategories " +
+      "step1_eventAndCrew.capacity step1_eventAndCrew.duration " +
+      "step2_productsAndPricing.setups step3_policiesAndCharges.packagePricing " +
+      "step3_policiesAndCharges.gstInclusive step3_policiesAndCharges.gstRatePercent " +
+      "step4_sampleMedia.media createdAt";
+
+    const packages = await Package.find({ packageGroupId, packageStatus: "Live" })
+      .select(PACKAGE_FIELDS)
+      .sort({ createdAt: 1 })
+      .lean();
+
+    if (packages.length === 0) {
+      return res.status(404).json({ status: "FAILED", message: "No Live variants found for this package group" });
+    }
+
+    await Promise.all(
+      packages.map(async (pkg) => {
+        pkg.vendorId = await resolveVendorForPackage(pkg.vendorId);
+      })
+    );
+
+    return res.status(200).json({ status: "SUCCESS", count: packages.length, packageGroupId, packages });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to fetch package group variants", error: error.message });
+  }
+};
+
+/**
+ * @desc Single vendor's public profile — REAL GAP FOUND 2026-08-21 while
+ * auditing the Cart page (Eventory_V2_frontend's src/lib/vendorPublicApi.ts,
+ * used by customer-cart's getCartPageData.ts to resolve a vendorName/avatar
+ * per cart line). No /customer/vendors/:id endpoint existed, so the
+ * frontend was calling the VENDOR-MANAGEMENT router's internal
+ * GET /vendors/:id (its own code comment says as much) — confirmed via a
+ * live call that WITHOUT its optional ?select= param, that route returns
+ * the FULL vendor document: phone, email, bankDetails, aadharNumber,
+ * panNumber, gstNumber, gstCertificate/fssaiLicense/tradeLicense document
+ * URLs, agreementDocUrl, faceMatchScore — the entire KYC/banking surface,
+ * on a public unauthenticated route, only "safe" today because every
+ * current caller happens to always pass the right ?select=. This endpoint
+ * is the proper, safe replacement: server-enforced PUBLIC_VENDOR_FIELDS,
+ * never a client-controlled field list.
+ */
+export const getVendorDetail = async (req, res) => {
+  try {
+    const { vendorId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(vendorId)) {
+      return res.status(400).json({ status: "FAILED", message: "Invalid vendorId" });
+    }
+
+    const vendor = await Vendor.findOne({ _id: vendorId, isDeactivated: { $ne: true } })
+      .select(PUBLIC_VENDOR_FIELDS)
+      .lean();
+
+    if (!vendor) {
+      return res.status(404).json({ status: "FAILED", message: "Vendor not found" });
+    }
+
+    return res.status(200).json({ status: "SUCCESS", vendor });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to fetch vendor", error: error.message });
+  }
+};
+
+/**
  * @desc Standalone, paginated/filterable/sortable review listing for a
  * vendor (across every one of their packages) — the "Review Page" /
  * vendor-profile use case the PDP's embedded top-10 (Step 8) doesn't cover.

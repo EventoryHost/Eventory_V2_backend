@@ -121,3 +121,45 @@ export const identifyCartOwner = async (req, res, next) => {
     next(error);
   }
 };
+
+/**
+ * Soft-auth, no guest-identity concept — 2026-08-17 frontend handoff: phone
+ * OTP became the PRIMARY login/signup path (previously email+password was
+ * primary and phone verification was a secondary step that only ran for an
+ * already-logged-in customer, which is why send-otp/verify-otp used to
+ * require protectCustomer unconditionally). Both routes now need to work
+ * for a genuinely anonymous visitor (new signup, or an existing customer
+ * logging in via OTP) AND keep working for an already-logged-in customer
+ * attaching/re-verifying a phone (e.g. after Google sign-in) — same "valid
+ * token wins, otherwise fall through" shape as identifyCartOwner, just
+ * without a guestId fallback since there's nothing guest-cart-specific
+ * here. Sets req.customer when a valid token is present; otherwise leaves
+ * it unset (never 401s) so the controller can branch on
+ * `req.customer ? attach-to-existing-account : anonymous-login-or-signup`.
+ */
+export const identifyOptionalCustomer = async (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization || "";
+    const [scheme, headerToken] = authHeader.split(" ");
+    const token = (scheme === "Bearer" && headerToken) || req.cookies?.accessToken;
+
+    if (token) {
+      try {
+        const decoded = jwt.verify(token, process.env.JWT_SECRET);
+        if (decoded.role === "customer") {
+          const customer = await Customer.findOne({ id: decoded.id }).lean();
+          if (customer && !customer.isDeactivated) {
+            req.customer = customer;
+          }
+        }
+      } catch {
+        // Invalid/expired token — not an error here, same reasoning as
+        // identifyCartOwner: fall through to anonymous rather than 401.
+      }
+    }
+
+    next();
+  } catch (error) {
+    next(error);
+  }
+};
