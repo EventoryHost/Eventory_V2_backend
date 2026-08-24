@@ -136,7 +136,7 @@ export const createTemplate = async (req, res) => {
  */
 export const getSharedTemplates = async (req, res) => {
   try {
-    const templates = await Template.find().sort({ createdAt: -1 }).lean();
+    const templates = await Template.find({ isLive: true }).sort({ createdAt: -1 }).lean();
 
     return res.status(200).json({
       status: "SUCCESS",

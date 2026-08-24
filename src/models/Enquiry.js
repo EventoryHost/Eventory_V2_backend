@@ -126,6 +126,12 @@ const EnquirySchema = new mongoose.Schema(
       type: Number,
       default: null,
     },
+    expectedBudgetStr: { type: String, default: null },
+    guestCountStr: { type: String, default: null },
+    questionnaire: [{
+      question: String,
+      answer: String,
+    }],
     requests: [{ type: String }],
     matchStrength: {
       type: String,
@@ -253,6 +259,26 @@ const EnquirySchema = new mongoose.Schema(
         type: Date,
         default: null,
       },
+      pricing: {
+        original: { type: Number, default: 0 },
+        itemsAdded: { type: Number, default: 0 },
+        addonsAdded: { type: Number, default: 0 },
+        substituteItemsAdded: { type: Number, default: 0 },
+        itemsRemoved: { type: Number, default: 0 },
+        addonsRemoved: { type: Number, default: 0 },
+        discount: { type: Number, default: 0 },
+        gst: { type: Number, default: 0 },
+        finalAmount: { type: Number, default: 0 },
+        isOverrideEnabled: { type: Boolean, default: false }
+      },
+      termsAndPolicies: {
+        type: String,
+        default: null
+      },
+      termsAttachmentUrl: {
+        type: String,
+        default: null
+      }
     },
   },
   { timestamps: true }

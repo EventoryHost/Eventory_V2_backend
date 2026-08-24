@@ -702,3 +702,61 @@ export const declineEnquiry = async (req, res) => {
     return failed(res, "Failed to decline enquiry", error);
   }
 };
+
+/**
+ * @desc    Save proposal draft for an enquiry
+ * @route   PUT /api/enquiries/:enquiryId/draft
+ */
+export const saveDraft = async (req, res) => {
+  try {
+    const { enquiryId } = req.params;
+    const { customiseData, pricing, termsAndPolicies, attachments, termsAttachmentUrl } = req.body;
+
+    let enquiry;
+    if (enquiryId.startsWith("ENQ")) {
+      enquiry = await Enquiry.findOne({ enquiryId });
+    } else {
+      enquiry = await Enquiry.findById(enquiryId);
+    }
+
+    if (!enquiry) {
+      return res
+        .status(404)
+        .json({ status: "FAILED", message: "Enquiry not found" });
+    }
+
+    if (enquiry.status === "Converted" || enquiry.status === "Declined") {
+      return res.status(400).json({
+        status: "FAILED",
+        message: "Cannot save draft for a converted or declined enquiry",
+      });
+    }
+
+    if (customiseData) {
+      enquiry.customiseData = customiseData;
+    }
+
+    enquiry.proposal = {
+      ...enquiry.proposal,
+      pricing: pricing || enquiry.proposal?.pricing,
+      termsAndPolicies: termsAndPolicies || enquiry.proposal?.termsAndPolicies,
+      termsAttachmentUrl: termsAttachmentUrl || enquiry.proposal?.termsAttachmentUrl,
+      attachments: attachments || enquiry.proposal?.attachments || [],
+    };
+
+    await enquiry.save();
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Draft saved successfully",
+      enquiry,
+    });
+  } catch (error) {
+    console.error("Save Draft Error:", error);
+    return res.status(500).json({
+      status: "ERROR",
+      message: "Failed to save draft",
+      error: error.message,
+    });
+  }
+};

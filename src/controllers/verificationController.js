@@ -2,6 +2,12 @@ import axios from "axios";
 import dotenv from "dotenv";
 import FormData from "form-data";
 import { generateSignature } from "../utils/generateId.js";
+import {
+  getBranchesForBank,
+  statesOf,
+  districtsOf,
+  filterBranches,
+} from "../utils/ifscDataset.js";
 import Vendor from "../models/Vendor.js";
 
 dotenv.config();
@@ -352,6 +358,185 @@ const verifyPAN = async (req, res) => {
 const DUMMY_ACCOUNT_NO = "0000000000";
 const DUMMY_IFSC = "ABCD0ABCDEF";
 
+/**
+ * Branch directory for the "Find IFSC" flow.
+ *
+ * Three shapes off one route, matching the app's drill-down:
+ *   ?bank=HDFC                        -> states the bank operates in
+ *   ?bank=HDFC&state=DELHI            -> districts within that state
+ *   ?bank=HDFC&state=DELHI&q=saket    -> matching branches (with their IFSCs)
+ *
+ * Cashfree has no equivalent — it verifies a known code but cannot search by
+ * location — so this reads Razorpay's open RBI-sourced dataset, cached in
+ * process by ifscDataset.js.
+ */
+export const searchBranches = async (req, res) => {
+  const { bank, state, district, q } = req.query;
+
+  if (!bank) {
+    return res.status(400).json({ message: "Please provide a bank code" });
+  }
+
+  try {
+    const branches = await getBranchesForBank(bank);
+    if (!branches) {
+      return res.status(404).json({
+        status: "FAILED",
+        message: "No branch data available for this bank",
+      });
+    }
+
+    if (!state) {
+      return res.status(200).json({
+        status: "SUCCESS",
+        states: statesOf(branches),
+      });
+    }
+
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 100);
+    const { total, branches: results } = filterBranches(branches, {
+      state,
+      district,
+      q,
+      limit,
+    });
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      total,
+      returned: results.length,
+      branches: results,
+    });
+  } catch (error) {
+    console.error("Branch search error:", error?.message || error);
+    return res.status(500).json({
+      status: "ERROR",
+      message: "Could not load branch list",
+      error: error?.message,
+    });
+  }
+};
+
+/**
+ * Resolve an IFSC code to its bank and branch.
+ *
+ * Backs the "Find IFSC Code" flow in the vendor app, where the user knows
+ * their bank but not the full code. Unlike verifyBankDetails this touches no
+ * account number — it is a directory lookup, so it neither requires a vendor
+ * nor writes anything to the DB.
+ */
+export const verifyIFSC = async (req, res) => {
+  const { ifsc } = req.params;
+
+  if (!ifsc) {
+    return res.status(400).json({ message: "Please provide an IFSC code" });
+  }
+
+  const cleanedIfsc = String(ifsc).trim().toUpperCase();
+
+  // 🔹 Dummy bypass: same test code verifyBankDetails accepts, so the two
+  // flows stay usable together in dev.
+  if (cleanedIfsc === DUMMY_IFSC || cleanedIfsc === "BARB0MUNIRK") {
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "IFSC verified successfully (Dummy/Test Bypass)",
+      branchDetails: {
+        ifsc: cleanedIfsc,
+        bank: "Test Bank",
+        branch: "Munirka",
+        address: "Munirka, New Delhi",
+        city: "New Delhi",
+        state: "Delhi",
+        micr: "110012345",
+      },
+      originalResponse: { dummy: true },
+    });
+  }
+
+  // 4 letters, a 0, then 6 alphanumerics.
+  const ifscPattern = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+  if (process.env.IS_DEV !== "true" && !ifscPattern.test(cleanedIfsc)) {
+    return res.status(400).json({ message: "Invalid IFSC format" });
+  }
+
+  try {
+    const clientId = process.env.CASHFREE_CLIENT_ID;
+    const clientSecret = process.env.CASHFREE_CLIENT_SECRET;
+
+    const publicKey = `-----BEGIN PUBLIC KEY-----\n${process.env.CASHFREE_PUBLIC_KEY}\n-----END PUBLIC KEY-----`;
+
+    const timestamp = Math.floor(Date.now() / 1000);
+    const signature = generateSignature(clientId, publicKey, timestamp);
+
+    const headers = {
+      "x-client-id": clientId,
+      "x-client-secret": clientSecret,
+      "X-Cf-Signature": signature,
+      "X-Timestamp": timestamp.toString(),
+      "Content-Type": "application/json",
+    };
+
+    const url =
+      process.env.IS_DEV === "true"
+        ? "https://sandbox.cashfree.com/verification/ifsc"
+        : "https://api.cashfree.com/verification/ifsc";
+
+    const response = await axios.post(
+      url,
+      {
+        verification_id: `event_ifsc_${Date.now()}`,
+        ifsc: cleanedIfsc,
+      },
+      { headers }
+    );
+
+    const data = response.data;
+
+    if (data.status === "VALID") {
+      return res.status(200).json({
+        status: "SUCCESS",
+        message: "IFSC verified successfully",
+        branchDetails: {
+          ifsc: data.ifsc,
+          bank: data.bank,
+          branch: data.branch,
+          address: data.address,
+          city: data.city,
+          state: data.state,
+          micr: data.micr,
+        },
+        originalResponse: data,
+      });
+    }
+
+    return res.status(200).json({
+      status: "FAILED",
+      message: "IFSC could not be verified",
+      originalResponse: data,
+    });
+  } catch (error) {
+    console.error(
+      "IFSC verification error:",
+      error?.response?.data || error.message
+    );
+
+    // Cashfree answers an unknown IFSC with a 404 — that is a "no such
+    // branch" result for the user, not a server fault.
+    if (error?.response?.status === 404) {
+      return res.status(404).json({
+        status: "FAILED",
+        message: "No branch found for this IFSC code",
+      });
+    }
+
+    return res.status(500).json({
+      status: "ERROR",
+      message: "IFSC verification failed",
+      error: error?.response?.data || error.message,
+    });
+  }
+};
+
 export const verifyBankDetails = async (req, res) => {
   const { bank_account, ifsc, name, phone } = req.body;
 
@@ -370,6 +555,7 @@ export const verifyBankDetails = async (req, res) => {
         const vendor = await Vendor.findOne({ id: vendor_id });
         if (vendor) {
           const newBankAccount = {
+            beneficiaryName: name,
             accountNumber: cleanedAcc,
             ifscCode: cleanedIfsc,
             bankName: "Test Bank",
@@ -452,6 +638,7 @@ export const verifyBankDetails = async (req, res) => {
           const vendor = await Vendor.findOne({ id: vendor_id });
           if (vendor) {
             const newBankAccount = {
+              beneficiaryName: name,
               accountNumber: cleanedAcc,
               ifscCode: cleanedIfsc,
               bankName: data.bank_name,

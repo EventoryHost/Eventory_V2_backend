@@ -10,6 +10,7 @@ import {
   convertEnquiryToBooking,
   declineEnquiry,
   sendProposal,
+  saveDraft,
 } from "../controllers/enquiryController.js";
 
 /**
@@ -826,6 +827,29 @@ router.put("/:enquiryId", updateEnquiry);
  *         description: Server error
  */
 router.put("/:enquiryId/proposal", sendProposal);
+
+/**
+ * @swagger
+ * /api/enquiries/{enquiryId}/draft:
+ *   put:
+ *     summary: Save a proposal draft without sending
+ *     description: Saves the customiseData and proposal fields without changing status.
+ *     tags: [Enquiries]
+ *     parameters:
+ *       - in: path
+ *         name: enquiryId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Draft saved successfully
+ *       400:
+ *         description: Invalid input
+ *       404:
+ *         description: Enquiry not found
+ */
+router.put("/:enquiryId/draft", saveDraft);
 
 /**
  * @swagger

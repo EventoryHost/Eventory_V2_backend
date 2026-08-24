@@ -3,7 +3,7 @@ import express from "express";
 import multer from "multer";
 const verificationRoutes = express.Router();
 
-import { verifyGSTIN, verifyPAN, verifyBankDetails, generateDigilockerUrl, getDigilockerDocument, faceMatch } from "../controllers/verificationController.js";
+import { verifyGSTIN, verifyPAN, verifyBankDetails, verifyIFSC, searchBranches, generateDigilockerUrl, getDigilockerDocument, faceMatch } from "../controllers/verificationController.js";
 
 // Multer config for Face Match
 const faceMatchUpload = multer({
@@ -103,6 +103,82 @@ verificationRoutes.get("/pan-gstin/:panNo", verifyPAN);
  *         description: Missing required fields
  */
 verificationRoutes.post("/bank", verifyBankDetails);
+/**
+ * @swagger
+ * /api/verification/ifsc/{ifsc}:
+ *   get:
+ *     summary: Look up an IFSC code
+ *     description: Resolves an IFSC code to its bank and branch details using the Cashfree API. Backs the "Find IFSC Code" flow.
+ *     tags:
+ *       - Verification
+ *     parameters:
+ *       - in: path
+ *         name: ifsc
+ *         required: true
+ *         schema:
+ *           type: string
+ *           example: "HDFC0001234"
+ *         description: The 11-character IFSC code to look up
+ *     responses:
+ *       200:
+ *         description: IFSC lookup result
+ *       400:
+ *         description: Missing or invalid IFSC format
+ *       404:
+ *         description: No branch found for this IFSC
+ */
+verificationRoutes.get("/ifsc/:ifsc", verifyIFSC);
+/**
+ * @swagger
+ * /api/verification/branches:
+ *   get:
+ *     summary: Find bank branches (and their IFSC codes)
+ *     description: >
+ *       Backs the "Find IFSC Code" flow, for vendors who know their branch but
+ *       not their IFSC. With only `bank`, returns the states that bank operates
+ *       in. With `bank` and `state`, returns the districts. Adding `district`
+ *       or `q` returns matching branches, each with its IFSC code.
+ *     tags:
+ *       - Verification
+ *     parameters:
+ *       - in: query
+ *         name: bank
+ *         required: true
+ *         schema:
+ *           type: string
+ *           example: "HDFC"
+ *         description: Four-letter IFSC bank code
+ *       - in: query
+ *         name: state
+ *         schema:
+ *           type: string
+ *           example: "UTTAR PRADESH"
+ *       - in: query
+ *         name: district
+ *         schema:
+ *           type: string
+ *           example: "GAUTAM BUDDHA NAGAR"
+ *       - in: query
+ *         name: q
+ *         schema:
+ *           type: string
+ *           example: "noida"
+ *         description: Free-text match on branch name, city or address
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 50
+ *           maximum: 100
+ *     responses:
+ *       200:
+ *         description: States, districts, or matching branches
+ *       400:
+ *         description: Missing bank code
+ *       404:
+ *         description: No branch data for this bank
+ */
+verificationRoutes.get("/branches", searchBranches);
 /**
  * @swagger
  * /api/verification/digilocker/generate-url:

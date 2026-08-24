@@ -323,8 +323,35 @@ export const validateCreateEnquiry = (body) => {
     }
   }
 
-  return { valid: errors.length === 0, errors };
-};
+  if (pricing !== undefined) {
+    if (typeof pricing !== "object" || pricing === null) {
+      errors.push("pricing must be an object");
+    } else {
+      if (
+        pricing.basePrice !== undefined &&
+        pricing.basePrice !== null &&
+        (typeof pricing.basePrice !== "number" || pricing.basePrice < 0)
+      ) {
+        errors.push("pricing.basePrice must be a number >= 0");
+      }
+      for (const field of PRICING_AMOUNT_FIELDS) {
+        if (
+          pricing[field] !== undefined &&
+          (typeof pricing[field] !== "number" || pricing[field] < 0)
+        ) {
+          errors.push(`pricing.${field} must be a number >= 0`);
+        }
+      }
+      if (
+        pricing.taxRatePct !== undefined &&
+        (typeof pricing.taxRatePct !== "number" ||
+          pricing.taxRatePct < 0 ||
+          pricing.taxRatePct > 100)
+      ) {
+        errors.push("pricing.taxRatePct must be a number between 0 and 100");
+      }
+    }
+  }
 
 /**
  * Validate the vendor's edits to an enquiry — the accept/reject decisions and

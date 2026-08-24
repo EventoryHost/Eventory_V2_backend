@@ -24,18 +24,23 @@ export const initializePackage = async (req, res) => {
       });
     }
 
-    // Resolve human-readable custom vendor ID (e.g., "VEN...") to MongoDB ObjectId
+    // Ensure vendorId is in the custom string format (e.g., "VEN...")
     let actualVendorId = vendorId;
-    if (typeof vendorId === "string" && vendorId.startsWith("VEN")) {
-      const vendorDoc = await Vendor.findOne({ id: vendorId }).select('_id');
-      if (vendorDoc) {
-        actualVendorId = vendorDoc._id;
+    if (mongoose.Types.ObjectId.isValid(vendorId)) {
+      const vendorDoc = await Vendor.findById(vendorId).select('id');
+      if (vendorDoc && vendorDoc.id) {
+        actualVendorId = vendorDoc.id;
       } else {
         return res.status(404).json({
           status: "FAILED",
-          message: `Vendor with ID ${vendorId} not found in database`,
+          message: `Vendor with ObjectId ${vendorId} not found in database`,
         });
       }
+    } else if (typeof vendorId === "string" && !vendorId.startsWith("VEN")) {
+      return res.status(400).json({
+        status: "FAILED",
+        message: "Invalid vendorId format",
+      });
     }
 
     const Model = getModelForVendor(vendorType);
@@ -68,16 +73,16 @@ export const initializePackage = async (req, res) => {
     const existingDraft = await Model.findOne(
       hasClientGroupId
         ? {
-            packageGroupId: resolvedGroupId,
-            packageStatus: "Draft",
-            variantType: resolvedVariant,
-          }
+          packageGroupId: resolvedGroupId,
+          packageStatus: "Draft",
+          variantType: resolvedVariant,
+        }
         : {
-            vendorId: actualVendorId,
-            packageStatus: "Draft",
-            variantType: resolvedVariant,
-            "step1_eventAndCrew.packageName": resolvedName,
-          }
+          vendorId: actualVendorId,
+          packageStatus: "Draft",
+          variantType: resolvedVariant,
+          "step1_eventAndCrew.packageName": resolvedName,
+        }
     );
     if (existingDraft) {
       return res.status(200).json({
@@ -138,8 +143,8 @@ export const getPackageById = async (req, res) => {
 
 // Steps 1-4 are the package setup; 5-8 are the booking settings sections,
 // which live at the top level rather than under a stepN_ key. Saving through a
-// step also records it in completedSteps, so the vendor can resume from
-// wherever they left off.
+// step also records it in completedSteps (unless the caller opts out), so the
+// vendor can resume from wherever they left off.
 const STEP_FIELDS = {
   1: "step1_eventAndCrew",
   2: "step2_productsAndPricing",
@@ -178,15 +183,29 @@ export const updatePackageStep = async (req, res) => {
       flatUpdates[`${updateField}.${key}`] = stepData[key];
     });
 
-    // Also update completedSteps if not already there
-    const updatedPackage = await Model.findByIdAndUpdate(
-      packageId,
-      { 
-        $set: flatUpdates,
-        $addToSet: { completedSteps: parseInt(stepNumber) }
-      },
-      { new: true, runValidators: true }
-    );
+    // `?markCompleted=false` persists the partially filled step without
+    // recording progress — used by Save & Exit, where the vendor is only
+    // stashing what they typed so far.
+    const markCompleted = req.query.markCompleted !== "false";
+
+    const update = {};
+    if (Object.keys(flatUpdates).length > 0) update.$set = flatUpdates;
+    if (markCompleted) {
+      update.$addToSet = { completedSteps: parseInt(stepNumber) };
+    }
+
+    if (Object.keys(update).length === 0) {
+      return res.status(200).json({
+        status: "SUCCESS",
+        message: `Step ${stepNumber} unchanged`,
+        package: basePkg,
+      });
+    }
+
+    const updatedPackage = await Model.findByIdAndUpdate(packageId, update, {
+      new: true,
+      runValidators: true,
+    });
 
     if (!updatedPackage) {
       return res.status(404).json({ status: "FAILED", message: "Package not found" });
@@ -256,18 +275,18 @@ export const getVendorPackages = async (req, res) => {
   try {
     const { vendorId } = req.params;
     const { status, packageGroupId } = req.query;
-    
-    // Resolve human-readable custom vendor ID (e.g., "VEN...") to MongoDB ObjectId
+
+    // Ensure vendorId is in the custom string format (e.g., "VEN...")
     let actualVendorId = vendorId;
-    if (typeof vendorId === "string" && vendorId.startsWith("VEN")) {
-      const vendorDoc = await Vendor.findOne({ id: vendorId }).select('_id');
-      if (vendorDoc) {
-        actualVendorId = vendorDoc._id;
+    if (mongoose.Types.ObjectId.isValid(vendorId)) {
+      const vendorDoc = await Vendor.findById(vendorId).select('id');
+      if (vendorDoc && vendorDoc.id) {
+        actualVendorId = vendorDoc.id;
       } else {
         return res.status(200).json({ status: "SUCCESS", count: 0, packages: [] });
       }
     }
-    
+
     const query = { vendorId: actualVendorId };
     if (status) query.packageStatus = status;
     if (packageGroupId) {
