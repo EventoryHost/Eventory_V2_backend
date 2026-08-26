@@ -6,6 +6,7 @@ import Package from "../models/Package.js";
 import { computeQuoteForLines } from "../services/cartPricingService.js";
 import { computeContactValidation, computeLinesValidation } from "../services/checkoutValidationService.js";
 import { computeAvailability } from "../utils/packageAvailability.js";
+import { resolveVendorRefId } from "../utils/resolveVendor.js";
 
 /**
  * Checkout session — Phase 4 Steps 15-16. A short-lived, price-locked
@@ -41,6 +42,18 @@ async function buildLine({
     return { error: { status: 404, message: `Package ${packageId} not found or not currently available` } };
   }
 
+  // Package.vendorId is stored as the Vendor's business-id string (e.g.
+  // "VEN20260511163553528") for every currently-seeded package, not its
+  // Mongo _id, despite the schema declaring ref: "Vendor" — same known
+  // quirk as Cart's add-to-cart (customerCartController.js) and
+  // packageAvailability.js. CheckoutLineSchema.vendorId is a required
+  // ObjectId, so copying pkg.vendorId forward verbatim throws a cast error
+  // at session.save() — resolve to the real Vendor._id first instead.
+  const resolvedVendorId = await resolveVendorRefId(pkg.vendorId);
+  if (!resolvedVendorId) {
+    return { error: { status: 500, message: `This package's vendor could not be resolved for package ${packageId}` } };
+  }
+
   const cap = pkg.step1_eventAndCrew?.capacity || {};
   if (guests !== undefined) {
     const withinCapacity = (cap.minGuests == null || guests >= cap.minGuests) && (cap.maxGuests == null || guests <= cap.maxGuests);
@@ -56,7 +69,7 @@ async function buildLine({
 
   return {
     line: {
-      vendorId: pkg.vendorId,
+      vendorId: resolvedVendorId,
       packageId: pkg._id,
       packageGroupId: pkg.packageGroupId,
       sourceCartItemId: sourceCartItemId || null,
@@ -327,8 +340,12 @@ export const updateCheckoutLine = async (req, res) => {
           message: "packageId must be a variant of the same package (matching packageGroupId) — use Cart to add a different package entirely",
         });
       }
+      const resolvedNewVendorId = await resolveVendorRefId(newPkg.vendorId);
+      if (!resolvedNewVendorId) {
+        return res.status(500).json({ status: "ERROR", message: "This package's vendor could not be resolved" });
+      }
       line.packageId = newPkg._id;
-      line.vendorId = newPkg.vendorId;
+      line.vendorId = resolvedNewVendorId;
       line.packageSnapshot = {
         name: newPkg.step1_eventAndCrew?.packageName,
         price: newPkg.step3_policiesAndCharges?.packagePricing?.price ?? null,

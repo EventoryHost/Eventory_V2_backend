@@ -2,7 +2,6 @@ import Booking from "../models/Booking.js";
 import Package from "../models/Package.js";
 import { generateISTId } from "../utils/idGenerator.js";
 import { utcDayRange } from "../utils/dateRange.js";
-import { round2 } from "../utils/money.js";
 
 /**
  * Turns a paid CheckoutSession into real Booking documents — Phase 4 Step
@@ -18,7 +17,8 @@ import { round2 } from "../utils/money.js";
  * booking twice — same idempotent-by-design pattern as the rest of this
  * payment flow. Also called (with a $0 "Free" payment) from the checkout
  * controller's confirm-free endpoint for the "(or no-upfront flow)" case
- * this step's own title calls out.
+ * this step's own title calls out, and (with assumeFullyPaid: true) from
+ * confirmOfflineCheckout for payment handled entirely outside this app.
  *
  * "generateId.js" prefix note: bookingId uses generateISTId("EVT") —
  * REUSING the vendor-side bookingController.js's own convention
@@ -27,39 +27,34 @@ import { round2 } from "../utils/money.js";
  * (e.g. the "EVT"-prefixed lookup branch in getBookingById).
  */
 
-// Booking.paymentMilestones[].type is a STRICT 4-value enum (Token,
-// Advanced1, Advanced2, FinalClearance) — but the vendor's own
-// Package.paymentMilestones.milestones[].title is free text with NO
-// constraint tying it to that enum, and no cap on how many a vendor can
-// configure. This is a genuine PRE-EXISTING mismatch between two
-// vendor-authored schemas (Package.js vs Booking.js), not something
-// introduced or fixable here (changing Booking.js's enum is a vendor-code
-// change, off-limits without asking). Best-effort, honestly capped
-// mapping: the milestone actually paid via this Token order becomes
-// "Token"; the rest are assigned Advanced1/Advanced2/FinalClearance IN
-// ORDER. If a vendor configured more than 4 total milestones, only the
-// first 4 are tracked in Booking.paymentMilestones — flagged in info.txt,
-// not silently dropped without a trace (a warning is logged).
-function mapMilestonesToBookingSchema(quoteMilestones, tokenAmountPaid, paidAt) {
-  const ENUM_SLOTS = ["Token", "Advanced1", "Advanced2", "FinalClearance"];
-  if (quoteMilestones.length > ENUM_SLOTS.length) {
-    console.warn(
-      `[bookingCreationService] Package has ${quoteMilestones.length} payment milestones configured, but Booking.paymentMilestones only supports ${ENUM_SLOTS.length} (Token/Advanced1/Advanced2/FinalClearance) — only the first ${ENUM_SLOTS.length} are being tracked on this Booking.`
-    );
-  }
-
+// Booking.paymentMilestones[] (PaymentMilestoneSchema in Booking.js) takes
+// {title, percentage, amount, dueDate, status, receivedDate} — title is
+// required free text (the vendor's own milestone name, e.g. "Token",
+// "Advance 2"), there is no "type" field and no 4-item cap. An earlier
+// version of this function assumed a strict 4-value Token/Advanced1/
+// Advanced2/FinalClearance "type" enum that does not exist on the current
+// schema (Booking.create() would have thrown on the missing required
+// `title`) — fixed here to pass the milestone's own real title through,
+// uncapped, matching what quoteLine.milestones (cartPricingService.js)
+// already carries.
+function mapMilestonesToBookingSchema(quoteMilestones, tokenAmountPaid, paidAt, markAllReceived = false) {
   // The milestone whose amount matches what was actually paid is the one
-  // that becomes "Token" — usually the first, but matched by amount rather
-  // than assumed-first in case a vendor ordered their milestones differently.
+  // marked Received first — usually the first configured, but matched by
+  // amount rather than assumed-first in case a vendor ordered theirs
+  // differently.
   const tokenIndex = quoteMilestones.findIndex((m) => Math.abs((m.amount || 0) - tokenAmountPaid) < 0.01);
   const ordered = tokenIndex > 0 ? [quoteMilestones[tokenIndex], ...quoteMilestones.filter((_, i) => i !== tokenIndex)] : quoteMilestones;
 
-  return ordered.slice(0, ENUM_SLOTS.length).map((m, i) => ({
-    type: ENUM_SLOTS[i],
+  return ordered.map((m, i) => ({
+    title: m.title || `Milestone ${i + 1}`,
+    percentage: m.percentage ?? null,
     amount: m.amount ?? 0,
     dueDate: m.dueDate || null,
-    status: i === 0 ? "Received" : "Pending",
-    receivedDate: i === 0 ? paidAt : null,
+    // markAllReceived: the "assume payment was handled off-platform" path
+    // (see createBookingsFromCheckoutSession's assumeFullyPaid param) — every
+    // milestone is already settled, not just the first.
+    status: markAllReceived || i === 0 ? "Received" : "Pending",
+    receivedDate: markAllReceived || i === 0 ? paidAt : null,
   }));
 }
 
@@ -98,7 +93,7 @@ async function reserveSlot(packageId, eventDate) {
  * this function itself does not re-check, so it must only ever be invoked
  * once per Payment.
  */
-export async function createBookingsFromCheckoutSession(session, payment) {
+export async function createBookingsFromCheckoutSession(session, payment, { assumeFullyPaid = false } = {}) {
   const quoteLines = session.lockedQuote?.lines || [];
   const createdBookingIds = [];
 
@@ -111,26 +106,20 @@ export async function createBookingsFromCheckoutSession(session, payment) {
 
     const isFree = quoteLine.token?.paymentType === "Free";
     const tokenAmountForLine = isFree ? 0 : quoteLine.token?.tokenAmount || 0;
+    // assumeFullyPaid: the payment itself happened off-platform (not
+    // through this app's Cashfree integration) and is being taken on trust
+    // as fully settled — see confirmOfflineCheckout in
+    // customerPaymentController.js. Every line is recorded as FullPaid with
+    // the whole amount received, not just its token, until real off-platform
+    // payment tracking exists.
+    const totalReceivedForLine = assumeFullyPaid ? quoteLine.lineTotalInclGst || 0 : tokenAmountForLine;
 
-    const charges = [
-      { label: quoteLine.currentPrice != null ? line.packageSnapshot?.name || "Package" : "Package", amount: quoteLine.packagePriceTotal || 0, type: "Base" },
-      ...(line.selectedAddOns || []).map((a) => ({ label: a.name, amount: round2(a.price * a.quantity), type: "Fee" })),
-      ...(line.selectedItems || []).filter((s) => s.isChargeable).map((s) => ({ label: s.itemName, amount: s.price || 0, type: "Fee" })),
-      // GST as its OWN charge line — Booking.ChargeSchema's type enum
-      // already includes "Tax" (vendor-authored, just unused until now).
-      // Found while building Step 21's price-breakdown endpoint: without
-      // this, charges never summed to totalAmount whenever GST applied
-      // (totalAmount = lineTotalInclGst, but charges only covered the
-      // pre-tax Base+Fee amounts) — added here, at the source, rather than
-      // papering over it in the read endpoint. Only added when GST is
-      // EXCLUSIVE (added on top) — when gstInclusive is true, the tax is
-      // already embedded in the Base charge's amount, so adding a separate
-      // line would double-count it and break the reconciliation the other
-      // way.
-      ...(!quoteLine.gstInclusive && quoteLine.gstAmount ? [{ label: `GST (${quoteLine.gstRatePercent}%)`, amount: quoteLine.gstAmount, type: "Tax" }] : []),
-    ];
-
-    const milestones = mapMilestonesToBookingSchema(quoteLine.milestones || [], tokenAmountForLine, payment.paidAt || new Date());
+    const milestones = mapMilestonesToBookingSchema(
+      quoteLine.milestones || [],
+      totalReceivedForLine,
+      payment.paidAt || new Date(),
+      assumeFullyPaid
+    );
 
     const booking = await Booking.create({
       bookingId: generateISTId("EVT"),
@@ -153,12 +142,11 @@ export async function createBookingsFromCheckoutSession(session, payment) {
         vendorType: line.packageSnapshot?.vendorType,
         variantType: line.packageSnapshot?.variantType,
       },
-      paymentType: isFree ? "FreeBooking" : "AdvancePaid",
-      status: "Pending", // awaiting vendor acknowledgement — never auto-Accepted here
+      paymentType: assumeFullyPaid ? "FullPaid" : isFree ? "FreeBooking" : "AdvancePaid",
+      status: "NewBooking", // awaiting vendor acknowledgement — never auto-Confirmed here; matches Booking.status's own enum/default
       paymentMilestones: milestones,
-      charges,
       totalAmount: quoteLine.lineTotalInclGst || 0,
-      totalReceived: tokenAmountForLine,
+      totalReceived: totalReceivedForLine,
       notes: line.specialRequest || null,
     });
 

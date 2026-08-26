@@ -526,3 +526,72 @@ export const confirmFreeCheckout = async (req, res) => {
     return res.status(500).json({ status: "ERROR", message: "Failed to confirm checkout", error: error.message });
   }
 };
+
+/**
+ * @desc Confirms a checkout session with payment handled entirely OFF this
+ * platform — the in-app Cashfree payment step has been removed (product
+ * decision: payment isn't collected on-site for now), so this is the only
+ * remaining way a session becomes real Booking(s). Explicitly interim: no
+ * real payment is verified here, the customer's word (via clicking
+ * "Continue") is taken on trust that payment is being/was arranged
+ * off-platform, and every line is recorded FullPaid/fully received (see
+ * bookingCreationService.js's assumeFullyPaid) until a real off-platform
+ * payment-tracking process is designed. Still creates a real $0-Cashfree,
+ * full-amount Payment record (immediately marked PAID) for one consistent
+ * audit trail of every booking's origin, same reasoning as confirmFreeCheckout.
+ */
+export const confirmOfflineCheckout = async (req, res) => {
+  try {
+    const { checkoutSessionId } = req.body;
+
+    const session = await CheckoutSession.findOne({ _id: checkoutSessionId, customerId: req.customer._id });
+    if (!session) return res.status(404).json({ status: "FAILED", message: "Checkout session not found" });
+
+    if (session.status === "Active" && session.expiresAt < new Date()) {
+      session.status = "Expired";
+      await session.save();
+    }
+    if (session.status !== "Active") {
+      return res.status(410).json({ status: "FAILED", message: `This checkout session is ${session.status.toLowerCase()} — start a new one` });
+    }
+
+    const contact = computeContactValidation(session.contactDetails, req.customer);
+    const lines = computeLinesValidation(session.lines);
+    if (!contact.valid || !lines.valid) {
+      return res.status(400).json({ status: "FAILED", message: "Checkout session is not ready to confirm", validation: { contact, lines } });
+    }
+
+    const quote = session.lockedQuote;
+    if (!quote) {
+      return res.status(400).json({ status: "FAILED", message: "This session has no locked quote to confirm" });
+    }
+
+    const payment = await Payment.create({
+      checkoutSessionId: session._id,
+      customerId: req.customer._id,
+      paymentType: "Token",
+      amount: quote.grandTotal || 0,
+      cfOrderId: generatePaymentId(), // no real Cashfree order exists — still unique, kept for schema consistency
+      idempotencyKey: `${session._id}:Token:offline`,
+      status: "PAID",
+      paidAt: new Date(),
+    });
+
+    session.status = "Completed";
+    await session.save();
+
+    const bookingIds = await createBookingsFromCheckoutSession(session, payment, { assumeFullyPaid: true });
+
+    return res.status(201).json({
+      status: "SUCCESS",
+      message: "Checkout confirmed — payment handled off-platform",
+      paymentId: payment._id,
+      bookingIds,
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ status: "FAILED", message: "This session has already been confirmed" });
+    }
+    return res.status(500).json({ status: "ERROR", message: "Failed to confirm checkout", error: error.message });
+  }
+};
