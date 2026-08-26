@@ -5,7 +5,6 @@ import {
   handleCashfreeWebhook,
   getPaymentStatus,
   confirmFreeCheckout,
-  confirmOfflineCheckout,
 } from "../controllers/customerPaymentController.js";
 import { protectCustomer } from "../middlewares/customerAuth.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
@@ -81,38 +80,6 @@ router.post("/token", protectCustomer, validateRequest(createTokenPaymentSchema)
  *       410: { description: Checkout session is no longer Active }
  */
 router.post("/confirm-free", protectCustomer, validateRequest(createTokenPaymentSchema), confirmFreeCheckout);
-
-/**
- * @swagger
- * /api/customer/payments/confirm-offline:
- *   post:
- *     summary: Confirm a checkout session with payment handled off this platform (interim, no in-app payment step)
- *     description: |
- *       No real payment is verified here — this is the interim path used
- *       now that the in-app Cashfree payment step is gone (product
- *       decision). Every line is recorded FullPaid/fully received on trust
- *       until real off-platform payment tracking is designed. Still
- *       creates a real Payment record (immediately PAID, for the full
- *       quoted amount) and real Bookings, same audit trail as every other
- *       confirm path.
- *     tags: [Customer Payments]
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             required: [checkoutSessionId]
- *             properties:
- *               checkoutSessionId: { type: string }
- *     responses:
- *       201: { description: Confirmed — paymentId + created bookingIds returned }
- *       400: { description: Session not ready, or has no locked quote }
- *       404: { description: Checkout session not found }
- *       409: { description: This session was already confirmed }
- *       410: { description: Checkout session is no longer Active }
- */
-router.post("/confirm-offline", protectCustomer, validateRequest(createTokenPaymentSchema), confirmOfflineCheckout);
 
 /**
  * @swagger

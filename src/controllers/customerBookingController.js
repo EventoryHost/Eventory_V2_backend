@@ -158,13 +158,20 @@ export const getBookingDetail = async (req, res) => {
     const booking = await Booking.findOne(query).populate({ path: "vendorId", select: PUBLIC_VENDOR_FIELDS }).lean();
     if (!booking) return res.status(404).json({ status: "FAILED", message: "Booking not found" });
 
-    // Price breakdown — Booking.js has no charges[]/line-item field (see
-    // bookingCreationService.js's fix note: an earlier version tried to save
-    // one, but the schema never had a field for it, so it was always
-    // silently dropped by Mongoose), so this is just the three real stored
-    // totals — no itemized subtotal/tax/discount split, since there's
-    // nothing on the model to derive one from without guessing.
+    // Price breakdown — built entirely from what's actually stored on the
+    // booking (Step 19's charges[], now including a real "Tax" line — see
+    // the fix note in bookingCreationService.js). subtotal/taxAmount are
+    // SUMMED from the real charge rows, not recomputed/guessed, so this
+    // always reconciles with whatever was actually charged.
+    const charges = booking.charges || [];
+    const subtotal = charges.filter((c) => c.type === "Base" || c.type === "Fee").reduce((sum, c) => sum + c.amount, 0);
+    const taxAmount = charges.filter((c) => c.type === "Tax").reduce((sum, c) => sum + c.amount, 0);
+    const discountAmount = charges.filter((c) => c.type === "Discount").reduce((sum, c) => sum + c.amount, 0);
     const priceBreakdown = {
+      charges,
+      subtotal,
+      taxAmount,
+      discountAmount,
       totalAmount: booking.totalAmount,
       totalReceived: booking.totalReceived,
       amountDue: Math.max(0, (booking.totalAmount || 0) - (booking.totalReceived || 0)),
