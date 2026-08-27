@@ -6,6 +6,7 @@ import Package from "../models/Package.js";
 import { computeQuoteForLines } from "../services/cartPricingService.js";
 import { computeContactValidation, computeLinesValidation } from "../services/checkoutValidationService.js";
 import { computeAvailability } from "../utils/packageAvailability.js";
+import { resolveVendorRefId } from "../utils/resolveVendor.js";
 
 /**
  * Checkout session — Phase 4 Steps 15-16. A short-lived, price-locked
@@ -54,9 +55,19 @@ async function buildLine({
     }
   }
 
+  // pkg.vendorId is stored as the Vendor's business-id string (e.g.
+  // "VEN20260511163553528") rather than its Mongo _id for every currently-
+  // seeded package — resolve to the real Vendor._id before writing it into
+  // CheckoutSession.lines[].vendorId (a required ObjectId field). See
+  // src/utils/resolveVendor.js for the full write-up.
+  const resolvedVendorId = await resolveVendorRefId(pkg.vendorId);
+  if (!resolvedVendorId) {
+    return { error: { status: 500, message: "This package's vendor could not be resolved" } };
+  }
+
   return {
     line: {
-      vendorId: pkg.vendorId,
+      vendorId: resolvedVendorId,
       packageId: pkg._id,
       packageGroupId: pkg.packageGroupId,
       sourceCartItemId: sourceCartItemId || null,
