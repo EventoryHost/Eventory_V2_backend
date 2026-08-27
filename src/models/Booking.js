@@ -1,6 +1,17 @@
 import mongoose from "mongoose";
-import Customer from "./Customer.js";
-import { normalizePhone } from "../utils/phone.js";
+import {
+  ChangeRequestSchema,
+  PackageSnapshotSchema,
+  PaymentMilestoneSchema,
+  PricingSchema,
+} from "./schemas/negotiationSchemas.js";
+
+export {
+  MILESTONE_STATUSES,
+  CHANGE_TYPES,
+  ITEM_KINDS,
+  CHANGE_REQUEST_STATUSES,
+} from "./schemas/negotiationSchemas.js";
 
 export const PAYMENT_TYPES = ["FreeBooking", "AdvancePaid", "FullPaid"];
 
@@ -276,12 +287,6 @@ const BookingSchema = new mongoose.Schema(
     calendarNote: {
       type: String,
       default: null,
-    },
-    // Set when the vendor's account is purged. The booking is the customer's
-    // record too, so it is retained and anonymised rather than deleted.
-    vendorDeleted: {
-      type: Boolean,
-      default: false,
     },
     // Set when the vendor's account is purged. The booking is the customer's
     // record too, so it is retained and anonymised rather than deleted.
