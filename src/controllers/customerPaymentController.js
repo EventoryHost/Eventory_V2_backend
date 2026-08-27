@@ -39,6 +39,24 @@ import { generatePaymentId } from "../utils/generateId.js";
 // webhook handler only checked that the signature HEADERS were present,
 // never actually verified them cryptographically — that gap is not
 // repeated here.
+// Added 2026-08-27 — real Cashfree HOSTED CHECKOUT redirect integration.
+// Cashfree's order_meta.return_url tells Cashfree where to send the
+// customer's BROWSER back to once they finish paying on Cashfree's own
+// hosted page (this is what actually makes the "redirect to Cashfree,
+// then back" flow work — PGCreateOrder calls before this never set it, so
+// there was nowhere for Cashfree to redirect back to). Same FRONTEND_URL-
+// with-a-localhost-fallback convention already used in app.js (OAuth
+// redirect/CORS allowlist) — not a new env var. paymentId is OUR OWN
+// already-known Payment._id (created before this URL is built), not
+// Cashfree's own {order_id} template — no need for that since we already
+// know everything the return page needs to look the payment back up.
+// See pay-integrate.txt for the full frontend contract this return page
+// must implement.
+function buildPaymentReturnUrl(paymentId) {
+  const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+  return `${frontendUrl}/payment/return?paymentId=${paymentId}`;
+}
+
 function isValidWebhookSignature(rawBody, timestamp, signature) {
   if (!rawBody || !timestamp || !signature) return false;
   const secret = process.env.CASHFREE_CLIENT_SECRET_PG;
@@ -144,6 +162,11 @@ export const createTokenPayment = async (req, res) => {
           customer_phone: cashfreePhone,
           customer_email: session.contactDetails.email || undefined,
           customer_name: session.contactDetails.name || undefined,
+        },
+        order_meta: {
+          // Makes the actual hosted-checkout redirect flow work — see
+          // buildPaymentReturnUrl's own comment above.
+          return_url: buildPaymentReturnUrl(payment._id),
         },
         order_tags: {
           checkoutSessionId: String(session._id),
@@ -264,6 +287,9 @@ export const createMilestonePayment = async (req, res) => {
           customer_phone: cashfreePhone,
           customer_email: booking.customer?.email || undefined,
           customer_name: booking.customer?.name || undefined,
+        },
+        order_meta: {
+          return_url: buildPaymentReturnUrl(payment._id),
         },
         order_tags: {
           bookingId: String(booking._id),
@@ -453,6 +479,12 @@ export const getPaymentStatus = async (req, res) => {
       paymentId: payment._id,
       checkoutSessionId: payment.checkoutSessionId,
       bookingId: payment.bookingId,
+      // Populated once createBookingsFromCheckoutSession has actually run
+      // (webhook or the live-recheck above, whichever fires first) — see
+      // Payment.js's own comment. Empty array until then; the frontend's
+      // payment-return page should keep polling this endpoint until either
+      // paymentStatus is a terminal value OR bookingIds is non-empty.
+      bookingIds: payment.createdBookingIds || [],
       milestoneLabel: payment.milestoneLabel,
       paymentType: payment.paymentType,
       amount: payment.amount,

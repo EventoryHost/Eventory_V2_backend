@@ -212,6 +212,10 @@ export async function createBookingsFromCheckoutSession(session, payment, option
   }
 
   payment.bookingCreated = true;
+  // Added 2026-08-27 (real Cashfree redirect integration) — see Payment.js's
+  // own comment on createdBookingIds for why every path that creates
+  // bookings sets this, not just the real-Cashfree one.
+  payment.createdBookingIds = createdBookingIds;
   await payment.save();
 
   return createdBookingIds;
