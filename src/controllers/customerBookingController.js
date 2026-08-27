@@ -1,9 +1,10 @@
 import mongoose from "mongoose";
 import Vendor from "../models/Vendor.js";
-import Booking from "../models/Booking.js";
+import Booking, { PRE_ACCEPTANCE_STATUSES, TERMINAL_STATUSES } from "../models/Booking.js";
 import Package from "../models/Package.js";
 import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
 import { getOrCreateInvoiceForBooking, renderInvoicePdf } from "../services/invoiceService.js";
+import { withPricingBreakdown } from "../utils/pricingBreakdown.js";
 
 /**
  * "My Bookings" dashboard — Phase 5 Step 20. Pure read-only projection over
@@ -22,16 +23,24 @@ import { getOrCreateInvoiceForBooking, renderInvoicePdf } from "../services/invo
  * what this data model can currently express, not a fabricated grouping.
  */
 
-// Which Booking.status values fall under each dashboard tab. "Declined"
-// (vendor rejected before ever proceeding) is bucketed under "cancelled" —
-// not explicitly specified by the final BRD, which only names three tabs
-// without enumerating every status; this is the most defensible read
-// (a declined booking isn't "active" or "past-and-fulfilled" either),
-// flagged here as an assumption rather than picked silently.
+// Which Booking.status values fall under each dashboard tab. REWRITTEN
+// 2026-08-27 — Booking.js's status enum changed vendor-side (prod merge):
+// Pending/Accepted no longer exist, replaced by NewBooking/Viewed/
+// InDiscussion/Confirmed. Built off the vendor's OWN exported groupings
+// (PRE_ACCEPTANCE_STATUSES, TERMINAL_STATUSES) rather than re-guessing the
+// new values by hand, so this stays correct automatically if that enum
+// changes again. "Declined" stays bucketed under "cancelled" (same
+// assumption as before this rewrite — the final BRD names three tabs
+// without enumerating every status; a declined booking isn't "active" or
+// "past-and-fulfilled" either) — TERMINAL_STATUSES already groups
+// Declined/Cancelled/Completed together, so "past" (Completed only) is
+// carved out explicitly and the rest of TERMINAL_STATUSES becomes
+// "cancelled". "Confirmed" (post-acceptance, pre-completion) is added onto
+// PRE_ACCEPTANCE_STATUSES for "active" — an ongoing, non-terminal booking.
 const STATUS_BY_TAB = {
-  active: ["Pending", "Accepted"],
+  active: [...PRE_ACCEPTANCE_STATUSES, "Confirmed"],
   past: ["Completed"],
-  cancelled: ["Cancelled", "Declined"],
+  cancelled: TERMINAL_STATUSES.filter((s) => s !== "Completed"),
 };
 
 const BOOKING_LIST_FIELDS =
@@ -158,20 +167,29 @@ export const getBookingDetail = async (req, res) => {
     const booking = await Booking.findOne(query).populate({ path: "vendorId", select: PUBLIC_VENDOR_FIELDS }).lean();
     if (!booking) return res.status(404).json({ status: "FAILED", message: "Booking not found" });
 
-    // Price breakdown — built entirely from what's actually stored on the
-    // booking (Step 19's charges[], now including a real "Tax" line — see
-    // the fix note in bookingCreationService.js). subtotal/taxAmount are
-    // SUMMED from the real charge rows, not recomputed/guessed, so this
-    // always reconciles with whatever was actually charged.
-    const charges = booking.charges || [];
-    const subtotal = charges.filter((c) => c.type === "Base" || c.type === "Fee").reduce((sum, c) => sum + c.amount, 0);
-    const taxAmount = charges.filter((c) => c.type === "Tax").reduce((sum, c) => sum + c.amount, 0);
-    const discountAmount = charges.filter((c) => c.type === "Discount").reduce((sum, c) => sum + c.amount, 0);
+    // Price breakdown — REWRITTEN 2026-08-27: Booking.js's ChargeSchema/
+    // charges[] is gone vendor-side (prod merge), replaced by a `pricing`
+    // object (cumulative additions/deductions + a tax rate). Reuses the
+    // vendor's own utils/pricingBreakdown.js (withPricingBreakdown) rather
+    // than re-deriving the math here, then reshapes it into the SAME
+    // response fields this endpoint already returned (charges[]/subtotal/
+    // taxAmount/discountAmount/...) so nothing downstream of this response
+    // needs to change. A synthesized charges[] display array is built from
+    // the breakdown's rows purely for that shape compatibility — it is
+    // never stored, just rendered here.
+    const { pricingBreakdown } = withPricingBreakdown(booking);
+    const discountRow = pricingBreakdown.deductions.find((d) => d.key === "discountAllowed");
+    const charges = [
+      { label: booking.packageSnapshot?.name || "Package", amount: pricingBreakdown.originalPackagePrice, type: "Base" },
+      ...pricingBreakdown.additions.map((a) => ({ label: a.label, amount: a.amount, type: "Fee" })),
+      ...pricingBreakdown.deductions.filter((d) => d.key !== "discountAllowed").map((d) => ({ label: d.label, amount: d.amount, type: "Fee" })),
+      { label: pricingBreakdown.tax.label, amount: pricingBreakdown.tax.amount, type: "Tax" },
+    ];
     const priceBreakdown = {
       charges,
-      subtotal,
-      taxAmount,
-      discountAmount,
+      subtotal: pricingBreakdown.subtotal,
+      taxAmount: pricingBreakdown.tax.amount,
+      discountAmount: discountRow ? Math.abs(discountRow.amount) : 0,
       totalAmount: booking.totalAmount,
       totalReceived: booking.totalReceived,
       amountDue: Math.max(0, (booking.totalAmount || 0) - (booking.totalReceived || 0)),
@@ -253,7 +271,12 @@ export const cancelBooking = async (req, res) => {
     const booking = await Booking.findOne(query);
     if (!booking) return res.status(404).json({ status: "FAILED", message: "Booking not found" });
 
-    if (["Cancelled", "Declined", "Completed"].includes(booking.status)) {
+    // TERMINAL_STATUSES imported from Booking.js — reused rather than
+    // hardcoded so this stays correct if that enum changes again (it
+    // already did once, 2026-08-27 prod merge: Pending/Accepted/Declined/
+    // Cancelled/Completed -> the current NewBooking/Viewed/InDiscussion/
+    // Confirmed/Declined/Cancelled/Completed).
+    if (TERMINAL_STATUSES.includes(booking.status)) {
       return res.status(409).json({
         status: "FAILED",
         message: `This booking is already ${booking.status.toLowerCase()} — it cannot be cancelled`,
@@ -268,6 +291,12 @@ export const cancelBooking = async (req, res) => {
     };
 
     booking.status = "Cancelled";
+    // cancelledAt/cancelledBy/cancellationReason are new fields on the
+    // rewritten Booking.js (2026-08-27 prod merge) — populated now that
+    // they exist; harmless no-ops on an older schema, genuinely useful on
+    // this one (backs the vendor-side status-transition trail/message card).
+    booking.cancelledAt = new Date();
+    booking.cancelledBy = "Customer";
     await booking.save();
 
     // No notification system exists in this codebase yet (no email/SMS,

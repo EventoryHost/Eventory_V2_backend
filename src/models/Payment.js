@@ -80,6 +80,19 @@ const PaymentSchema = new mongoose.Schema(
 
     // Step 19's flag, not used here — see the model comment above.
     bookingCreated: { type: Boolean, default: false },
+
+    // Added 2026-08-27 (real Cashfree redirect integration): which real
+    // Booking(s) this Token payment created — a checkout-time payment can
+    // create MULTIPLE bookings (one per vendor line), unlike bookingId
+    // above (Step 22 milestone payments, always exactly one EXISTING
+    // booking). Set by bookingCreationService.js's
+    // createBookingsFromCheckoutSession, same call for every path that
+    // creates bookings (webhook, status-poll live-recheck, confirm-free,
+    // confirm-offline) — lets GET /:paymentId (and anything else reading a
+    // Payment) tell the frontend which booking(s) resulted, which it needs
+    // after a Cashfree redirect since the browser only comes back with a
+    // paymentId, not booking data.
+    createdBookingIds: { type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Booking" }], default: [] },
   },
   {
     timestamps: true,

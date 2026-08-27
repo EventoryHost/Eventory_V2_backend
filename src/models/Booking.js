@@ -31,6 +31,126 @@ export const PRE_ACCEPTANCE_STATUSES = ["NewBooking", "Viewed", "InDiscussion"];
 // Statuses after which nothing about the booking can change
 export const TERMINAL_STATUSES = ["Declined", "Cancelled", "Completed"];
 
+export const MILESTONE_STATUSES = ["Pending", "PaymentDue", "Received"];
+
+export const CHANGE_TYPES = ["Add", "Remove"];
+
+export const ITEM_KINDS = ["Item", "Addon", "Substitute"];
+
+export const CHANGE_REQUEST_STATUSES = ["Pending", "Accepted", "Rejected"];
+
+//The package exactly as the customer bought 
+const PackageSnapshotSchema = new mongoose.Schema(
+  {
+    name: { type: String, immutable: true },
+    price: { type: Number, immutable: true },
+    image: { type: String, immutable: true },
+    vendorType: { type: String, immutable: true },
+    variantType: { type: String, immutable: true },
+    gstRatePercent: { type: Number, immutable: true, default: null },
+    gstInclusive: { type: Boolean, immutable: true, default: false },
+    // Vendor-type-specific step-2 payload (spaces, setups, menus, items…).
+    deliverables: {
+      type: mongoose.Schema.Types.Mixed,
+      immutable: true,
+      default: null,
+    },
+  },
+  { _id: false }
+);
+
+const ChangeRequestSchema = new mongoose.Schema(
+  {
+    changeType: { type: String, enum: CHANGE_TYPES, required: true },
+    itemKind: { type: String, enum: ITEM_KINDS, default: "Item" },
+    category: { type: String, required: true, trim: true },
+    item: { type: String, required: true, trim: true },
+    qty: { type: Number, default: 1, min: 1 },
+    status: {
+      type: String,
+      enum: CHANGE_REQUEST_STATUSES,
+      default: "Pending",
+    },
+    requestedAt: { type: Date, default: Date.now },
+    respondedAt: { type: Date, default: null },
+  },
+  { _id: true }
+);
+
+// PDP "Customize items" workshop requests — added 2026-08-27 per the
+// frontend team's exact request (their suggested shape, used verbatim).
+// DELIBERATELY SEPARATE from ChangeRequestSchema/changeRequests above,
+// which already covers a similar-in-spirit "customer requests an item
+// change, vendor decides" concept but a different shape (changeType Add/
+// Remove only, no "change" type; category/item free text, no setupId;
+// no colour/type/volume). Confirmed with the user before adding this
+// rather than trying to force the frontend's shape into changeRequests or
+// guessing how the two should reconcile — flagged here as a likely future
+// duplication worth resolving with whoever owns changeRequests, not
+// silently merged. See CartItem.js's CustomizeRequestSchema for the
+// customer-side origin of this same shape (Cart -> CheckoutSession line ->
+// here, unchanged at each hop). Accept-and-store only, same as upstream —
+// no validation against the package's actual item catalog.
+const CustomizeRequestSchema = new mongoose.Schema(
+  {
+    setupId: { type: String, required: true },
+    itemId: { type: String, required: true },
+    requestType: { type: String, enum: ["change", "add", "remove"], required: true },
+    label: { type: String, required: true, trim: true },
+    quantity: { type: Number, default: null, min: 0 },
+    type: { type: String, default: null, trim: true },
+    colours: { type: [String], default: [] },
+    volume: { type: String, default: null, trim: true },
+  },
+  { _id: false }
+);
+
+/**
+ * Vendor-authored pricing. One cumulative figure per breakdown row — the
+ * vendor prices the whole set of additions, not each item — plus the discount
+ * and tax rate. Every row of the pricing breakdown comes from here; see
+ * `utils/pricingBreakdown.js`.
+ *
+ * All amounts are positive magnitudes. The breakdown applies the sign.
+ */
+const PricingSchema = new mongoose.Schema(
+  {
+    // Overrides packageSnapshot.price when the price was negotiated separately.
+    basePrice: { type: Number, default: null },
+
+    itemsAdded: { type: Number, default: 0, min: 0 },
+    addonsAdded: { type: Number, default: 0, min: 0 },
+    substituteItemsAdded: { type: Number, default: 0, min: 0 },
+
+    itemsRemoved: { type: Number, default: 0, min: 0 },
+    addonsRemoved: { type: Number, default: 0, min: 0 },
+
+    discountAmount: { type: Number, default: 0, min: 0 },
+    discountLabel: { type: String, default: "Discount Allowed" },
+    taxRatePct: { type: Number, default: 18, min: 0, max: 100 },
+    taxLabel: { type: String, default: "GST" },
+    updatedAt: { type: Date, default: null },
+  },
+  { _id: false }
+);
+
+/**
+ * One instalment of the payment plan. Titles are the vendor's own — a booking
+ * is not limited to a fixed set of instalments — and mirror the shape an
+ * enquiry proposal already uses, so converting one to the other is lossless.
+ */
+const PaymentMilestoneSchema = new mongoose.Schema(
+  {
+    title: { type: String, required: true, trim: true },
+    percentage: { type: Number, default: null, min: 0, max: 100 },
+    amount: { type: Number, required: true },
+    dueDate: { type: Date, default: null },
+    status: { type: String, enum: MILESTONE_STATUSES, default: "Pending" },
+    receivedDate: { type: Date, default: null },
+  },
+  { _id: true }
+);
+
 const BookingSchema = new mongoose.Schema(
   {
     bookingId: {
@@ -136,6 +256,10 @@ const BookingSchema = new mongoose.Schema(
 
     // Customer-requested additions/removals, and the vendor's decision on each
     changeRequests: [ChangeRequestSchema],
+
+    // PDP "Customize items" workshop requests — see CustomizeRequestSchema's
+    // own comment above for why this is separate from changeRequests.
+    customizeRequests: [CustomizeRequestSchema],
 
     pricing: {
       type: PricingSchema,

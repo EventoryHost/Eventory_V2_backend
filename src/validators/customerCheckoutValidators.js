@@ -24,6 +24,19 @@ const selectedItemSchema = z.object({
   isChargeable: z.coerce.boolean().default(false),
 });
 
+// PDP "Customize items" workshop requests — same shape/reasoning as
+// customerCartValidators.js's identical schema (2026-08-27).
+const customizeRequestSchema = z.object({
+  setupId: z.string().trim().min(1).max(200),
+  itemId: z.string().trim().min(1).max(200),
+  requestType: z.enum(["change", "add", "remove"]),
+  label: z.string().trim().min(1).max(200),
+  quantity: z.coerce.number().min(0).optional(),
+  type: z.string().trim().max(100).optional(),
+  colours: z.array(z.string().trim().max(50)).max(20).optional(),
+  volume: z.string().trim().max(50).optional(),
+});
+
 // source:"cart" needs nothing else — pulls the customer's own current cart.
 // source:"direct" is a "Book Now" purchase that never touched the cart.
 export const createCheckoutSessionSchema = z
@@ -37,6 +50,7 @@ export const createCheckoutSessionSchema = z
     location: z.string().trim().max(300).optional(),
     selectedAddOns: z.array(selectedAddOnSchema).max(50).optional(),
     selectedItems: z.array(selectedItemSchema).max(100).optional(),
+    customizeRequests: z.array(customizeRequestSchema).max(100).optional(),
     specialRequest: z.string().trim().max(500).optional(),
     quantity: z.coerce.number().int().min(1).default(1),
   })
@@ -58,6 +72,7 @@ export const updateCheckoutLineSchema = z.object({
   location: z.string().trim().max(300).optional(),
   selectedAddOns: z.array(selectedAddOnSchema).max(50).optional(),
   selectedItems: z.array(selectedItemSchema).max(100).optional(),
+  customizeRequests: z.array(customizeRequestSchema).max(100).optional(),
   specialRequest: z.string().trim().max(500).optional(),
   quantity: z.coerce.number().int().min(1).optional(),
 });

@@ -5,6 +5,7 @@ import {
   handleCashfreeWebhook,
   getPaymentStatus,
   confirmFreeCheckout,
+  confirmOfflineCheckout,
 } from "../controllers/customerPaymentController.js";
 import { protectCustomer } from "../middlewares/customerAuth.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
@@ -80,6 +81,42 @@ router.post("/token", protectCustomer, validateRequest(createTokenPaymentSchema)
  *       410: { description: Checkout session is no longer Active }
  */
 router.post("/confirm-free", protectCustomer, validateRequest(createTokenPaymentSchema), confirmFreeCheckout);
+
+/**
+ * @swagger
+ * /api/customer/payments/confirm-offline:
+ *   post:
+ *     summary: Confirm a checkout session with payment collected OFF-PLATFORM (any amount)
+ *     description: |
+ *       Added 2026-08-27 — product decision: in-app Cashfree payment
+ *       collection is gone for this flow. Same "Validation before
+ *       Continue" checks as /confirm-free, but does NOT require the
+ *       quote's token amount to be zero — works for any amount. Creates a
+ *       real Payment record (immediately PAID, no real Cashfree order —
+ *       same audit-trail reasoning as /confirm-free's ₹0 case) for the
+ *       full grandTotal, then creates the real Booking(s) with every line
+ *       marked FullPaid and every milestone Received — there's no
+ *       per-milestone payment tracking possible for an off-platform
+ *       booking, so it's trusted as fully paid rather than guessed at
+ *       piecemeal.
+ *     tags: [Customer Payments]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [checkoutSessionId]
+ *             properties:
+ *               checkoutSessionId: { type: string }
+ *     responses:
+ *       201: { description: Confirmed — paymentId + created bookingIds returned }
+ *       400: { description: Session not ready, or has no locked quote yet }
+ *       404: { description: Checkout session not found }
+ *       409: { description: This session was already confirmed }
+ *       410: { description: Checkout session is no longer Active }
+ */
+router.post("/confirm-offline", protectCustomer, validateRequest(createTokenPaymentSchema), confirmOfflineCheckout);
 
 /**
  * @swagger

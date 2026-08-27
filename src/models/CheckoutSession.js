@@ -53,6 +53,13 @@ const CheckoutLineSchema = new mongoose.Schema(
     },
     selectedAddOns: { type: mongoose.Schema.Types.Mixed, default: [] },
     selectedItems: { type: mongoose.Schema.Types.Mixed, default: [] },
+    // PDP "Customize items" workshop requests, carried over from the
+    // CartItem this line was built from (or accepted directly for a
+    // source:"direct" purchase) — see CartItem.js's CustomizeRequestSchema
+    // for the full shape/reasoning. Mixed here too, same as
+    // selectedAddOns/selectedItems above — a session line is a snapshot,
+    // not a place that re-validates this shape.
+    customizeRequests: { type: mongoose.Schema.Types.Mixed, default: [] },
     specialRequest: { type: String, trim: true, maxlength: 500, default: "" },
     quantity: { type: Number, default: 1, min: 1 },
   },

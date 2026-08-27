@@ -6,6 +6,7 @@ import Package from "../models/Package.js";
 import { computeQuoteForLines } from "../services/cartPricingService.js";
 import { computeContactValidation, computeLinesValidation } from "../services/checkoutValidationService.js";
 import { computeAvailability } from "../utils/packageAvailability.js";
+import { resolveVendorRefId } from "../utils/resolveVendor.js";
 
 /**
  * Checkout session — Phase 4 Steps 15-16. A short-lived, price-locked
@@ -33,6 +34,7 @@ async function buildLine({
   location,
   selectedAddOns,
   selectedItems,
+  customizeRequests,
   specialRequest,
   quantity,
 }) {
@@ -54,9 +56,19 @@ async function buildLine({
     }
   }
 
+  // pkg.vendorId is stored as the Vendor's business-id string (e.g.
+  // "VEN20260511163553528") rather than its Mongo _id for every currently-
+  // seeded package — resolve to the real Vendor._id before writing it into
+  // CheckoutSession.lines[].vendorId (a required ObjectId field). See
+  // src/utils/resolveVendor.js for the full write-up.
+  const resolvedVendorId = await resolveVendorRefId(pkg.vendorId);
+  if (!resolvedVendorId) {
+    return { error: { status: 500, message: "This package's vendor could not be resolved" } };
+  }
+
   return {
     line: {
-      vendorId: pkg.vendorId,
+      vendorId: resolvedVendorId,
       packageId: pkg._id,
       packageGroupId: pkg.packageGroupId,
       sourceCartItemId: sourceCartItemId || null,
@@ -77,6 +89,7 @@ async function buildLine({
       },
       selectedAddOns: selectedAddOns || [],
       selectedItems: selectedItems || [],
+      customizeRequests: customizeRequests || [],
       specialRequest: specialRequest || "",
       quantity: quantity || 1,
     },
@@ -199,6 +212,7 @@ export const createCheckoutSession = async (req, res) => {
           location: item.eventDetails?.location || undefined,
           selectedAddOns: item.selectedAddOns,
           selectedItems: item.selectedItems,
+          customizeRequests: item.customizeRequests,
           specialRequest: item.specialRequest,
           quantity: item.quantity,
         });
@@ -212,7 +226,8 @@ export const createCheckoutSession = async (req, res) => {
       // yet), but wired through so it starts working the moment that does.
       discount = cart.coupon?.discountAmount || 0;
     } else {
-      const { packageId, eventType, guests, date, timeSlot, location, selectedAddOns, selectedItems, specialRequest, quantity } = req.body;
+      const { packageId, eventType, guests, date, timeSlot, location, selectedAddOns, selectedItems, customizeRequests, specialRequest, quantity } =
+        req.body;
       const built = await buildLine({
         packageId,
         eventType,
@@ -222,6 +237,7 @@ export const createCheckoutSession = async (req, res) => {
         location,
         selectedAddOns,
         selectedItems,
+        customizeRequests,
         specialRequest,
         quantity,
       });
@@ -316,10 +332,17 @@ export const updateCheckoutLine = async (req, res) => {
     const line = session.lines.id(req.params.lineId);
     if (!line) return res.status(404).json({ status: "FAILED", message: "Line not found in this checkout session" });
 
-    const { packageId, eventType, guests, date, timeSlot, location, selectedAddOns, selectedItems, specialRequest, quantity } = req.body;
+    const { packageId, eventType, guests, date, timeSlot, location, selectedAddOns, selectedItems, customizeRequests, specialRequest, quantity } =
+      req.body;
 
     if (packageId && packageId !== String(line.packageId)) {
-      const newPkg = await Package.findOne({ _id: packageId, packageStatus: "Live" });
+      // .lean() — same reasoning as buildLine's own fetch above and
+      // resolveVendorForPackage's write-up: without it, Mongoose silently
+      // drops newPkg.vendorId to undefined whenever it's stored as
+      // Vendor.id rather than Vendor._id (true of most seeded packages),
+      // which would leave this line's vendorId unset/stale on a variant
+      // switch. newPkg is only read here, never saved, so lean is safe.
+      const newPkg = await Package.findOne({ _id: packageId, packageStatus: "Live" }).lean();
       if (!newPkg) return res.status(404).json({ status: "FAILED", message: "Target package not found or not currently available" });
       if (String(newPkg.packageGroupId) !== String(line.packageGroupId)) {
         return res.status(400).json({
@@ -327,8 +350,12 @@ export const updateCheckoutLine = async (req, res) => {
           message: "packageId must be a variant of the same package (matching packageGroupId) — use Cart to add a different package entirely",
         });
       }
+      const resolvedNewVendorId = await resolveVendorRefId(newPkg.vendorId);
+      if (!resolvedNewVendorId) {
+        return res.status(500).json({ status: "ERROR", message: "This package's vendor could not be resolved — cannot switch variant" });
+      }
       line.packageId = newPkg._id;
-      line.vendorId = newPkg.vendorId;
+      line.vendorId = resolvedNewVendorId;
       line.packageSnapshot = {
         name: newPkg.step1_eventAndCrew?.packageName,
         price: newPkg.step3_policiesAndCharges?.packagePricing?.price ?? null,
@@ -359,6 +386,7 @@ export const updateCheckoutLine = async (req, res) => {
     if (location !== undefined) line.eventDetails.location = location;
     if (selectedAddOns !== undefined) line.selectedAddOns = selectedAddOns;
     if (selectedItems !== undefined) line.selectedItems = selectedItems;
+    if (customizeRequests !== undefined) line.customizeRequests = customizeRequests;
     if (specialRequest !== undefined) line.specialRequest = specialRequest;
     if (quantity !== undefined) line.quantity = quantity;
 
