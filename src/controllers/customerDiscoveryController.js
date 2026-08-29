@@ -50,9 +50,40 @@ import { resolveVendorForPackage } from "../utils/resolveVendor.js";
  */
 export const browsePackages = async (req, res) => {
   try {
-    const { eventCategory, vendorType, city, guests, date, minPrice, maxPrice, sort, page, limit } = req.query;
+    const { q, eventCategory, vendorType, city, guests, date, minPrice, maxPrice, sort, page, limit } = req.query;
 
     const query = { packageStatus: "Live" };
+
+    // Free-text search — added 2026-08-29 for the landing-page search box
+    // (frontend's /vendors?q= param already existed and was wired up, but
+    // only ever did a client-side substring match over whatever single page
+    // of results was already loaded; this makes it a real, server-side,
+    // all-results match). Matches a typed keyword against the package name,
+    // its event categories, OR its vendor's business name — the same three
+    // things a customer would plausibly type ("birthday", "sangeet",
+    // "Rohan Caterers"). This is a regex match, not a Mongo text index — same
+    // "plain regex over a whitelisted, escaped string" approach every other
+    // filter in this controller already uses (city/eventCategory/vendorType
+    // below), not a new pattern. Deliberately NOT anchored (unlike
+    // eventCategory's `^...$` exact match) since this is meant to match
+    // substrings/partial words, not a value picked from a dropdown.
+    if (q) {
+      const qRegex = { $regex: escapeRegex(q), $options: "i" };
+      // Vendor's business name lives on Vendor, not Package — resolve
+      // matching vendors first, same two-step pattern the `city` filter
+      // below uses. Matched against BOTH Vendor._id and Vendor.id (the
+      // business-id string), since Package.vendorId is inconsistently
+      // stored as either — see resolveVendorForPackage's own comment on why
+      // that mismatch exists across this codebase's seed data.
+      const qVendors = await Vendor.find({ businessName: qRegex }).select("_id id");
+      const qVendorIds = qVendors.flatMap((v) => [v._id, v.id]).filter(Boolean);
+
+      query.$or = [
+        { "step1_eventAndCrew.packageName": qRegex },
+        { "step1_eventAndCrew.eventCategories": { $elemMatch: qRegex } },
+        ...(qVendorIds.length ? [{ vendorId: { $in: qVendorIds } }] : []),
+      ];
+    }
 
     if (vendorType) query.vendorType = vendorType;
 
@@ -594,6 +625,64 @@ export const getPackageReviews = async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to fetch package reviews", error: error.message });
+  }
+};
+
+/**
+ * @desc Site-wide "Loved by X Happy Customers" carousel on the landing page
+ * — the top N Published reviews across the WHOLE platform, not scoped to
+ * one package/vendor (getVendorReviews/getPackageReviews above are both
+ * scoped). Requested by the frontend team as GET
+ * /customer/reviews/featured?limit=8&minRating=4 — built exactly to their
+ * own proposed spec (see getFeaturedReviews's doc comment in
+ * customerDiscoveryApi.ts on the frontend), used verbatim rather than
+ * inventing a different shape. Public, no auth, read-only.
+ *
+ * Response is pre-flattened per that spec — { status, items: [{ _id,
+ * rating, comment, createdAt, customerName, customerAvatar, packageName }] }
+ * — deliberately NOT the same shape as getVendorReviews/getPackageReviews
+ * (full populated docs + pagination + aggregate): this is a small,
+ * fixed-size carousel feed, not a paginated "see all reviews" listing, so
+ * there's no total/page/aggregate to report.
+ *
+ * Sort is fixed (rating desc, then createdAt desc — "highest-rated, most
+ * recent" per the spec), not a query param — unlike getVendorReviews/
+ * getPackageReviews's user-selectable recent/highest/lowest, a curated
+ * carousel has one obvious ordering, not several.
+ *
+ * NOTE (flagged by the frontend team, not something to fix here — a
+ * separate, not-yet-built step per Review.js's own doc comment): there is
+ * no review-SUBMISSION endpoint yet, so customer_reviews may currently hold
+ * few or zero real entries. An empty/short items[] is therefore expected
+ * behaviour right now, not a bug in this endpoint — callers should fall
+ * back to static content until real reviews start flowing in.
+ */
+export const getFeaturedReviews = async (req, res) => {
+  try {
+    const { limit, minRating } = req.query;
+    const match = { status: "Published" };
+    if (minRating) match.rating = { $gte: minRating };
+
+    const reviews = await Review.find(match)
+      .sort({ rating: -1, createdAt: -1 })
+      .limit(limit)
+      .populate({ path: "customerId", select: "name profilePicture" })
+      .populate({ path: "packageId", select: "step1_eventAndCrew.packageName" })
+      .lean();
+
+    const items = reviews.map((r) => ({
+      _id: r._id,
+      rating: r.rating,
+      comment: r.comment,
+      createdAt: r.createdAt,
+      customerName: r.customerId?.name || null,
+      customerAvatar: r.customerId?.profilePicture || null,
+      packageName: r.packageId?.step1_eventAndCrew?.packageName || null,
+    }));
+
+    return res.status(200).json({ status: "SUCCESS", items });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to fetch featured reviews", error: error.message });
   }
 };
 

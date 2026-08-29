@@ -21,6 +21,9 @@ const paginationFields = {
 };
 
 export const browsePackagesQuerySchema = z.object({
+  // Free-text search — matched against package name, event categories, and
+  // vendor business name (browsePackages, customerDiscoveryController.js).
+  q: z.string().trim().min(1).max(200).optional(),
   eventCategory: z.string().trim().min(1).max(100).optional(),
   vendorType: z.enum(SUPPORTED_TYPES).optional(),
   city: z.string().trim().min(1).max(100).optional(),
@@ -61,4 +64,13 @@ export const reviewsQuerySchema = z.object({
   minRating: z.coerce.number().int().min(1).max(5).optional(),
   sort: z.enum(["recent", "highest", "lowest"]).default("recent"),
   ...paginationFields,
+});
+
+// Landing page's featured-reviews carousel (getFeaturedReviews) — a small,
+// fixed-size, sort-locked feed, not a paginated listing, so this
+// deliberately doesn't spread ...paginationFields (no page param — just how
+// many to return).
+export const featuredReviewsQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(8),
+  minRating: z.coerce.number().int().min(1).max(5).optional(),
 });
