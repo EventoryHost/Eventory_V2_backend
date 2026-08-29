@@ -423,7 +423,7 @@ async function computeReviewAggregate(match) {
 export const getPackageGroupVariants = async (req, res) => {
   try {
     const { packageGroupId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(packageGroupId)) {
+    if (!packageGroupId || !String(packageGroupId).trim()) {
       return res.status(400).json({ status: "FAILED", message: "Invalid packageGroupId" });
     }
 
@@ -475,11 +475,15 @@ export const getPackageGroupVariants = async (req, res) => {
 export const getVendorDetail = async (req, res) => {
   try {
     const { vendorId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(vendorId)) {
+    if (!vendorId || !String(vendorId).trim()) {
       return res.status(400).json({ status: "FAILED", message: "Invalid vendorId" });
     }
 
-    const vendor = await Vendor.findOne({ _id: vendorId, isDeactivated: { $ne: true } })
+    const query = mongoose.Types.ObjectId.isValid(vendorId)
+      ? { $or: [{ _id: vendorId }, { id: vendorId }], isDeactivated: { $ne: true } }
+      : { id: vendorId, isDeactivated: { $ne: true } };
+
+    const vendor = await Vendor.findOne(query)
       .select(PUBLIC_VENDOR_FIELDS)
       .lean();
 
@@ -502,12 +506,12 @@ export const getVendorDetail = async (req, res) => {
 export const getVendorReviews = async (req, res) => {
   try {
     const { vendorId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(vendorId)) {
+    if (!vendorId || !String(vendorId).trim()) {
       return res.status(400).json({ status: "FAILED", message: "Invalid vendorId" });
     }
 
     const { minRating, sort, page, limit } = req.query;
-    const match = { vendorId: new mongoose.Types.ObjectId(vendorId), status: "Published" };
+    const match = { vendorId: String(vendorId), status: "Published" };
     if (minRating) match.rating = { $gte: minRating };
 
     const sortMap = {
@@ -553,12 +557,12 @@ export const getVendorReviews = async (req, res) => {
 export const getPackageReviews = async (req, res) => {
   try {
     const { packageId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(packageId)) {
+    if (!packageId || !String(packageId).trim()) {
       return res.status(400).json({ status: "FAILED", message: "Invalid packageId" });
     }
 
     const { minRating, sort, page, limit } = req.query;
-    const match = { packageId: new mongoose.Types.ObjectId(packageId), status: "Published" };
+    const match = { packageId: String(packageId), status: "Published" };
     if (minRating) match.rating = { $gte: minRating };
 
     const sortMap = {

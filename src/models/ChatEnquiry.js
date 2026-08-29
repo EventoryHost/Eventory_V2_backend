@@ -27,7 +27,7 @@ const ChatEnquirySchema = new mongoose.Schema(
     // Exactly one of these is set — same anon-XOR-customer pattern as
     // ChatSession.
     anonId: { type: String, default: null, index: true },
-    customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", default: null, index: true },
+    customerId: { type: String, ref: "Customer", default: null, index: true },
 
     // Collected requirements — field-by-field per the client's step flow.
     eventType: { type: String, default: null },

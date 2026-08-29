@@ -20,7 +20,7 @@ const ChatSessionSchema = new mongoose.Schema(
     // chat — mirrors the same anon-XOR-customer pattern already used by
     // Booking.customerId/Cart guestId elsewhere in this codebase.
     anonId: { type: String, default: null, index: true },
-    customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", default: null, index: true },
+    customerId: { type: String, ref: "Customer", default: null, index: true },
 
     chatType: { type: String, enum: ["anon-admin", "customer-admin"], required: true },
     chatStatus: { type: String, enum: ["ACTIVE", "FINISHED"], default: "ACTIVE" },

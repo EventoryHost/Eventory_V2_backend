@@ -42,7 +42,7 @@ const CartSchema = new mongoose.Schema(
     // only one of each cart kind ever coexisted at a time; found via
     // direct testing 2026-08-12 while debugging the identical bug in
     // Customer.js's wishlistShareToken. Left genuinely unset instead.
-    customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", index: { unique: true, sparse: true } },
+    customerId: { type: String, ref: "Customer", index: { unique: true, sparse: true } },
     guestId: { type: String, index: { unique: true, sparse: true } },
 
     coupon: { type: CartCouponSchema, default: null },

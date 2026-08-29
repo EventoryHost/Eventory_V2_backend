@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import bcrypt from "bcryptjs";
+import { generateISTId } from "../utils/idGenerator.js";
 import { addressSchema } from "./schemas/addressSchema.js";
 
 /**
@@ -33,6 +34,7 @@ const CustomerSchema = new mongoose.Schema(
       type: String,
       unique: true,
       required: true,
+      default: () => generateISTId("CUS"),
     },
 
     // ---- Identity ----

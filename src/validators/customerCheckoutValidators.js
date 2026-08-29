@@ -1,11 +1,11 @@
 import { z } from "zod";
 import mongoose from "mongoose";
 
-const objectId = (label) =>
+const validId = (label) =>
   z
     .string()
     .trim()
-    .refine((v) => mongoose.Types.ObjectId.isValid(v), `${label} must be a valid id`);
+    .min(1, `${label} must be a valid id`);
 
 // addOnId/itemId NOT validated as strict ObjectIds — same real bug/fix as
 // customerCartValidators.js's identical schemas (2026-08-21, frontend-reported).
@@ -42,7 +42,7 @@ const customizeRequestSchema = z.object({
 export const createCheckoutSessionSchema = z
   .object({
     source: z.enum(["cart", "direct"]),
-    packageId: objectId("packageId").optional(),
+    packageId: validId("packageId").optional(),
     eventType: z.string().trim().max(100).optional(),
     guests: z.coerce.number().int().min(1).optional(),
     date: z.coerce.date().optional(),
@@ -64,7 +64,7 @@ export const updateCheckoutLineSchema = z.object({
   // Switch to a sibling variant of the SAME logical package (validated
   // server-side against packageGroupId) — not a way to swap to an unrelated
   // package; that goes through Cart/PDP instead.
-  packageId: objectId("packageId").optional(),
+  packageId: validId("packageId").optional(),
   eventType: z.string().trim().max(100).optional(),
   guests: z.coerce.number().int().min(1).optional(),
   date: z.coerce.date().optional(),

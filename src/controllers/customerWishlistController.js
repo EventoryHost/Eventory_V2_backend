@@ -37,7 +37,10 @@ export const addWishlistItem = async (req, res) => {
     } else {
       // Vendor.isDeactivated may simply be unset on older docs — same
       // "$ne: true" reasoning as the discovery browse endpoints.
-      const vendor = await Vendor.findOne({ _id: vendorId, isDeactivated: { $ne: true } }).select("_id");
+      const vendorQuery = mongoose.Types.ObjectId.isValid(vendorId)
+        ? { $or: [{ _id: vendorId }, { id: vendorId }], isDeactivated: { $ne: true } }
+        : { id: vendorId, isDeactivated: { $ne: true } };
+      const vendor = await Vendor.findOne(vendorQuery).select("_id id");
       if (!vendor) {
         return res.status(404).json({ status: "FAILED", message: "Vendor not found or not currently active" });
       }

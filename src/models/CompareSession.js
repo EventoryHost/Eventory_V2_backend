@@ -20,9 +20,9 @@ import mongoose from "mongoose";
  */
 const CompareSessionSchema = new mongoose.Schema(
   {
-    customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", required: true, unique: true, index: true },
+    customerId: { type: String, ref: "Customer", required: true, unique: true, index: true },
     packageIds: {
-      type: [{ type: mongoose.Schema.Types.ObjectId, ref: "Package" }],
+      type: [{ type: String, ref: "Package" }],
       default: [],
       validate: {
         validator: (arr) => arr.length <= 3,

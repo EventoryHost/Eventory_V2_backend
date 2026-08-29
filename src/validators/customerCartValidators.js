@@ -1,11 +1,11 @@
 import { z } from "zod";
 import mongoose from "mongoose";
 
-const objectId = (label) =>
+const validId = (label) =>
   z
     .string()
     .trim()
-    .refine((v) => mongoose.Types.ObjectId.isValid(v), `${label} must be a valid id`);
+    .min(1, `${label} must be a valid id`);
 
 // addOnId/itemId are NOT validated as strict ObjectIds — REAL BUG FOUND
 // 2026-08-21 (frontend-reported "Cast to ObjectId failed" on add-to-cart):
@@ -51,7 +51,7 @@ const customizeRequestSchema = z.object({
 });
 
 export const addCartItemSchema = z.object({
-  packageId: objectId("packageId"),
+  packageId: validId("packageId"),
   eventType: z.string().trim().max(100).optional(),
   guests: z.coerce.number().int().min(1).optional(),
   date: z.coerce.date().optional(),

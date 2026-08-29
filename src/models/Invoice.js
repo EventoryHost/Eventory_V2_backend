@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { generateISTId } from "../utils/idGenerator.js";
 
 /**
  * Phase 5 Step 24 — Invoice model. ONE INVOICE PER BOOKING (per vendor),
@@ -28,10 +29,10 @@ const InvoiceLineItemSchema = new mongoose.Schema(
 
 const InvoiceSchema = new mongoose.Schema(
   {
-    invoiceNumber: { type: String, required: true, unique: true }, // generateISTId("INV")
-    bookingId: { type: mongoose.Schema.Types.ObjectId, ref: "Booking", required: true, unique: true, index: true },
-    customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", required: true, index: true },
-    vendorId: { type: mongoose.Schema.Types.ObjectId, ref: "Vendor", required: true },
+    invoiceNumber: { type: String, required: true, unique: true, default: () => generateISTId("INV") },
+    bookingId: { type: String, ref: "Booking", required: true, unique: true, index: true },
+    customerId: { type: String, ref: "Customer", required: true, index: true },
+    vendorId: { type: String, ref: "Vendor", required: true },
 
     // Snapshots — frozen at issue time, see class comment above.
     customerSnapshot: {

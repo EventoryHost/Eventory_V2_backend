@@ -26,7 +26,7 @@ const AnonChatUserSchema = new mongoose.Schema(
     // customerChatController.js's resolveChatIdentity for when this link
     // is made (best-effort, additive only, same philosophy as Booking.js's
     // own autoLinkCustomer hook).
-    convertedCustomerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", default: null },
+    convertedCustomerId: { type: String, ref: "Customer", default: null },
   },
   {
     timestamps: true,

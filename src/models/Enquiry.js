@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { generateISTId } from "../utils/idGenerator.js";
 import {
   AttachmentSchema,
   ChangeRequestSchema,
@@ -71,10 +72,11 @@ const EnquirySchema = new mongoose.Schema(
       type: String,
       unique: true,
       required: true,
+      default: () => generateISTId("ENQ"),
       index: true,
     },
     vendorId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: String,
       ref: "Vendor",
       required: true,
       index: true,
@@ -146,7 +148,7 @@ const EnquirySchema = new mongoose.Schema(
     },
     // If converted, link to booking
     convertedBookingId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: String,
       ref: "Booking",
       default: null,
     },
@@ -188,7 +190,7 @@ const EnquirySchema = new mongoose.Schema(
       default: null,
     },
     packageId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: String,
       ref: "Package",
       default: null,
     },

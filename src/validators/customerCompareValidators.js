@@ -5,7 +5,7 @@ export const addCompareItemSchema = z.object({
   packageId: z
     .string()
     .trim()
-    .refine((v) => mongoose.Types.ObjectId.isValid(v), "packageId must be a valid id"),
+    .min(1, "packageId must be a valid id"),
 });
 
 export const compareExportQuerySchema = z.object({

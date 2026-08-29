@@ -1,10 +1,12 @@
 import mongoose from "mongoose";
+import { generateISTId } from "../utils/idGenerator.js";
 
 const VendorSchema = new mongoose.Schema({
   id: {
     type: String,
     unique: true,
     required: true,
+    default: () => generateISTId("VEN"),
   },
 
   businessName: String,

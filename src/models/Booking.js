@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { generateISTId } from "../utils/idGenerator.js";
 import {
   ChangeRequestSchema,
   PackageSnapshotSchema,
@@ -65,16 +66,17 @@ const BookingSchema = new mongoose.Schema(
       type: String,
       unique: true,
       required: true,
+      default: () => generateISTId("EVT"),
       index: true,
     },
     vendorId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: String,
       ref: "Vendor",
       required: true,
       index: true,
     },
     packageId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: String,
       ref: "Package",
       required: true,
     },
@@ -88,7 +90,7 @@ const BookingSchema = new mongoose.Schema(
     // deliberate, separate decision (phone-number matching is not exact),
     // not something this field's presence does automatically.
     customerId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: String,
       ref: "Customer",
       default: null,
       index: true,
@@ -219,8 +221,8 @@ BookingSchema.pre("save", async function autoLinkCustomer() {
   try {
     const normalized = normalizePhone(this.customer.phone);
     if (!normalized) return;
-    const match = await Customer.findOne({ phone: normalized }).select("_id").lean();
-    if (match) this.customerId = match._id;
+    const match = await Customer.findOne({ phone: normalized }).select("_id id").lean();
+    if (match) this.customerId = match.id || match._id;
   } catch (err) {
     console.warn("[Booking.autoLinkCustomer] lookup failed, continuing without a link:", err.message);
   }

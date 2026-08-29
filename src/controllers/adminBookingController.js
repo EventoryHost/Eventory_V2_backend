@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Booking from "../models/Booking.js";
 import Vendor from "../models/Vendor.js"; // For reassignment validation
 
@@ -122,7 +123,10 @@ export const reassignBooking = async (req, res) => {
     const { newVendorId, reason } = req.body;
     
     // Validate new vendor exists
-    const newVendor = await Vendor.findById(newVendorId);
+    const vendorQuery = mongoose.Types.ObjectId.isValid(newVendorId)
+      ? { $or: [{ _id: newVendorId }, { id: newVendorId }] }
+      : { id: newVendorId };
+    const newVendor = await Vendor.findOne(vendorQuery);
     if (!newVendor) {
       return res.status(404).json({ success: false, message: "New vendor not found" });
     }

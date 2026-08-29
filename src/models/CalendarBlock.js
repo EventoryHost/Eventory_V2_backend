@@ -3,7 +3,7 @@ import mongoose from "mongoose";
 const CalendarBlockSchema = new mongoose.Schema(
   {
     vendorId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: String,
       ref: "Vendor",
       required: true,
       index: true,

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { generateISTId } from "../utils/idGenerator.js";
 import policySchema from "./schemas/policySchema.js";
 
 const packageOptions = {
@@ -118,8 +119,9 @@ const PackageSchema = new mongoose.Schema(
     // document; siblings are tied together by sharing this id rather than by
     // matching on the (mutable, user-typed) step1_eventAndCrew.packageName.
     packageGroupId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: String,
       required: true,
+      default: () => generateISTId("PKG_GRP"),
       index: true,
     },
     variantType: {

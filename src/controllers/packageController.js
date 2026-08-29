@@ -3,6 +3,7 @@ import Package from "../models/Package.js";
 import Vendor from "../models/Vendor.js";
 import { getModelForVendor } from "../utils/modelRegistry.js";
 import { validatePackageSubmission } from "../validators/packageValidators.js";
+import { generateISTId } from "../utils/idGenerator.js";
 
 /**
  * @desc Initialize a new package draft
@@ -56,16 +57,10 @@ export const initializePackage = async (req, res) => {
     // rest join that group. Reject a malformed one rather than quietly minting a
     // fresh id, which would split the group without any visible error.
     const hasClientGroupId =
-      packageGroupId !== undefined && packageGroupId !== null && packageGroupId !== "";
-    if (hasClientGroupId && !mongoose.Types.ObjectId.isValid(packageGroupId)) {
-      return res.status(400).json({
-        status: "FAILED",
-        message: `Invalid packageGroupId: ${packageGroupId}`,
-      });
-    }
+      packageGroupId !== undefined && packageGroupId !== null && String(packageGroupId).trim() !== "";
     const resolvedGroupId = hasClientGroupId
-      ? new mongoose.Types.ObjectId(packageGroupId)
-      : new mongoose.Types.ObjectId();
+      ? String(packageGroupId).trim()
+      : generateISTId("PKG_GRP");
 
     // Idempotency: reuse an existing draft for the SAME variant of this package.
     // Prefer the group id; fall back to the legacy name match only when the
@@ -290,13 +285,7 @@ export const getVendorPackages = async (req, res) => {
     const query = { vendorId: actualVendorId };
     if (status) query.packageStatus = status;
     if (packageGroupId) {
-      if (!mongoose.Types.ObjectId.isValid(packageGroupId)) {
-        return res.status(400).json({
-          status: "FAILED",
-          message: `Invalid packageGroupId: ${packageGroupId}`,
-        });
-      }
-      query.packageGroupId = new mongoose.Types.ObjectId(packageGroupId);
+      query.packageGroupId = String(packageGroupId).trim();
     }
 
     const packages = await Package.find(query).sort({ createdAt: -1 });
@@ -314,7 +303,7 @@ export const getPackageGroup = async (req, res) => {
   try {
     const { packageGroupId } = req.params;
 
-    if (!mongoose.Types.ObjectId.isValid(packageGroupId)) {
+    if (!packageGroupId || !String(packageGroupId).trim()) {
       return res.status(400).json({
         status: "FAILED",
         message: `Invalid packageGroupId: ${packageGroupId}`,
@@ -322,7 +311,7 @@ export const getPackageGroup = async (req, res) => {
     }
 
     const packages = await Package.find({
-      packageGroupId: new mongoose.Types.ObjectId(packageGroupId),
+      packageGroupId: String(packageGroupId).trim(),
     }).sort({ createdAt: 1 });
 
     if (packages.length === 0) {
@@ -348,7 +337,7 @@ export const updatePackageGroup = async (req, res) => {
     const { packageGroupId } = req.params;
     const { packageName, packageStatus, step, data } = req.body;
 
-    if (!mongoose.Types.ObjectId.isValid(packageGroupId)) {
+    if (!packageGroupId || !String(packageGroupId).trim()) {
       return res.status(400).json({
         status: "FAILED",
         message: `Invalid packageGroupId: ${packageGroupId}`,
@@ -400,7 +389,7 @@ export const updatePackageGroup = async (req, res) => {
     // Safe through the base model: every path touched here is on the base
     // schema, and $set never strips discriminator fields.
     const result = await Package.updateMany(
-      { packageGroupId: new mongoose.Types.ObjectId(packageGroupId) },
+      { packageGroupId: String(packageGroupId).trim() },
       update,
       { runValidators: true }
     );
@@ -473,7 +462,7 @@ export const hardDeletePackage = async (req, res) => {
   try {
     const { packageGroupId } = req.params;
 
-    if (!mongoose.Types.ObjectId.isValid(packageGroupId)) {
+    if (!packageGroupId || !String(packageGroupId).trim()) {
       return res.status(400).json({
         status: "FAILED",
         message: `Invalid packageGroupId: ${packageGroupId}`,
@@ -481,7 +470,7 @@ export const hardDeletePackage = async (req, res) => {
     }
 
     const { deletedCount } = await Package.deleteMany({
-      packageGroupId: new mongoose.Types.ObjectId(packageGroupId),
+      packageGroupId: String(packageGroupId).trim(),
     });
 
     if (deletedCount === 0) {
@@ -587,7 +576,7 @@ export const duplicatePackage = async (req, res) => {
           .lean()
       : [originalPkg];
 
-    const newGroupId = new mongoose.Types.ObjectId();
+    const newGroupId = generateISTId("PKG_GRP");
     const name = copyName(variants[0].step1_eventAndCrew?.packageName);
 
     const created = [];
@@ -645,7 +634,7 @@ export const duplicateVariant = async (req, res) => {
     // Backfill documents predating packageGroupId, so the pair stays one package.
     let groupId = source.packageGroupId;
     if (!groupId) {
-      groupId = new mongoose.Types.ObjectId();
+      groupId = generateISTId("PKG_GRP");
       await Package.updateOne({ _id: source._id }, { $set: { packageGroupId: groupId } });
     }
 

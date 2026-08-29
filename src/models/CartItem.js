@@ -88,9 +88,9 @@ const CustomizeRequestSchema = new mongoose.Schema(
 
 const CartItemSchema = new mongoose.Schema(
   {
-    cartId: { type: mongoose.Schema.Types.ObjectId, ref: "Cart", required: true, index: true },
-    vendorId: { type: mongoose.Schema.Types.ObjectId, ref: "Vendor", required: true, index: true },
-    packageId: { type: mongoose.Schema.Types.ObjectId, ref: "Package", required: true },
+    cartId: { type: String, ref: "Cart", required: true, index: true },
+    vendorId: { type: String, ref: "Vendor", required: true, index: true },
+    packageId: { type: String, ref: "Package", required: true },
 
     // Denormalized at add-to-cart time — same intent as Booking.js's
     // packageSnapshot: what the customer saw and picked, kept stable even
