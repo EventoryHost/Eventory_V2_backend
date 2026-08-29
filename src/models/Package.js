@@ -274,6 +274,12 @@ const PackageSchema = new mongoose.Schema(
         other: { type: String },
       },
     },
+    adminReview: {
+      step1: { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
+      step2: { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
+      step3: { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
+      step4: { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
+    }
   },
   packageOptions
 );
