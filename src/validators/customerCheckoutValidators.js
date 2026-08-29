@@ -7,8 +7,10 @@ const objectId = (label) =>
     .trim()
     .refine((v) => mongoose.Types.ObjectId.isValid(v), `${label} must be a valid id`);
 
+// addOnId/itemId NOT validated as strict ObjectIds — same real bug/fix as
+// customerCartValidators.js's identical schemas (2026-08-21, frontend-reported).
 const selectedAddOnSchema = z.object({
-  addOnId: objectId("addOnId").optional(),
+  addOnId: z.string().trim().max(200).optional(),
   name: z.string().trim().min(1).max(200),
   price: z.coerce.number().min(0).default(0),
   quantity: z.coerce.number().int().min(1).default(1),
@@ -16,10 +18,23 @@ const selectedAddOnSchema = z.object({
 
 const selectedItemSchema = z.object({
   groupKey: z.string().trim().min(1).max(120),
-  itemId: objectId("itemId").optional(),
+  itemId: z.string().trim().max(200).optional(),
   itemName: z.string().trim().min(1).max(200),
   price: z.coerce.number().min(0).default(0),
   isChargeable: z.coerce.boolean().default(false),
+});
+
+// PDP "Customize items" workshop requests — same shape/reasoning as
+// customerCartValidators.js's identical schema (2026-08-27).
+const customizeRequestSchema = z.object({
+  setupId: z.string().trim().min(1).max(200),
+  itemId: z.string().trim().min(1).max(200),
+  requestType: z.enum(["change", "add", "remove"]),
+  label: z.string().trim().min(1).max(200),
+  quantity: z.coerce.number().min(0).optional(),
+  type: z.string().trim().max(100).optional(),
+  colours: z.array(z.string().trim().max(50)).max(20).optional(),
+  volume: z.string().trim().max(50).optional(),
 });
 
 // source:"cart" needs nothing else — pulls the customer's own current cart.
@@ -35,6 +50,7 @@ export const createCheckoutSessionSchema = z
     location: z.string().trim().max(300).optional(),
     selectedAddOns: z.array(selectedAddOnSchema).max(50).optional(),
     selectedItems: z.array(selectedItemSchema).max(100).optional(),
+    customizeRequests: z.array(customizeRequestSchema).max(100).optional(),
     specialRequest: z.string().trim().max(500).optional(),
     quantity: z.coerce.number().int().min(1).default(1),
   })
@@ -56,6 +72,7 @@ export const updateCheckoutLineSchema = z.object({
   location: z.string().trim().max(300).optional(),
   selectedAddOns: z.array(selectedAddOnSchema).max(50).optional(),
   selectedItems: z.array(selectedItemSchema).max(100).optional(),
+  customizeRequests: z.array(customizeRequestSchema).max(100).optional(),
   specialRequest: z.string().trim().max(500).optional(),
   quantity: z.coerce.number().int().min(1).optional(),
 });

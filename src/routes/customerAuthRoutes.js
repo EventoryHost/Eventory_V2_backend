@@ -1,6 +1,6 @@
 import express from "express";
 import passport, { isGoogleConfigured, isFacebookConfigured } from "../config/passport.js";
-import { signup, login, refreshToken, logout } from "../controllers/customerAuthController.js";
+import { signup, login, refreshToken, logout, setPassword } from "../controllers/customerAuthController.js";
 import { googleCallback, facebookCallback, linkAccount } from "../controllers/customerSocialAuthController.js";
 import { protectCustomer } from "../middlewares/customerAuth.js";
 import { signupLimiter, loginLimiter } from "../middlewares/rateLimiters.js";
@@ -10,6 +10,7 @@ import {
   customerLoginSchema,
   customerRefreshTokenSchema,
   linkAccountSchema,
+  setPasswordSchema,
 } from "../validators/customerValidators.js";
 
 const router = express.Router();
@@ -42,7 +43,14 @@ router.post("/signup", signupLimiter, validateRequest(customerSignupSchema), sig
  * @swagger
  * /api/customer/auth/login:
  *   post:
- *     summary: Email + password login
+ *     summary: Login with EITHER email+password OR mobile+password
+ *     description: |
+ *       Provide exactly one of `email` or `mobile`, plus `password`. The
+ *       mobile+password path (2026-08-17 handoff's STEP "phone-password")
+ *       only succeeds for a customer who has previously set a password via
+ *       POST /set-password — a phone-only OTP account with no password set
+ *       gets the same generic "invalid credentials" response, not a
+ *       different error.
  *     tags: [Customer Authentication]
  *     requestBody:
  *       required: true
@@ -50,16 +58,45 @@ router.post("/signup", signupLimiter, validateRequest(customerSignupSchema), sig
  *         application/json:
  *           schema:
  *             type: object
- *             required: [email, password]
+ *             required: [password]
  *             properties:
  *               email: { type: string, example: "jane@example.com" }
+ *               mobile: { type: string, example: "9876543210" }
  *               password: { type: string, example: "atLeast8Chars" }
  *     responses:
  *       200: { description: Login successful }
- *       401: { description: Invalid email or password }
+ *       400: { description: Provide exactly one of email or mobile }
+ *       401: { description: Invalid credentials }
  *       403: { description: Account deactivated }
  */
 router.post("/login", loginLimiter, validateRequest(customerLoginSchema), login);
+
+/**
+ * @swagger
+ * /api/customer/auth/set-password:
+ *   post:
+ *     summary: Set (or replace) a password on the logged-in customer's account
+ *     description: |
+ *       2026-08-17 handoff's STEP "set-password" — optional/skippable,
+ *       runs right after a first-time phone+OTP signup so the customer can
+ *       use phone+password next time instead of requesting a fresh OTP.
+ *       Ensures authProviders includes a "local" entry afterward, since
+ *       the frontend detects "has a password" by checking for that entry.
+ *     tags: [Customer Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [password]
+ *             properties:
+ *               password: { type: string, example: "atLeast8Chars" }
+ *     responses:
+ *       200: { description: Password set }
+ *       401: { description: Not authenticated }
+ */
+router.post("/set-password", protectCustomer, validateRequest(setPasswordSchema), setPassword);
 
 /**
  * @swagger

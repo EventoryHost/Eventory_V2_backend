@@ -20,7 +20,19 @@ import mongoose from "mongoose";
 // becomes a real booking line.
 const SelectedAddOnSchema = new mongoose.Schema(
   {
-    addOnId: { type: mongoose.Schema.Types.ObjectId }, // the vendor's step2 add-on subdocument _id, if it has one
+    // String, NOT ObjectId — REAL BUG FOUND 2026-08-21 (frontend-reported):
+    // the vendor's step2 add-on subdocuments are plain array entries with
+    // NO explicit _id enforcement at the write path, and in practice almost
+    // every currently-seeded package's add-ons/setups/packageItems have no
+    // _id at all (confirmed against the real dev DB — 7 of 8 Live packages'
+    // addOns entirely lack one). The frontend correctly falls back to a
+    // synthetic id ("addon-0") when none exists — this field was previously
+    // typed as ObjectId, so that synthetic value failed to cast on save
+    // ("Cast to ObjectId failed ... at path addOnId"). Never used as an
+    // actual lookup/ref anywhere downstream (cartPricingService.js etc. —
+    // checked), purely a display/tracking tag, so there's no correctness
+    // reason to constrain its shape.
+    addOnId: { type: String, default: null },
     name: { type: String, required: true },
     price: { type: Number, required: true, default: 0 },
     quantity: { type: Number, default: 1, min: 1 },
@@ -37,10 +49,39 @@ const SelectedAddOnSchema = new mongoose.Schema(
 const SelectedItemSchema = new mongoose.Schema(
   {
     groupKey: { type: String, required: true },
-    itemId: { type: mongoose.Schema.Types.ObjectId },
+    // String, NOT ObjectId — same reasoning/fix as SelectedAddOnSchema.addOnId above.
+    itemId: { type: String, default: null },
     itemName: { type: String, required: true },
     price: { type: Number, default: 0 },
     isChargeable: { type: Boolean, default: false },
+  },
+  { _id: false }
+);
+
+// PDP "Customize items" workshop requests — per-item colour/type/volume/
+// quantity change, add, or remove, scoped to a specific setup within the
+// package (distinct from the general free-text specialRequest field, which
+// already works end-to-end). Added 2026-08-27 per frontend's exact request
+// (was frontend-only until now, silently discarded — no field existed to
+// send it to). setupId/itemId are plain STRINGS, not ObjectIds — same
+// reasoning as SelectedAddOnSchema.addOnId/SelectedItemSchema.itemId above:
+// most setup/item subdocuments have no real _id in the actual seeded data,
+// the frontend already falls back to synthetic ids, and a client-generated
+// id for a brand-new "add" request was never going to be a real ObjectId
+// anyway. Accept-and-store only, per the same "no ground truth on Package
+// to validate colour/type/volume options against" reasoning already
+// documented for the choose-N gap (checkoutValidationService.js) — no
+// validation against the package's actual item catalog.
+const CustomizeRequestSchema = new mongoose.Schema(
+  {
+    setupId: { type: String, required: true },
+    itemId: { type: String, required: true },
+    requestType: { type: String, enum: ["change", "add", "remove"], required: true },
+    label: { type: String, required: true, trim: true, maxlength: 200 },
+    quantity: { type: Number, default: null, min: 0 },
+    type: { type: String, default: null, trim: true, maxlength: 100 },
+    colours: { type: [String], default: [] },
+    volume: { type: String, default: null, trim: true, maxlength: 50 },
   },
   { _id: false }
 );
@@ -87,6 +128,7 @@ const CartItemSchema = new mongoose.Schema(
 
     selectedAddOns: { type: [SelectedAddOnSchema], default: [] },
     selectedItems: { type: [SelectedItemSchema], default: [] },
+    customizeRequests: { type: [CustomizeRequestSchema], default: [] },
 
     // Per-vendor special request (final BRD Section 10.2) — lives here
     // since a CartItem is already vendor-scoped. If a vendor ever has more

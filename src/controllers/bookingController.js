@@ -494,7 +494,6 @@ const PRICING_FIELDS = [
   "basePrice",
   "itemsAdded",
   "addonsAdded",
-  "substituteItemsAdded",
   "itemsRemoved",
   "addonsRemoved",
   "discountAmount",

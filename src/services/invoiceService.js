@@ -1,6 +1,7 @@
 import PDFDocument from "pdfkit";
 import Invoice from "../models/Invoice.js";
 import { generateISTId } from "../utils/idGenerator.js";
+import { withPricingBreakdown } from "../utils/pricingBreakdown.js";
 
 /**
  * Phase 5 Step 24 — Invoice model + PDF generation/download. Two
@@ -26,10 +27,21 @@ export async function getOrCreateInvoiceForBooking(booking, vendor) {
   const existing = await Invoice.findOne({ bookingId: booking._id });
   if (existing) return existing;
 
-  const charges = booking.charges || [];
-  const subtotal = charges.filter((c) => c.type === "Base" || c.type === "Fee").reduce((sum, c) => sum + c.amount, 0);
-  const taxAmount = charges.filter((c) => c.type === "Tax").reduce((sum, c) => sum + c.amount, 0);
-  const discountAmount = charges.filter((c) => c.type === "Discount").reduce((sum, c) => sum + c.amount, 0);
+  // REWRITTEN 2026-08-27 — Booking.js's charges[] is gone vendor-side (prod
+  // merge), replaced by `pricing`. See customerBookingController.js's
+  // getBookingDetail for the identical reshape/reasoning — kept consistent
+  // between the two rather than diverging.
+  const { pricingBreakdown } = withPricingBreakdown(booking);
+  const discountRow = pricingBreakdown.deductions.find((d) => d.key === "discountAllowed");
+  const charges = [
+    { label: booking.packageSnapshot?.name || "Package", amount: pricingBreakdown.originalPackagePrice, type: "Base" },
+    ...pricingBreakdown.additions.map((a) => ({ label: a.label, amount: a.amount, type: "Fee" })),
+    ...pricingBreakdown.deductions.filter((d) => d.key !== "discountAllowed").map((d) => ({ label: d.label, amount: d.amount, type: "Fee" })),
+    { label: pricingBreakdown.tax.label, amount: pricingBreakdown.tax.amount, type: "Tax" },
+  ];
+  const subtotal = pricingBreakdown.subtotal;
+  const taxAmount = pricingBreakdown.tax.amount;
+  const discountAmount = discountRow ? Math.abs(discountRow.amount) : 0;
 
   return Invoice.create({
     invoiceNumber: generateISTId("INV"),

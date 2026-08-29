@@ -1,5 +1,7 @@
+import mongoose from "mongoose";
 import Booking from "../models/Booking.js";
 import { utcDayRange } from "./dateRange.js";
+import { resolveVendorRefId } from "./resolveVendor.js";
 
 /**
  * Availability is best-effort, built from three independent signals: the
@@ -44,11 +46,30 @@ export async function computeAvailability(pkg, { date, guests, time }) {
     availability.matchesWeeklyAvailability = weeklyAvailability.length ? weeklyAvailability.includes(weekday) : null;
 
     const dailyCapacity = pkg.bookingCapacity?.dailyCapacity ?? null;
-    const activeBookingsOnDate = await Booking.countDocuments({
-      vendorId: pkg.vendorId?._id || pkg.vendorId,
-      eventDate: { $gte: start, $lt: end },
-      status: { $nin: ["Cancelled", "Declined"] },
-    });
+
+    // REAL BUG FOUND 2026-08-21 (frontend-reported "Cast to ObjectId
+    // failed ... at path vendorId for model Booking" on add-to-cart): this
+    // used to pass pkg.vendorId straight through — fine when the caller
+    // had already resolved it (PDP's getPackageDetail does), but a hard
+    // 500 whenever it hadn't, since Package.vendorId is stored as the
+    // Vendor's business-id string for almost every real package (see
+    // src/utils/resolveVendor.js's own write-up) and Booking.vendorId is a
+    // strict ObjectId field. Resolved with the SAME fallback here instead
+    // of trusting every call site to pre-resolve it — this function is
+    // shared by the PDP and Cart's add/get/revalidation paths, so fixing
+    // it once here is the actually-robust fix, not a per-caller patch.
+    let vendorObjectId = pkg.vendorId?._id || pkg.vendorId;
+    if (!mongoose.Types.ObjectId.isValid(vendorObjectId)) {
+      vendorObjectId = await resolveVendorRefId(vendorObjectId);
+    }
+
+    const activeBookingsOnDate = vendorObjectId
+      ? await Booking.countDocuments({
+          vendorId: vendorObjectId,
+          eventDate: { $gte: start, $lt: end },
+          status: { $nin: ["Cancelled", "Declined"] },
+        })
+      : 0;
     availability.activeBookingsOnDate = activeBookingsOnDate;
     availability.dailyCapacity = dailyCapacity;
     availability.capacityAvailable = dailyCapacity == null ? null : activeBookingsOnDate < dailyCapacity;

@@ -39,6 +39,24 @@ import { generatePaymentId } from "../utils/generateId.js";
 // webhook handler only checked that the signature HEADERS were present,
 // never actually verified them cryptographically — that gap is not
 // repeated here.
+// Added 2026-08-27 — real Cashfree HOSTED CHECKOUT redirect integration.
+// Cashfree's order_meta.return_url tells Cashfree where to send the
+// customer's BROWSER back to once they finish paying on Cashfree's own
+// hosted page (this is what actually makes the "redirect to Cashfree,
+// then back" flow work — PGCreateOrder calls before this never set it, so
+// there was nowhere for Cashfree to redirect back to). Same FRONTEND_URL-
+// with-a-localhost-fallback convention already used in app.js (OAuth
+// redirect/CORS allowlist) — not a new env var. paymentId is OUR OWN
+// already-known Payment._id (created before this URL is built), not
+// Cashfree's own {order_id} template — no need for that since we already
+// know everything the return page needs to look the payment back up.
+// See pay-integrate.txt for the full frontend contract this return page
+// must implement.
+function buildPaymentReturnUrl(paymentId) {
+  const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
+  return `${frontendUrl}/payment/return?paymentId=${paymentId}`;
+}
+
 function isValidWebhookSignature(rawBody, timestamp, signature) {
   if (!rawBody || !timestamp || !signature) return false;
   const secret = process.env.CASHFREE_CLIENT_SECRET_PG;
@@ -145,6 +163,11 @@ export const createTokenPayment = async (req, res) => {
           customer_email: session.contactDetails.email || undefined,
           customer_name: session.contactDetails.name || undefined,
         },
+        order_meta: {
+          // Makes the actual hosted-checkout redirect flow work — see
+          // buildPaymentReturnUrl's own comment above.
+          return_url: buildPaymentReturnUrl(payment._id),
+        },
         order_tags: {
           checkoutSessionId: String(session._id),
           paymentType: "Token",
@@ -231,12 +254,20 @@ export const createMilestonePayment = async (req, res) => {
     const cfOrderId = generatePaymentId();
     const idempotencyKey = `${booking._id}:${milestone._id}:${cfOrderId}`;
 
+    // REWRITTEN 2026-08-27 — Booking.paymentMilestones[].type is gone
+    // vendor-side (prod merge): the old strict Token/Advanced1/Advanced2/
+    // FinalClearance enum was replaced by a free-text `title`, so there's
+    // no more "FinalClearance" string to special-case into "Remaining" —
+    // always "Milestone" now (Payment.js's paymentType enum still has
+    // "Remaining" as an option; nothing currently produces it, which is
+    // honest given there's no reliable signal left to distinguish "the
+    // final one" from any other milestone by title alone).
     const payment = await Payment.create({
       bookingId: booking._id,
       milestoneId: milestone._id,
       customerId: req.customer._id,
-      paymentType: milestone.type === "FinalClearance" ? "Remaining" : "Milestone",
-      milestoneLabel: milestone.type,
+      paymentType: "Milestone",
+      milestoneLabel: milestone.title,
       amount: milestone.amount,
       cfOrderId,
       idempotencyKey,
@@ -257,10 +288,13 @@ export const createMilestonePayment = async (req, res) => {
           customer_email: booking.customer?.email || undefined,
           customer_name: booking.customer?.name || undefined,
         },
+        order_meta: {
+          return_url: buildPaymentReturnUrl(payment._id),
+        },
         order_tags: {
           bookingId: String(booking._id),
           milestoneId: String(milestone._id),
-          milestoneType: milestone.type,
+          milestoneTitle: milestone.title,
           paymentType: payment.paymentType,
         },
       });
@@ -445,6 +479,12 @@ export const getPaymentStatus = async (req, res) => {
       paymentId: payment._id,
       checkoutSessionId: payment.checkoutSessionId,
       bookingId: payment.bookingId,
+      // Populated once createBookingsFromCheckoutSession has actually run
+      // (webhook or the live-recheck above, whichever fires first) — see
+      // Payment.js's own comment. Empty array until then; the frontend's
+      // payment-return page should keep polling this endpoint until either
+      // paymentStatus is a terminal value OR bookingIds is non-empty.
+      bookingIds: payment.createdBookingIds || [],
       milestoneLabel: payment.milestoneLabel,
       paymentType: payment.paymentType,
       amount: payment.amount,
@@ -516,6 +556,90 @@ export const confirmFreeCheckout = async (req, res) => {
     return res.status(201).json({
       status: "SUCCESS",
       message: "Checkout confirmed with no payment required",
+      paymentId: payment._id,
+      bookingIds,
+    });
+  } catch (error) {
+    if (error.code === 11000) {
+      return res.status(409).json({ status: "FAILED", message: "This session has already been confirmed" });
+    }
+    return res.status(500).json({ status: "ERROR", message: "Failed to confirm checkout", error: error.message });
+  }
+};
+
+/**
+ * @desc POST /api/customer/payments/confirm-offline — added 2026-08-27 per
+ * a product decision relayed by the frontend team: in-app payment
+ * collection is gone for this flow, so "Continue to Payment" needs a way
+ * to create a real Booking without a real Cashfree charge, for ANY amount
+ * (not just a zero-token quote — that case is confirmFreeCheckout above,
+ * left untouched/still valid for a genuinely Free package).
+ *
+ * Same "Validation before Continue" checks as confirmFreeCheckout/
+ * createTokenPayment (never trust the frontend enforced them), but does
+ * NOT require the quote's token amount to be zero. Creates a real Payment
+ * record (immediately PAID, no Cashfree order — same "still a real audit
+ * trail, not a special no-payment code path" reasoning confirmFreeCheckout
+ * already uses for its ₹0 case) for the FULL grandTotal, then creates the
+ * Booking(s) via createBookingsFromCheckoutSession's new assumeFullyPaid
+ * option — every line marked FullPaid, every milestone Received, since
+ * there's no real per-milestone payment tracking for an off-platform
+ * booking and pretending otherwise would be guessing.
+ */
+export const confirmOfflineCheckout = async (req, res) => {
+  try {
+    const { checkoutSessionId } = req.body;
+
+    const session = await CheckoutSession.findOne({ _id: checkoutSessionId, customerId: req.customer._id });
+    if (!session) return res.status(404).json({ status: "FAILED", message: "Checkout session not found" });
+
+    if (session.status === "Active" && session.expiresAt < new Date()) {
+      session.status = "Expired";
+      await session.save();
+    }
+    if (session.status !== "Active") {
+      return res.status(410).json({ status: "FAILED", message: `This checkout session is ${session.status.toLowerCase()} — start a new one` });
+    }
+
+    const contact = computeContactValidation(session.contactDetails, req.customer);
+    const lines = computeLinesValidation(session.lines);
+    if (!contact.valid || !lines.valid) {
+      return res.status(400).json({ status: "FAILED", message: "Checkout session is not ready to confirm", validation: { contact, lines } });
+    }
+
+    const quote = session.lockedQuote;
+    if (!quote) {
+      return res.status(400).json({ status: "FAILED", message: "This session has no locked quote yet — add at least one line first" });
+    }
+
+    // Idempotency — same pattern/limitation as confirmFreeCheckout above:
+    // idempotencyKey has a unique index, so a retry hits the 11000 catch
+    // below and 409s rather than double-confirming. Not attempting to
+    // re-derive bookingIds on that path (same as confirmFreeCheckout
+    // doesn't either) — Booking has no field linking back to which
+    // Payment/CheckoutSession created it, so there's no reliable way to
+    // look them back up; the frontend already has session._id at that
+    // point and can re-fetch the session/bookings a different way if
+    // it ever needs to recover from a retry.
+    const payment = await Payment.create({
+      checkoutSessionId: session._id,
+      customerId: req.customer._id,
+      paymentType: "Token",
+      amount: quote.grandTotal || 0,
+      cfOrderId: generatePaymentId(), // no real Cashfree order — off-platform payment, kept for schema consistency/audit trail
+      idempotencyKey: `${session._id}:Token:offline`,
+      status: "PAID",
+      paidAt: new Date(),
+    });
+
+    session.status = "Completed";
+    await session.save();
+
+    const bookingIds = await createBookingsFromCheckoutSession(session, payment, { assumeFullyPaid: true });
+
+    return res.status(201).json({
+      status: "SUCCESS",
+      message: "Checkout confirmed — payment collected off-platform",
       paymentId: payment._id,
       bookingIds,
     });
