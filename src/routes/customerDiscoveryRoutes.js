@@ -8,6 +8,7 @@ import {
   getPackageDetail,
   getPackageGroupVariants,
   getPackageReviews,
+  getPopularPackages,
   getVendorDetail,
   getVendorReviews,
 } from "../controllers/customerDiscoveryController.js";
@@ -18,6 +19,7 @@ import {
   browseVendorsQuerySchema,
   featuredReviewsQuerySchema,
   packageDetailQuerySchema,
+  popularPackagesQuerySchema,
   reviewsQuerySchema,
 } from "../validators/customerDiscoveryValidators.js";
 
@@ -130,6 +132,31 @@ router.get("/packages/filters", publicBrowseLimiter, getPackageFilters);
  *       400: { description: Invalid query parameters }
  */
 router.get("/reviews/featured", publicBrowseLimiter, validateRequest(featuredReviewsQuerySchema, "query"), getFeaturedReviews);
+
+/**
+ * @swagger
+ * /api/customer/packages/popular:
+ *   get:
+ *     summary: Landing page's "Packages Often Booked by our Customers" carousel
+ *     description: |
+ *       Public, read-only. Live packages ranked by real booking volume
+ *       (Declined/Cancelled bookings excluded — they never actually
+ *       happened). Same response shape as GET /packages (same package
+ *       projection, same resolved/whitelisted vendor) so existing
+ *       package-card mapping code can be reused as-is. If fewer than
+ *       `limit` packages have any qualifying bookings yet, the rest are
+ *       filled with the newest Live packages — usingFallback:true on the
+ *       response flags when that happened.
+ *     tags: [Customer Discovery]
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 6, maximum: 30 }
+ *     responses:
+ *       200: { description: Up to `limit` Live packages, most-booked first }
+ *       400: { description: Invalid query parameters }
+ */
+router.get("/packages/popular", publicBrowseLimiter, validateRequest(popularPackagesQuerySchema, "query"), getPopularPackages);
 
 /**
  * @swagger

@@ -35,6 +35,13 @@ export const browsePackagesQuerySchema = z.object({
   ...paginationFields,
 });
 
+// Landing page's "Packages Often Booked by our Customers" carousel
+// (getPopularPackages) — a small, fixed-size ranked feed, same reasoning
+// as featuredReviewsQuerySchema for not spreading ...paginationFields.
+export const popularPackagesQuerySchema = z.object({
+  limit: z.coerce.number().int().min(1).max(30).default(6),
+});
+
 export const browseVendorsQuerySchema = z.object({
   vendorType: z.string().trim().min(1).max(60).optional(),
   eventCategory: z.string().trim().min(1).max(100).optional(),

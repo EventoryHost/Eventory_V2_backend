@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import Package from "../models/Package.js";
 import Vendor from "../models/Vendor.js";
 import Review from "../models/Review.js";
+import Booking from "../models/Booking.js";
 import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
 import { utcDayRange } from "../utils/dateRange.js";
 import { computeAvailability } from "../utils/packageAvailability.js";
@@ -204,6 +205,108 @@ export const browsePackages = async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to browse packages", error: error.message });
+  }
+};
+
+// Bookings that never actually happened don't signal real customer demand —
+// excluded from the popularity count below. Deliberately NOT reusing
+// Booking.js's own exported TERMINAL_STATUSES (["Declined","Cancelled",
+// "Completed"]): a Completed booking is exactly the kind of real, finished
+// purchase that SHOULD count toward "often booked", so only the two
+// statuses that mean "this booking never went through" are excluded here.
+const EXCLUDED_FROM_POPULARITY_COUNT = ["Declined", "Cancelled"];
+
+/**
+ * @desc Landing page's "Packages Often Booked by our Customers" carousel —
+ * previously fully static/hardcoded on the frontend (no backend logic
+ * existed for this at all). Ranks Live packages by real booking volume:
+ * counts actual Booking documents per packageId (excluding ones that never
+ * really happened — see EXCLUDED_FROM_POPULARITY_COUNT above), highest
+ * count first, then re-fetches those packageIds as full Package documents
+ * so the response is the SAME shape browsePackages already returns (same
+ * PACKAGE_FIELDS projection + PUBLIC_VENDOR_FIELDS-whitelisted, resolved
+ * vendor) — deliberately, so the frontend can reuse its existing
+ * mapPackageToVendor/ProductCard mapping as-is, no new shape to learn.
+ *
+ * FALLBACK (same reasoning as getPdpReviewsSection's usingVendorFallback,
+ * applied here for the same underlying reason — real signal may not exist
+ * yet): if fewer than `limit` packages have any qualifying booking at all
+ * (there are currently very few real bookings in the dev DB, and a
+ * brand-new package has never been booked by definition), the remainder is
+ * filled with the newest Live packages instead, so the carousel is never
+ * emptier than `limit` just because "often booked" data hasn't accumulated
+ * yet. `usingFallback: true` on the response tells the frontend when this
+ * happened, in case it wants to visually distinguish "real popularity" from
+ * "filler" — using it is optional, the endpoint works fine either way.
+ */
+export const getPopularPackages = async (req, res) => {
+  try {
+    const { limit } = req.query;
+
+    const ranked = await Booking.aggregate([
+      { $match: { status: { $nin: EXCLUDED_FROM_POPULARITY_COUNT } } },
+      { $group: { _id: "$packageId", bookingCount: { $sum: 1 } } },
+      { $sort: { bookingCount: -1 } },
+      // Overfetch — some of the top-booked packageIds may no longer be Live
+      // (paused/deleted since being booked), filtered out below once
+      // resolved against the real Package collection.
+      { $limit: Math.max(limit * 3, 30) },
+    ]);
+
+    const PACKAGE_FIELDS =
+      "vendorId vendorType variantType packageGroupId packageStatus " +
+      "step1_eventAndCrew.packageName step1_eventAndCrew.eventCategories " +
+      "step1_eventAndCrew.capacity step1_eventAndCrew.duration " +
+      "step3_policiesAndCharges.packagePricing step3_policiesAndCharges.gstInclusive " +
+      "step3_policiesAndCharges.gstRatePercent step3_policiesAndCharges.guestTiers " +
+      "step4_sampleMedia.media createdAt";
+
+    const rankedIds = ranked.map((r) => r._id);
+    const rankedPackages = rankedIds.length
+      ? await Package.find({ _id: { $in: rankedIds }, packageStatus: "Live" })
+          .select(PACKAGE_FIELDS)
+          .lean()
+      : [];
+
+    // Package.find({$in:...}) does not preserve `rankedIds`' order — restore
+    // the real booking-count ranking (highest first) before trimming to
+    // `limit`. Tied on bookingCount -> newer package first (same
+    // "highest-first, then most-recent" tiebreak convention already used
+    // elsewhere, e.g. computeReviewAggregate's rating desc/createdAt desc)
+    // rather than leaving ties to Mongo's unspecified group order.
+    const countByPackageId = new Map(ranked.map((r) => [String(r._id), r.bookingCount]));
+    rankedPackages.sort((a, b) => {
+      const byCount = (countByPackageId.get(String(b._id)) || 0) - (countByPackageId.get(String(a._id)) || 0);
+      if (byCount !== 0) return byCount;
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    });
+
+    let packages = rankedPackages.slice(0, limit);
+    let usingFallback = false;
+
+    if (packages.length < limit) {
+      usingFallback = true;
+      const usedIds = new Set(packages.map((p) => String(p._id)));
+      const fillerPackages = await Package.find({
+        packageStatus: "Live",
+        _id: { $nin: [...usedIds] },
+      })
+        .select(PACKAGE_FIELDS)
+        .sort({ createdAt: -1 })
+        .limit(limit - packages.length)
+        .lean();
+      packages = [...packages, ...fillerPackages];
+    }
+
+    await Promise.all(
+      packages.map(async (pkg) => {
+        pkg.vendorId = await resolveVendorForPackage(pkg.vendorId);
+      })
+    );
+
+    return res.status(200).json({ status: "SUCCESS", count: packages.length, usingFallback, packages });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to fetch popular packages", error: error.message });
   }
 };
 
