@@ -11,9 +11,10 @@ import { round2 } from "../utils/money.js";
  * customerPaymentController.js), but here there's no new Booking to
  * create — it pays down one that already exists.
  *
- * Deliberately generic over milestone type (Token/Advanced1/Advanced2/
- * FinalClearance) rather than separate "pay advance 2" / "pay remaining"
- * functions — the caller already resolved WHICH milestone via
+ * Deliberately generic over which milestone it is (identified by title now,
+ * a free-text field — see bookingCreationService.js's 2026-08-27 rewrite
+ * note) rather than separate "pay advance 2" / "pay remaining" functions —
+ * the caller already resolved WHICH milestone via
  * payment.milestoneId, so this just marks that one Received and updates
  * the Booking's running totals. Matches this step's own title, which names
  * two example milestones, not two separate endpoints.

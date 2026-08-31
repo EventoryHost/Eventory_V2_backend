@@ -3,11 +3,13 @@ import Vendor from "../models/Vendor.js";
 // GET /api/admin/vendors/review-queue
 export const getReviewQueue = async (req, res) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
+    const { page = 1, limit = 10, sort = 'desc' } = req.query;
     const skip = (page - 1) * limit;
+    
+    const sortOrder = sort === 'desc' ? -1 : 1;
 
     const vendors = await Vendor.find({ isVerified: false, isDeactivated: false })
-      .sort({ createdAt: 1 })
+      .sort({ createdAt: sortOrder })
       .skip(skip)
       .limit(parseInt(limit));
 
@@ -139,6 +141,8 @@ export const reviewSection = async (req, res) => {
       notes,
       reviewedAt: new Date()
     };
+    
+    vendor.markModified("adminReview");
 
     // Check if ALL sections are now Approved
     let allApproved = true;

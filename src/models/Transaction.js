@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { generateISTId } from "../utils/idGenerator.js";
 
 const TransactionSchema = new mongoose.Schema(
   {
@@ -6,16 +7,17 @@ const TransactionSchema = new mongoose.Schema(
       type: String,
       unique: true,
       required: true,
+      default: () => generateISTId("TXN"),
       index: true,
     },
     vendorId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: String,
       ref: "Vendor",
       required: true,
       index: true,
     },
     bookingId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: String,
       ref: "Booking",
       required: true,
     },

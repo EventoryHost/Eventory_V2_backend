@@ -19,19 +19,19 @@ import mongoose from "mongoose";
  */
 const CheckoutLineSchema = new mongoose.Schema(
   {
-    vendorId: { type: mongoose.Schema.Types.ObjectId, ref: "Vendor", required: true },
-    packageId: { type: mongoose.Schema.Types.ObjectId, ref: "Package", required: true },
+    vendorId: { type: String, ref: "Vendor", required: true },
+    packageId: { type: String, ref: "Package", required: true },
     // Set only when this line came from an actual Cart — Phase 4 Step 19
     // ("booking creation on payment success") will need this to know which
     // CartItems to clear afterward. Null for a direct "Book Now" line,
     // which was never a CartItem.
-    sourceCartItemId: { type: mongoose.Schema.Types.ObjectId, ref: "CartItem", default: null },
+    sourceCartItemId: { type: String, ref: "CartItem", default: null },
 
     // Stored at line-creation time so a later variant switch (PATCH,
     // customerCheckoutController.js) can cheaply verify the new packageId
     // is a sibling variant of the SAME logical package, without an extra
     // lookup of the line's current package first.
-    packageGroupId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    packageGroupId: { type: String, default: null },
 
     packageSnapshot: {
       name: { type: String },
@@ -53,6 +53,13 @@ const CheckoutLineSchema = new mongoose.Schema(
     },
     selectedAddOns: { type: mongoose.Schema.Types.Mixed, default: [] },
     selectedItems: { type: mongoose.Schema.Types.Mixed, default: [] },
+    // PDP "Customize items" workshop requests, carried over from the
+    // CartItem this line was built from (or accepted directly for a
+    // source:"direct" purchase) — see CartItem.js's CustomizeRequestSchema
+    // for the full shape/reasoning. Mixed here too, same as
+    // selectedAddOns/selectedItems above — a session line is a snapshot,
+    // not a place that re-validates this shape.
+    customizeRequests: { type: mongoose.Schema.Types.Mixed, default: [] },
     specialRequest: { type: String, trim: true, maxlength: 500, default: "" },
     quantity: { type: Number, default: 1, min: 1 },
   },
@@ -61,11 +68,11 @@ const CheckoutLineSchema = new mongoose.Schema(
 
 const CheckoutSessionSchema = new mongoose.Schema(
   {
-    customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", required: true, index: true },
+    customerId: { type: String, ref: "Customer", required: true, index: true },
     source: { type: String, enum: ["cart", "direct"], required: true },
     // Set only when source:"cart" — which Cart this session was built from,
     // so Step 19 can find/clear the right cart after payment.
-    sourceCartId: { type: mongoose.Schema.Types.ObjectId, ref: "Cart", default: null },
+    sourceCartId: { type: String, ref: "Cart", default: null },
 
     lines: { type: [CheckoutLineSchema], default: [] },
     bookingNote: { type: String, trim: true, maxlength: 1000, default: "" },

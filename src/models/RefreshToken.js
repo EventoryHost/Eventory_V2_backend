@@ -16,7 +16,7 @@ const RefreshTokenSchema = new mongoose.Schema(
   {
     tokenHash: { type: String, required: true, unique: true, index: true },
     customerId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: String,
       ref: "Customer",
       required: true,
       index: true,

@@ -58,11 +58,39 @@ const SelectedItemSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// PDP "Customize items" workshop requests — per-item colour/type/volume/
+// quantity change, add, or remove, scoped to a specific setup within the
+// package (distinct from the general free-text specialRequest field, which
+// already works end-to-end). Added 2026-08-27 per frontend's exact request
+// (was frontend-only until now, silently discarded — no field existed to
+// send it to). setupId/itemId are plain STRINGS, not ObjectIds — same
+// reasoning as SelectedAddOnSchema.addOnId/SelectedItemSchema.itemId above:
+// most setup/item subdocuments have no real _id in the actual seeded data,
+// the frontend already falls back to synthetic ids, and a client-generated
+// id for a brand-new "add" request was never going to be a real ObjectId
+// anyway. Accept-and-store only, per the same "no ground truth on Package
+// to validate colour/type/volume options against" reasoning already
+// documented for the choose-N gap (checkoutValidationService.js) — no
+// validation against the package's actual item catalog.
+const CustomizeRequestSchema = new mongoose.Schema(
+  {
+    setupId: { type: String, required: true },
+    itemId: { type: String, required: true },
+    requestType: { type: String, enum: ["change", "add", "remove"], required: true },
+    label: { type: String, required: true, trim: true, maxlength: 200 },
+    quantity: { type: Number, default: null, min: 0 },
+    type: { type: String, default: null, trim: true, maxlength: 100 },
+    colours: { type: [String], default: [] },
+    volume: { type: String, default: null, trim: true, maxlength: 50 },
+  },
+  { _id: false }
+);
+
 const CartItemSchema = new mongoose.Schema(
   {
-    cartId: { type: mongoose.Schema.Types.ObjectId, ref: "Cart", required: true, index: true },
-    vendorId: { type: mongoose.Schema.Types.ObjectId, ref: "Vendor", required: true, index: true },
-    packageId: { type: mongoose.Schema.Types.ObjectId, ref: "Package", required: true },
+    cartId: { type: String, ref: "Cart", required: true, index: true },
+    vendorId: { type: String, ref: "Vendor", required: true, index: true },
+    packageId: { type: String, ref: "Package", required: true },
 
     // Denormalized at add-to-cart time — same intent as Booking.js's
     // packageSnapshot: what the customer saw and picked, kept stable even
@@ -100,6 +128,7 @@ const CartItemSchema = new mongoose.Schema(
 
     selectedAddOns: { type: [SelectedAddOnSchema], default: [] },
     selectedItems: { type: [SelectedItemSchema], default: [] },
+    customizeRequests: { type: [CustomizeRequestSchema], default: [] },
 
     // Per-vendor special request (final BRD Section 10.2) — lives here
     // since a CartItem is already vendor-scoped. If a vendor ever has more

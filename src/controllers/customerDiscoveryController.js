@@ -2,6 +2,7 @@ import mongoose from "mongoose";
 import Package from "../models/Package.js";
 import Vendor from "../models/Vendor.js";
 import Review from "../models/Review.js";
+import Booking from "../models/Booking.js";
 import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
 import { utcDayRange } from "../utils/dateRange.js";
 import { computeAvailability } from "../utils/packageAvailability.js";
@@ -50,9 +51,40 @@ import { resolveVendorForPackage } from "../utils/resolveVendor.js";
  */
 export const browsePackages = async (req, res) => {
   try {
-    const { eventCategory, vendorType, city, guests, date, minPrice, maxPrice, sort, page, limit } = req.query;
+    const { q, eventCategory, vendorType, city, guests, date, minPrice, maxPrice, sort, page, limit } = req.query;
 
     const query = { packageStatus: "Live" };
+
+    // Free-text search — added 2026-08-29 for the landing-page search box
+    // (frontend's /vendors?q= param already existed and was wired up, but
+    // only ever did a client-side substring match over whatever single page
+    // of results was already loaded; this makes it a real, server-side,
+    // all-results match). Matches a typed keyword against the package name,
+    // its event categories, OR its vendor's business name — the same three
+    // things a customer would plausibly type ("birthday", "sangeet",
+    // "Rohan Caterers"). This is a regex match, not a Mongo text index — same
+    // "plain regex over a whitelisted, escaped string" approach every other
+    // filter in this controller already uses (city/eventCategory/vendorType
+    // below), not a new pattern. Deliberately NOT anchored (unlike
+    // eventCategory's `^...$` exact match) since this is meant to match
+    // substrings/partial words, not a value picked from a dropdown.
+    if (q) {
+      const qRegex = { $regex: escapeRegex(q), $options: "i" };
+      // Vendor's business name lives on Vendor, not Package — resolve
+      // matching vendors first, same two-step pattern the `city` filter
+      // below uses. Matched against BOTH Vendor._id and Vendor.id (the
+      // business-id string), since Package.vendorId is inconsistently
+      // stored as either — see resolveVendorForPackage's own comment on why
+      // that mismatch exists across this codebase's seed data.
+      const qVendors = await Vendor.find({ businessName: qRegex }).select("_id id");
+      const qVendorIds = qVendors.flatMap((v) => [v._id, v.id]).filter(Boolean);
+
+      query.$or = [
+        { "step1_eventAndCrew.packageName": qRegex },
+        { "step1_eventAndCrew.eventCategories": { $elemMatch: qRegex } },
+        ...(qVendorIds.length ? [{ vendorId: { $in: qVendorIds } }] : []),
+      ];
+    }
 
     if (vendorType) query.vendorType = vendorType;
 
@@ -173,6 +205,108 @@ export const browsePackages = async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to browse packages", error: error.message });
+  }
+};
+
+// Bookings that never actually happened don't signal real customer demand —
+// excluded from the popularity count below. Deliberately NOT reusing
+// Booking.js's own exported TERMINAL_STATUSES (["Declined","Cancelled",
+// "Completed"]): a Completed booking is exactly the kind of real, finished
+// purchase that SHOULD count toward "often booked", so only the two
+// statuses that mean "this booking never went through" are excluded here.
+const EXCLUDED_FROM_POPULARITY_COUNT = ["Declined", "Cancelled"];
+
+/**
+ * @desc Landing page's "Packages Often Booked by our Customers" carousel —
+ * previously fully static/hardcoded on the frontend (no backend logic
+ * existed for this at all). Ranks Live packages by real booking volume:
+ * counts actual Booking documents per packageId (excluding ones that never
+ * really happened — see EXCLUDED_FROM_POPULARITY_COUNT above), highest
+ * count first, then re-fetches those packageIds as full Package documents
+ * so the response is the SAME shape browsePackages already returns (same
+ * PACKAGE_FIELDS projection + PUBLIC_VENDOR_FIELDS-whitelisted, resolved
+ * vendor) — deliberately, so the frontend can reuse its existing
+ * mapPackageToVendor/ProductCard mapping as-is, no new shape to learn.
+ *
+ * FALLBACK (same reasoning as getPdpReviewsSection's usingVendorFallback,
+ * applied here for the same underlying reason — real signal may not exist
+ * yet): if fewer than `limit` packages have any qualifying booking at all
+ * (there are currently very few real bookings in the dev DB, and a
+ * brand-new package has never been booked by definition), the remainder is
+ * filled with the newest Live packages instead, so the carousel is never
+ * emptier than `limit` just because "often booked" data hasn't accumulated
+ * yet. `usingFallback: true` on the response tells the frontend when this
+ * happened, in case it wants to visually distinguish "real popularity" from
+ * "filler" — using it is optional, the endpoint works fine either way.
+ */
+export const getPopularPackages = async (req, res) => {
+  try {
+    const { limit } = req.query;
+
+    const ranked = await Booking.aggregate([
+      { $match: { status: { $nin: EXCLUDED_FROM_POPULARITY_COUNT } } },
+      { $group: { _id: "$packageId", bookingCount: { $sum: 1 } } },
+      { $sort: { bookingCount: -1 } },
+      // Overfetch — some of the top-booked packageIds may no longer be Live
+      // (paused/deleted since being booked), filtered out below once
+      // resolved against the real Package collection.
+      { $limit: Math.max(limit * 3, 30) },
+    ]);
+
+    const PACKAGE_FIELDS =
+      "vendorId vendorType variantType packageGroupId packageStatus " +
+      "step1_eventAndCrew.packageName step1_eventAndCrew.eventCategories " +
+      "step1_eventAndCrew.capacity step1_eventAndCrew.duration " +
+      "step3_policiesAndCharges.packagePricing step3_policiesAndCharges.gstInclusive " +
+      "step3_policiesAndCharges.gstRatePercent step3_policiesAndCharges.guestTiers " +
+      "step4_sampleMedia.media createdAt";
+
+    const rankedIds = ranked.map((r) => r._id);
+    const rankedPackages = rankedIds.length
+      ? await Package.find({ _id: { $in: rankedIds }, packageStatus: "Live" })
+          .select(PACKAGE_FIELDS)
+          .lean()
+      : [];
+
+    // Package.find({$in:...}) does not preserve `rankedIds`' order — restore
+    // the real booking-count ranking (highest first) before trimming to
+    // `limit`. Tied on bookingCount -> newer package first (same
+    // "highest-first, then most-recent" tiebreak convention already used
+    // elsewhere, e.g. computeReviewAggregate's rating desc/createdAt desc)
+    // rather than leaving ties to Mongo's unspecified group order.
+    const countByPackageId = new Map(ranked.map((r) => [String(r._id), r.bookingCount]));
+    rankedPackages.sort((a, b) => {
+      const byCount = (countByPackageId.get(String(b._id)) || 0) - (countByPackageId.get(String(a._id)) || 0);
+      if (byCount !== 0) return byCount;
+      return new Date(b.createdAt) - new Date(a.createdAt);
+    });
+
+    let packages = rankedPackages.slice(0, limit);
+    let usingFallback = false;
+
+    if (packages.length < limit) {
+      usingFallback = true;
+      const usedIds = new Set(packages.map((p) => String(p._id)));
+      const fillerPackages = await Package.find({
+        packageStatus: "Live",
+        _id: { $nin: [...usedIds] },
+      })
+        .select(PACKAGE_FIELDS)
+        .sort({ createdAt: -1 })
+        .limit(limit - packages.length)
+        .lean();
+      packages = [...packages, ...fillerPackages];
+    }
+
+    await Promise.all(
+      packages.map(async (pkg) => {
+        pkg.vendorId = await resolveVendorForPackage(pkg.vendorId);
+      })
+    );
+
+    return res.status(200).json({ status: "SUCCESS", count: packages.length, usingFallback, packages });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to fetch popular packages", error: error.message });
   }
 };
 
@@ -423,7 +557,7 @@ async function computeReviewAggregate(match) {
 export const getPackageGroupVariants = async (req, res) => {
   try {
     const { packageGroupId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(packageGroupId)) {
+    if (!packageGroupId || !String(packageGroupId).trim()) {
       return res.status(400).json({ status: "FAILED", message: "Invalid packageGroupId" });
     }
 
@@ -475,11 +609,15 @@ export const getPackageGroupVariants = async (req, res) => {
 export const getVendorDetail = async (req, res) => {
   try {
     const { vendorId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(vendorId)) {
+    if (!vendorId || !String(vendorId).trim()) {
       return res.status(400).json({ status: "FAILED", message: "Invalid vendorId" });
     }
 
-    const vendor = await Vendor.findOne({ _id: vendorId, isDeactivated: { $ne: true } })
+    const query = mongoose.Types.ObjectId.isValid(vendorId)
+      ? { $or: [{ _id: vendorId }, { id: vendorId }], isDeactivated: { $ne: true } }
+      : { id: vendorId, isDeactivated: { $ne: true } };
+
+    const vendor = await Vendor.findOne(query)
       .select(PUBLIC_VENDOR_FIELDS)
       .lean();
 
@@ -502,12 +640,12 @@ export const getVendorDetail = async (req, res) => {
 export const getVendorReviews = async (req, res) => {
   try {
     const { vendorId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(vendorId)) {
+    if (!vendorId || !String(vendorId).trim()) {
       return res.status(400).json({ status: "FAILED", message: "Invalid vendorId" });
     }
 
     const { minRating, sort, page, limit } = req.query;
-    const match = { vendorId: new mongoose.Types.ObjectId(vendorId), status: "Published" };
+    const match = { vendorId: String(vendorId), status: "Published" };
     if (minRating) match.rating = { $gte: minRating };
 
     const sortMap = {
@@ -553,12 +691,12 @@ export const getVendorReviews = async (req, res) => {
 export const getPackageReviews = async (req, res) => {
   try {
     const { packageId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(packageId)) {
+    if (!packageId || !String(packageId).trim()) {
       return res.status(400).json({ status: "FAILED", message: "Invalid packageId" });
     }
 
     const { minRating, sort, page, limit } = req.query;
-    const match = { packageId: new mongoose.Types.ObjectId(packageId), status: "Published" };
+    const match = { packageId: String(packageId), status: "Published" };
     if (minRating) match.rating = { $gte: minRating };
 
     const sortMap = {
@@ -590,6 +728,64 @@ export const getPackageReviews = async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to fetch package reviews", error: error.message });
+  }
+};
+
+/**
+ * @desc Site-wide "Loved by X Happy Customers" carousel on the landing page
+ * — the top N Published reviews across the WHOLE platform, not scoped to
+ * one package/vendor (getVendorReviews/getPackageReviews above are both
+ * scoped). Requested by the frontend team as GET
+ * /customer/reviews/featured?limit=8&minRating=4 — built exactly to their
+ * own proposed spec (see getFeaturedReviews's doc comment in
+ * customerDiscoveryApi.ts on the frontend), used verbatim rather than
+ * inventing a different shape. Public, no auth, read-only.
+ *
+ * Response is pre-flattened per that spec — { status, items: [{ _id,
+ * rating, comment, createdAt, customerName, customerAvatar, packageName }] }
+ * — deliberately NOT the same shape as getVendorReviews/getPackageReviews
+ * (full populated docs + pagination + aggregate): this is a small,
+ * fixed-size carousel feed, not a paginated "see all reviews" listing, so
+ * there's no total/page/aggregate to report.
+ *
+ * Sort is fixed (rating desc, then createdAt desc — "highest-rated, most
+ * recent" per the spec), not a query param — unlike getVendorReviews/
+ * getPackageReviews's user-selectable recent/highest/lowest, a curated
+ * carousel has one obvious ordering, not several.
+ *
+ * NOTE (flagged by the frontend team, not something to fix here — a
+ * separate, not-yet-built step per Review.js's own doc comment): there is
+ * no review-SUBMISSION endpoint yet, so customer_reviews may currently hold
+ * few or zero real entries. An empty/short items[] is therefore expected
+ * behaviour right now, not a bug in this endpoint — callers should fall
+ * back to static content until real reviews start flowing in.
+ */
+export const getFeaturedReviews = async (req, res) => {
+  try {
+    const { limit, minRating } = req.query;
+    const match = { status: "Published" };
+    if (minRating) match.rating = { $gte: minRating };
+
+    const reviews = await Review.find(match)
+      .sort({ rating: -1, createdAt: -1 })
+      .limit(limit)
+      .populate({ path: "customerId", select: "name profilePicture" })
+      .populate({ path: "packageId", select: "step1_eventAndCrew.packageName" })
+      .lean();
+
+    const items = reviews.map((r) => ({
+      _id: r._id,
+      rating: r.rating,
+      comment: r.comment,
+      createdAt: r.createdAt,
+      customerName: r.customerId?.name || null,
+      customerAvatar: r.customerId?.profilePicture || null,
+      packageName: r.packageId?.step1_eventAndCrew?.packageName || null,
+    }));
+
+    return res.status(200).json({ status: "SUCCESS", items });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to fetch featured reviews", error: error.message });
   }
 };
 

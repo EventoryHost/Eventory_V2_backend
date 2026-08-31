@@ -141,7 +141,7 @@ export const addCompareItem = async (req, res) => {
       }
     }
 
-    session.packageIds.push(new mongoose.Types.ObjectId(packageId));
+    session.packageIds.push(String(packageId));
     await session.save();
 
     const comparison = await loadComparisonForSession(session);
@@ -157,7 +157,7 @@ export const addCompareItem = async (req, res) => {
 export const removeCompareItem = async (req, res) => {
   try {
     const { packageId } = req.params;
-    if (!mongoose.Types.ObjectId.isValid(packageId)) {
+    if (!packageId || !String(packageId).trim()) {
       return res.status(400).json({ status: "FAILED", message: "Invalid packageId" });
     }
 

@@ -15,10 +15,10 @@ import mongoose from "mongoose";
  */
 const WishlistItemSchema = new mongoose.Schema(
   {
-    customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", required: true, index: true },
+    customerId: { type: String, ref: "Customer", required: true, index: true },
     itemType: { type: String, enum: ["Package", "Vendor"], required: true },
-    packageId: { type: mongoose.Schema.Types.ObjectId, ref: "Package", default: null },
-    vendorId: { type: mongoose.Schema.Types.ObjectId, ref: "Vendor", default: null },
+    packageId: { type: String, ref: "Package", default: null },
+    vendorId: { type: String, ref: "Vendor", default: null },
     note: { type: String, trim: true, maxlength: 500, default: "" },
     // Only meaningful for itemType "Package" — null for Vendor saves.
     priceSnapshot: { type: Number, default: null },
@@ -47,11 +47,11 @@ const WishlistItemSchema = new mongoose.Schema(
 // that field is actually set.
 WishlistItemSchema.index(
   { customerId: 1, packageId: 1 },
-  { unique: true, partialFilterExpression: { packageId: { $type: "objectId" } } }
+  { unique: true, partialFilterExpression: { packageId: { $type: "string" } } }
 );
 WishlistItemSchema.index(
   { customerId: 1, vendorId: 1 },
-  { unique: true, partialFilterExpression: { vendorId: { $type: "objectId" } } }
+  { unique: true, partialFilterExpression: { vendorId: { $type: "string" } } }
 );
 
 export default mongoose.model("WishlistItem", WishlistItemSchema);

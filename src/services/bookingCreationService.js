@@ -3,6 +3,7 @@ import Package from "../models/Package.js";
 import { generateISTId } from "../utils/idGenerator.js";
 import { utcDayRange } from "../utils/dateRange.js";
 import { round2 } from "../utils/money.js";
+import { applyPricingBreakdown } from "../utils/pricingBreakdown.js";
 
 /**
  * Turns a paid CheckoutSession into real Booking documents — Phase 4 Step
@@ -27,39 +28,44 @@ import { round2 } from "../utils/money.js";
  * (e.g. the "EVT"-prefixed lookup branch in getBookingById).
  */
 
-// Booking.paymentMilestones[].type is a STRICT 4-value enum (Token,
-// Advanced1, Advanced2, FinalClearance) — but the vendor's own
-// Package.paymentMilestones.milestones[].title is free text with NO
-// constraint tying it to that enum, and no cap on how many a vendor can
-// configure. This is a genuine PRE-EXISTING mismatch between two
-// vendor-authored schemas (Package.js vs Booking.js), not something
-// introduced or fixable here (changing Booking.js's enum is a vendor-code
-// change, off-limits without asking). Best-effort, honestly capped
-// mapping: the milestone actually paid via this Token order becomes
-// "Token"; the rest are assigned Advanced1/Advanced2/FinalClearance IN
-// ORDER. If a vendor configured more than 4 total milestones, only the
-// first 4 are tracked in Booking.paymentMilestones — flagged in info.txt,
-// not silently dropped without a trace (a warning is logged).
-function mapMilestonesToBookingSchema(quoteMilestones, tokenAmountPaid, paidAt) {
-  const ENUM_SLOTS = ["Token", "Advanced1", "Advanced2", "FinalClearance"];
-  if (quoteMilestones.length > ENUM_SLOTS.length) {
-    console.warn(
-      `[bookingCreationService] Package has ${quoteMilestones.length} payment milestones configured, but Booking.paymentMilestones only supports ${ENUM_SLOTS.length} (Token/Advanced1/Advanced2/FinalClearance) — only the first ${ENUM_SLOTS.length} are being tracked on this Booking.`
-    );
+// REWRITTEN 2026-08-27 — Booking.js was rewritten vendor-side (prod merge):
+// paymentMilestones[] no longer has a `type` field at all (the old strict
+// 4-value Token/Advanced1/Advanced2/FinalClearance enum is GONE), replaced
+// by a free-text `title` — the exact same free-text field
+// Package.paymentMilestones.milestones[].title already used. This actually
+// REMOVES the old mismatch (no enum to squeeze free text into anymore) and
+// the old 4-milestone cap along with it — every configured milestone is now
+// tracked, not just the first 4.
+function mapMilestonesToBookingSchema(quoteMilestones, tokenAmountPaid, paidAt, assumeFullyPaid = false) {
+  // assumeFullyPaid (2026-08-27, off-platform payment confirmation — see
+  // confirmOfflineCheckout) — every milestone is trusted as already
+  // collected, not just the token: there's no real Cashfree order tracking
+  // partial receipt per milestone for an off-platform booking, so the
+  // honest thing is "we're told this is fully paid" rather than
+  // fabricating which specific milestone the money maps to.
+  if (assumeFullyPaid) {
+    return quoteMilestones.map((m, i) => ({
+      title: m.title || `Milestone ${i + 1}`,
+      percentage: m.percentage ?? null,
+      amount: m.amount ?? 0,
+      dueDate: m.dueDate || null,
+      status: "Received",
+      receivedDate: paidAt,
+    }));
   }
 
-  // The milestone whose amount matches what was actually paid is the one
-  // that becomes "Token" — usually the first, but matched by amount rather
-  // than assumed-first in case a vendor ordered their milestones differently.
+  // The milestone whose amount matches what was actually paid (the Token)
+  // is marked Received now; the rest start Pending. Matched by amount
+  // rather than assumed-first, same reasoning as before this rewrite.
   const tokenIndex = quoteMilestones.findIndex((m) => Math.abs((m.amount || 0) - tokenAmountPaid) < 0.01);
-  const ordered = tokenIndex > 0 ? [quoteMilestones[tokenIndex], ...quoteMilestones.filter((_, i) => i !== tokenIndex)] : quoteMilestones;
 
-  return ordered.slice(0, ENUM_SLOTS.length).map((m, i) => ({
-    type: ENUM_SLOTS[i],
+  return quoteMilestones.map((m, i) => ({
+    title: m.title || `Milestone ${i + 1}`,
+    percentage: m.percentage ?? null,
     amount: m.amount ?? 0,
     dueDate: m.dueDate || null,
-    status: i === 0 ? "Received" : "Pending",
-    receivedDate: i === 0 ? paidAt : null,
+    status: i === tokenIndex ? "Received" : "Pending",
+    receivedDate: i === tokenIndex ? paidAt : null,
   }));
 }
 
@@ -97,8 +103,18 @@ async function reserveSlot(packageId, eventDate) {
  * at the CALLER's responsibility (guarded by Payment.bookingCreated) —
  * this function itself does not re-check, so it must only ever be invoked
  * once per Payment.
+ *
+ * @param {{assumeFullyPaid?: boolean}} [options] - assumeFullyPaid
+ * (2026-08-27, off-platform payment confirmation): in-app Cashfree
+ * collection is gone for this flow — confirmOfflineCheckout trusts the
+ * WHOLE session as paid in full off-platform, not just a token amount.
+ * Every line's paymentType becomes "FullPaid" (not "AdvancePaid"/
+ * "FreeBooking"), totalReceived is set to the FULL line amount (not just a
+ * token), and every milestone is marked Received — see
+ * mapMilestonesToBookingSchema's own comment on why.
  */
-export async function createBookingsFromCheckoutSession(session, payment) {
+export async function createBookingsFromCheckoutSession(session, payment, options = {}) {
+  const { assumeFullyPaid = false } = options;
   const quoteLines = session.lockedQuote?.lines || [];
   const createdBookingIds = [];
 
@@ -111,28 +127,22 @@ export async function createBookingsFromCheckoutSession(session, payment) {
 
     const isFree = quoteLine.token?.paymentType === "Free";
     const tokenAmountForLine = isFree ? 0 : quoteLine.token?.tokenAmount || 0;
+    const totalReceivedForLine = assumeFullyPaid ? quoteLine.lineTotalInclGst || 0 : tokenAmountForLine;
 
-    const charges = [
-      { label: quoteLine.currentPrice != null ? line.packageSnapshot?.name || "Package" : "Package", amount: quoteLine.packagePriceTotal || 0, type: "Base" },
-      ...(line.selectedAddOns || []).map((a) => ({ label: a.name, amount: round2(a.price * a.quantity), type: "Fee" })),
-      ...(line.selectedItems || []).filter((s) => s.isChargeable).map((s) => ({ label: s.itemName, amount: s.price || 0, type: "Fee" })),
-      // GST as its OWN charge line — Booking.ChargeSchema's type enum
-      // already includes "Tax" (vendor-authored, just unused until now).
-      // Found while building Step 21's price-breakdown endpoint: without
-      // this, charges never summed to totalAmount whenever GST applied
-      // (totalAmount = lineTotalInclGst, but charges only covered the
-      // pre-tax Base+Fee amounts) — added here, at the source, rather than
-      // papering over it in the read endpoint. Only added when GST is
-      // EXCLUSIVE (added on top) — when gstInclusive is true, the tax is
-      // already embedded in the Base charge's amount, so adding a separate
-      // line would double-count it and break the reconciliation the other
-      // way.
-      ...(!quoteLine.gstInclusive && quoteLine.gstAmount ? [{ label: `GST (${quoteLine.gstRatePercent}%)`, amount: quoteLine.gstAmount, type: "Tax" }] : []),
-    ];
+    // REWRITTEN 2026-08-27 — Booking.js's ChargeSchema/charges[] is GONE
+    // (vendor-side prod rewrite), replaced by a `pricing` object (cumulative
+    // additions/deductions + a tax rate, see utils/pricingBreakdown.js's own
+    // doc comment: "the vendor prices a negotiation in bulk... not a price
+    // per requested item"). Populated from the SAME quote numbers the old
+    // charges[] used, just reshaped to fit — addonsTotal/chargeableItemsTotal
+    // become itemsAdded/addonsAdded, tax is a RATE now (taxRatePct) rather
+    // than a precomputed amount, computed fresh from this by
+    // applyPricingBreakdown below (the vendor team's own utility — reused
+    // rather than reimplemented, since it already defines exactly how this
+    // object is meant to turn into a total).
+    const milestones = mapMilestonesToBookingSchema(quoteLine.milestones || [], tokenAmountForLine, payment.paidAt || new Date(), assumeFullyPaid);
 
-    const milestones = mapMilestonesToBookingSchema(quoteLine.milestones || [], tokenAmountForLine, payment.paidAt || new Date());
-
-    const booking = await Booking.create({
+    const booking = new Booking({
       bookingId: generateISTId("EVT"),
       vendorId: line.vendorId,
       packageId: line.packageId,
@@ -152,15 +162,43 @@ export async function createBookingsFromCheckoutSession(session, payment) {
         image: line.packageSnapshot?.image,
         vendorType: line.packageSnapshot?.vendorType,
         variantType: line.packageSnapshot?.variantType,
+        gstRatePercent: quoteLine.gstRatePercent ?? null,
+        gstInclusive: !!quoteLine.gstInclusive,
       },
-      paymentType: isFree ? "FreeBooking" : "AdvancePaid",
-      status: "Pending", // awaiting vendor acknowledgement — never auto-Accepted here
+      paymentType: assumeFullyPaid ? "FullPaid" : isFree ? "FreeBooking" : "AdvancePaid",
+      status: "NewBooking", // awaiting vendor acknowledgement — the new schema's own default/first status, never auto-Confirmed here
       paymentMilestones: milestones,
-      charges,
-      totalAmount: quoteLine.lineTotalInclGst || 0,
-      totalReceived: tokenAmountForLine,
+      pricing: {
+        basePrice: quoteLine.packagePriceTotal || 0,
+        itemsAdded: round2((line.selectedItems || []).filter((s) => s.isChargeable).reduce((sum, s) => sum + (s.price || 0), 0)) || 0,
+        addonsAdded: round2((line.selectedAddOns || []).reduce((sum, a) => sum + a.price * a.quantity, 0)) || 0,
+        taxRatePct: quoteLine.gstRatePercent ?? 0,
+        taxLabel: "GST",
+        updatedAt: new Date(),
+      },
+      totalReceived: totalReceivedForLine,
+      // PDP "Customize items" workshop requests, carried through from the
+      // checkout line (which carried them from the cart item) — see
+      // Booking.js's CustomizeRequestSchema comment for the full chain.
+      customizeRequests: line.customizeRequests || [],
       notes: line.specialRequest || null,
     });
+    // Vendor's own utility (utils/pricingBreakdown.js) — runs first so the
+    // "Pricing Breakdown" card's own fields (subtotal/tax/etc.) are
+    // populated the same way vendor-side reads them. BUT: that utility
+    // always treats tax as EXCLUSIVE (adds it on top of subtotal) — it has
+    // no gstInclusive branch. When a package's GST is actually inclusive,
+    // trusting its totalAmount would double-count tax already folded into
+    // the price, and — critically — would stop matching what Cashfree
+    // actually charged (quoteLine.lineTotalInclGst, computed correctly by
+    // this codebase's own inclusive-aware pricing engine). totalAmount is
+    // therefore always overwritten with the REAL charged amount afterward —
+    // this also protects the "milestones must sum to what's actually
+    // charged" invariant already fixed once before (see Step 19's info.txt
+    // writeup on why milestones and the token amount must agree in rupees).
+    applyPricingBreakdown(booking);
+    booking.totalAmount = quoteLine.lineTotalInclGst || 0;
+    await booking.save();
 
     createdBookingIds.push(booking._id);
 
@@ -174,6 +212,10 @@ export async function createBookingsFromCheckoutSession(session, payment) {
   }
 
   payment.bookingCreated = true;
+  // Added 2026-08-27 (real Cashfree redirect integration) — see Payment.js's
+  // own comment on createdBookingIds for why every path that creates
+  // bookings sets this, not just the real-Cashfree one.
+  payment.createdBookingIds = createdBookingIds;
   await payment.save();
 
   return createdBookingIds;

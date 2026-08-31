@@ -2,11 +2,13 @@ import express from "express";
 import {
   browsePackages,
   browseVendors,
+  getFeaturedReviews,
   getPackageFilters,
   getVendorFilters,
   getPackageDetail,
   getPackageGroupVariants,
   getPackageReviews,
+  getPopularPackages,
   getVendorDetail,
   getVendorReviews,
 } from "../controllers/customerDiscoveryController.js";
@@ -15,7 +17,9 @@ import { validateRequest } from "../middlewares/validateRequest.js";
 import {
   browsePackagesQuerySchema,
   browseVendorsQuerySchema,
+  featuredReviewsQuerySchema,
   packageDetailQuerySchema,
+  popularPackagesQuerySchema,
   reviewsQuerySchema,
 } from "../validators/customerDiscoveryValidators.js";
 
@@ -40,6 +44,11 @@ const router = express.Router();
  *       All query params are optional filters.
  *     tags: [Customer Discovery]
  *     parameters:
+ *       - in: query
+ *         name: q
+ *         schema: { type: string }
+ *         description: Free-text search — matched against package name, event categories, and vendor business name
+ *         example: birthday
  *       - in: query
  *         name: eventCategory
  *         schema: { type: string }
@@ -96,6 +105,58 @@ router.get("/packages", publicBrowseLimiter, validateRequest(browsePackagesQuery
  *       200: { description: Available filter facets and sort options }
  */
 router.get("/packages/filters", publicBrowseLimiter, getPackageFilters);
+
+/**
+ * @swagger
+ * /api/customer/reviews/featured:
+ *   get:
+ *     summary: Site-wide featured reviews for the landing page carousel
+ *     description: |
+ *       Public, read-only. The top N Published reviews across the WHOLE
+ *       platform (not scoped to one package/vendor — see /packages/{packageId}/reviews
+ *       and /vendors/{vendorId}/reviews for those), sorted highest-rated then
+ *       most-recent. Pre-flattened response — no nested populate needed
+ *       client-side. There is no review-submission endpoint yet, so items
+ *       may currently be few or empty; callers should fall back to static
+ *       content in that case.
+ *     tags: [Customer Discovery]
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 8, maximum: 50 }
+ *       - in: query
+ *         name: minRating
+ *         schema: { type: integer, minimum: 1, maximum: 5 }
+ *     responses:
+ *       200: { description: Up to `limit` featured reviews }
+ *       400: { description: Invalid query parameters }
+ */
+router.get("/reviews/featured", publicBrowseLimiter, validateRequest(featuredReviewsQuerySchema, "query"), getFeaturedReviews);
+
+/**
+ * @swagger
+ * /api/customer/packages/popular:
+ *   get:
+ *     summary: Landing page's "Packages Often Booked by our Customers" carousel
+ *     description: |
+ *       Public, read-only. Live packages ranked by real booking volume
+ *       (Declined/Cancelled bookings excluded — they never actually
+ *       happened). Same response shape as GET /packages (same package
+ *       projection, same resolved/whitelisted vendor) so existing
+ *       package-card mapping code can be reused as-is. If fewer than
+ *       `limit` packages have any qualifying bookings yet, the rest are
+ *       filled with the newest Live packages — usingFallback:true on the
+ *       response flags when that happened.
+ *     tags: [Customer Discovery]
+ *     parameters:
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, default: 6, maximum: 30 }
+ *     responses:
+ *       200: { description: Up to `limit` Live packages, most-booked first }
+ *       400: { description: Invalid query parameters }
+ */
+router.get("/packages/popular", publicBrowseLimiter, validateRequest(popularPackagesQuerySchema, "query"), getPopularPackages);
 
 /**
  * @swagger

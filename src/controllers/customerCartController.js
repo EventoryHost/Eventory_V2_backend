@@ -210,7 +210,8 @@ export const getCartQuote = async (req, res) => {
  */
 export const addCartItem = async (req, res) => {
   try {
-    const { packageId, eventType, guests, date, timeSlot, location, selectedAddOns, selectedItems, specialRequest, quantity } = req.body;
+    const { packageId, eventType, guests, date, timeSlot, location, selectedAddOns, selectedItems, customizeRequests, specialRequest, quantity } =
+      req.body;
 
     // .lean() matters here beyond the usual perf reason: ANOTHER layer of
     // the same real bug (see the vendorId comment below) — Mongoose
@@ -273,6 +274,7 @@ export const addCartItem = async (req, res) => {
       },
       selectedAddOns: selectedAddOns || [],
       selectedItems: selectedItems || [],
+      customizeRequests: customizeRequests || [],
       specialRequest: specialRequest || "",
       quantity,
     });
@@ -307,8 +309,19 @@ export const updateCartItem = async (req, res) => {
     const resolved = await findOwnedCartItem(req, itemId);
     if (resolved.error) return res.status(resolved.error).json({ status: "FAILED", message: resolved.message });
 
-    const { eventType, guests, date, timeSlot, location, selectedAddOns, selectedItems, specialRequest, quantity, selectedForCheckout } =
-      req.body;
+    const {
+      eventType,
+      guests,
+      date,
+      timeSlot,
+      location,
+      selectedAddOns,
+      selectedItems,
+      customizeRequests,
+      specialRequest,
+      quantity,
+      selectedForCheckout,
+    } = req.body;
     const { item, cart } = resolved;
 
     if (eventType !== undefined) item.eventDetails.eventType = eventType;
@@ -318,6 +331,7 @@ export const updateCartItem = async (req, res) => {
     if (location !== undefined) item.eventDetails.location = location;
     if (selectedAddOns !== undefined) item.selectedAddOns = selectedAddOns;
     if (selectedItems !== undefined) item.selectedItems = selectedItems;
+    if (customizeRequests !== undefined) item.customizeRequests = customizeRequests;
     if (specialRequest !== undefined) item.specialRequest = specialRequest;
     if (quantity !== undefined) item.quantity = quantity;
     if (selectedForCheckout !== undefined) item.selectedForCheckout = selectedForCheckout;

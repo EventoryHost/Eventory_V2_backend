@@ -258,6 +258,8 @@ export const reviewPackageStep = async (req, res) => {
       notes,
       reviewedAt: new Date()
     };
+    
+    pkg.markModified("adminReview");
 
     // Check if ALL steps are now Approved
     let allApproved = true;

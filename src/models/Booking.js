@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { generateISTId } from "../utils/idGenerator.js";
 import {
   ChangeRequestSchema,
   PackageSnapshotSchema,
@@ -31,22 +32,51 @@ export const PRE_ACCEPTANCE_STATUSES = ["NewBooking", "Viewed", "InDiscussion"];
 // Statuses after which nothing about the booking can change
 export const TERMINAL_STATUSES = ["Declined", "Cancelled", "Completed"];
 
+// PDP "Customize items" workshop requests — added 2026-08-27 per the
+// frontend team's exact request (their suggested shape, used verbatim).
+// DELIBERATELY SEPARATE from ChangeRequestSchema/changeRequests above,
+// which already covers a similar-in-spirit "customer requests an item
+// change, vendor decides" concept but a different shape (changeType Add/
+// Remove only, no "change" type; category/item free text, no setupId;
+// no colour/type/volume). Confirmed with the user before adding this
+// rather than trying to force the frontend's shape into changeRequests or
+// guessing how the two should reconcile — flagged here as a likely future
+// duplication worth resolving with whoever owns changeRequests, not
+// silently merged. See CartItem.js's CustomizeRequestSchema for the
+// customer-side origin of this same shape (Cart -> CheckoutSession line ->
+// here, unchanged at each hop). Accept-and-store only, same as upstream —
+// no validation against the package's actual item catalog.
+const CustomizeRequestSchema = new mongoose.Schema(
+  {
+    setupId: { type: String, required: true },
+    itemId: { type: String, required: true },
+    requestType: { type: String, enum: ["change", "add", "remove"], required: true },
+    label: { type: String, required: true, trim: true },
+    quantity: { type: Number, default: null, min: 0 },
+    type: { type: String, default: null, trim: true },
+    colours: { type: [String], default: [] },
+    volume: { type: String, default: null, trim: true },
+  },
+  { _id: false }
+);
+
 const BookingSchema = new mongoose.Schema(
   {
     bookingId: {
       type: String,
       unique: true,
       required: true,
+      default: () => generateISTId("EVT"),
       index: true,
     },
     vendorId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: String,
       ref: "Vendor",
       required: true,
       index: true,
     },
     packageId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: String,
       ref: "Package",
       required: true,
     },
@@ -60,7 +90,7 @@ const BookingSchema = new mongoose.Schema(
     // deliberate, separate decision (phone-number matching is not exact),
     // not something this field's presence does automatically.
     customerId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: String,
       ref: "Customer",
       default: null,
       index: true,
@@ -137,6 +167,10 @@ const BookingSchema = new mongoose.Schema(
     // Customer-requested additions/removals, and the vendor's decision on each
     changeRequests: [ChangeRequestSchema],
 
+    // PDP "Customize items" workshop requests — see CustomizeRequestSchema's
+    // own comment above for why this is separate from changeRequests.
+    customizeRequests: [CustomizeRequestSchema],
+
     pricing: {
       type: PricingSchema,
       default: () => ({}),
@@ -187,8 +221,8 @@ BookingSchema.pre("save", async function autoLinkCustomer() {
   try {
     const normalized = normalizePhone(this.customer.phone);
     if (!normalized) return;
-    const match = await Customer.findOne({ phone: normalized }).select("_id").lean();
-    if (match) this.customerId = match._id;
+    const match = await Customer.findOne({ phone: normalized }).select("_id id").lean();
+    if (match) this.customerId = match.id || match._id;
   } catch (err) {
     console.warn("[Booking.autoLinkCustomer] lookup failed, continuing without a link:", err.message);
   }

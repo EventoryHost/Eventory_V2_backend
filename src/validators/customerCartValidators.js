@@ -1,11 +1,11 @@
 import { z } from "zod";
 import mongoose from "mongoose";
 
-const objectId = (label) =>
+const validId = (label) =>
   z
     .string()
     .trim()
-    .refine((v) => mongoose.Types.ObjectId.isValid(v), `${label} must be a valid id`);
+    .min(1, `${label} must be a valid id`);
 
 // addOnId/itemId are NOT validated as strict ObjectIds — REAL BUG FOUND
 // 2026-08-21 (frontend-reported "Cast to ObjectId failed" on add-to-cart):
@@ -33,8 +33,25 @@ const selectedItemSchema = z.object({
   isChargeable: z.coerce.boolean().default(false),
 });
 
+// PDP "Customize items" workshop requests — added 2026-08-27 per frontend's
+// exact request (see CartItem.js's own comment for the full context).
+// setupId/itemId are plain strings (same reasoning as addOnId/itemId
+// above), and no validation against the package's actual item catalog is
+// done here — accept-and-store only, matching the existing choose-N gap's
+// own "no ground truth on Package to validate against" precedent.
+const customizeRequestSchema = z.object({
+  setupId: z.string().trim().min(1).max(200),
+  itemId: z.string().trim().min(1).max(200),
+  requestType: z.enum(["change", "add", "remove"]),
+  label: z.string().trim().min(1).max(200),
+  quantity: z.coerce.number().min(0).optional(),
+  type: z.string().trim().max(100).optional(),
+  colours: z.array(z.string().trim().max(50)).max(20).optional(),
+  volume: z.string().trim().max(50).optional(),
+});
+
 export const addCartItemSchema = z.object({
-  packageId: objectId("packageId"),
+  packageId: validId("packageId"),
   eventType: z.string().trim().max(100).optional(),
   guests: z.coerce.number().int().min(1).optional(),
   date: z.coerce.date().optional(),
@@ -42,6 +59,7 @@ export const addCartItemSchema = z.object({
   location: z.string().trim().max(300).optional(),
   selectedAddOns: z.array(selectedAddOnSchema).max(50).optional(),
   selectedItems: z.array(selectedItemSchema).max(100).optional(),
+  customizeRequests: z.array(customizeRequestSchema).max(100).optional(),
   specialRequest: z.string().trim().max(500).optional(),
   quantity: z.coerce.number().int().min(1).default(1),
 });
@@ -56,6 +74,7 @@ export const updateCartItemSchema = z.object({
   location: z.string().trim().max(300).optional(),
   selectedAddOns: z.array(selectedAddOnSchema).max(50).optional(),
   selectedItems: z.array(selectedItemSchema).max(100).optional(),
+  customizeRequests: z.array(customizeRequestSchema).max(100).optional(),
   specialRequest: z.string().trim().max(500).optional(),
   quantity: z.coerce.number().int().min(1).optional(),
   selectedForCheckout: z.coerce.boolean().optional(),

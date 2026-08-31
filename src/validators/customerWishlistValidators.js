@@ -1,11 +1,11 @@
 import { z } from "zod";
 import mongoose from "mongoose";
 
-const objectId = (label) =>
+const validId = (label) =>
   z
     .string()
     .trim()
-    .refine((v) => mongoose.Types.ObjectId.isValid(v), `${label} must be a valid id`);
+    .min(1, `${label} must be a valid id`);
 
 /**
  * A wishlist item is either a Package save (packageId set, vendorId absent)
@@ -18,8 +18,8 @@ const objectId = (label) =>
 export const addWishlistItemSchema = z
   .object({
     itemType: z.enum(["Package", "Vendor"]),
-    packageId: objectId("packageId").optional(),
-    vendorId: objectId("vendorId").optional(),
+    packageId: validId("packageId").optional(),
+    vendorId: validId("vendorId").optional(),
     note: z.string().trim().max(500, "note must be at most 500 characters").optional(),
   })
   .superRefine((data, ctx) => {

@@ -17,7 +17,7 @@ const TemplateSchema = new mongoose.Schema(
     vendorTypeLabel: { type: String },
 
     ownerVendorId: {
-      type: mongoose.Schema.Types.ObjectId,
+      type: String,
       ref: "Vendor",
       required: true,
     },
@@ -28,7 +28,7 @@ const TemplateSchema = new mongoose.Schema(
     ownerName: { type: String },
 
     // The package this template was created from (owner-side only).
-    sourcePackageId: { type: mongoose.Schema.Types.ObjectId },
+    sourcePackageId: { type: String },
 
     // Full package snapshot: { packages: [ ...package documents ] }
     data: { type: mongoose.Schema.Types.Mixed, required: true },

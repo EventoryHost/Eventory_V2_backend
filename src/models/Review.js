@@ -32,10 +32,10 @@ import mongoose from "mongoose";
  */
 const ReviewSchema = new mongoose.Schema(
   {
-    customerId: { type: mongoose.Schema.Types.ObjectId, ref: "Customer", required: true, index: true },
-    vendorId: { type: mongoose.Schema.Types.ObjectId, ref: "Vendor", required: true, index: true },
-    packageId: { type: mongoose.Schema.Types.ObjectId, ref: "Package", default: null, index: true },
-    bookingId: { type: mongoose.Schema.Types.ObjectId, ref: "Booking", required: true },
+    customerId: { type: String, ref: "Customer", required: true, index: true },
+    vendorId: { type: String, ref: "Vendor", required: true, index: true },
+    packageId: { type: String, ref: "Package", default: null, index: true },
+    bookingId: { type: String, ref: "Booking", required: true },
     rating: { type: Number, required: true, min: 1, max: 5 },
     // Optional per-category ratings (e.g. "Quality", "Value for Money",
     // "Punctuality" — whatever a submission form actually offers). Left as
