@@ -263,6 +263,33 @@ export const updatePackage = async (req, res) => {
   }
 };
 
+const OBJECT_ID_HEX = /^[0-9a-fA-F]{24}$/;
+
+/**
+ * @desc Resolve a packageGroupId to a filter that matches both the current
+ * String ids (PKG_GRP…) and legacy rows that still store a BSON ObjectId.
+ * The raw driver is used for the legacy lookup because Mongoose would cast an
+ * ObjectId back to a string for this now-String path.
+ */
+const buildGroupFilter = async (rawId) => {
+  const id = String(rawId ?? "").trim();
+  const stringFilter = { packageGroupId: id };
+
+  if (!OBJECT_ID_HEX.test(id)) return stringFilter;
+  if (await Package.exists(stringFilter)) return stringFilter;
+
+  const legacy = await Package.collection
+    .find(
+      { packageGroupId: new mongoose.Types.ObjectId(id) },
+      { projection: { _id: 1 } }
+    )
+    .toArray();
+
+  return legacy.length
+    ? { _id: { $in: legacy.map((d) => d._id) } }
+    : stringFilter;
+};
+
 /**
  * @desc Get all packages for a vendor
  */
@@ -285,7 +312,7 @@ export const getVendorPackages = async (req, res) => {
     const query = { vendorId: actualVendorId };
     if (status) query.packageStatus = status;
     if (packageGroupId) {
-      query.packageGroupId = String(packageGroupId).trim();
+      Object.assign(query, await buildGroupFilter(packageGroupId));
     }
 
     const packages = await Package.find(query).sort({ createdAt: -1 });
@@ -310,9 +337,9 @@ export const getPackageGroup = async (req, res) => {
       });
     }
 
-    const packages = await Package.find({
-      packageGroupId: String(packageGroupId).trim(),
-    }).sort({ createdAt: 1 });
+    const packages = await Package.find(
+      await buildGroupFilter(packageGroupId)
+    ).sort({ createdAt: 1 });
 
     if (packages.length === 0) {
       return res.status(404).json({ status: "FAILED", message: "Package group not found" });
@@ -389,7 +416,7 @@ export const updatePackageGroup = async (req, res) => {
     // Safe through the base model: every path touched here is on the base
     // schema, and $set never strips discriminator fields.
     const result = await Package.updateMany(
-      { packageGroupId: String(packageGroupId).trim() },
+      await buildGroupFilter(packageGroupId),
       update,
       { runValidators: true }
     );
@@ -469,9 +496,9 @@ export const hardDeletePackage = async (req, res) => {
       });
     }
 
-    const { deletedCount } = await Package.deleteMany({
-      packageGroupId: String(packageGroupId).trim(),
-    });
+    const { deletedCount } = await Package.deleteMany(
+      await buildGroupFilter(packageGroupId)
+    );
 
     if (deletedCount === 0) {
       return res.status(404).json({ status: "FAILED", message: "Package not found" });
