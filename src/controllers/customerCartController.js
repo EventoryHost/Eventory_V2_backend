@@ -8,6 +8,7 @@ import { computeAvailability } from "../utils/packageAvailability.js";
 import { round2 } from "../utils/money.js";
 import { computeCartQuote } from "../services/cartPricingService.js";
 import { resolveVendorRefId } from "../utils/resolveVendor.js";
+import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 
 /**
  * Cart CRUD — Phase 3 Step 13. Every route runs behind identifyCartOwner
@@ -68,7 +69,11 @@ async function buildCartPayload(cart) {
     items.map(async (item) => {
       const pkg = packageById.get(String(item.packageId));
       const stillLive = Boolean(pkg && pkg.packageStatus === "Live");
-      const currentPrice = pkg?.step3_policiesAndCharges?.packagePricing?.price ?? null;
+      // getEffectivePackagePrice, not a plain ?? null — see that util's own
+      // comment: packagePricing.price is never set for Caterer/Decorator
+      // packages, which would otherwise misreport their real (nonzero)
+      // price as a "price changed to null" warning here.
+      const currentPrice = pkg ? getEffectivePackagePrice(pkg) : null;
       const priceChanged =
         stillLive && item.packageSnapshot?.price != null && currentPrice != null && currentPrice !== item.packageSnapshot.price;
 
@@ -259,8 +264,11 @@ export const addCartItem = async (req, res) => {
       packageId: pkg._id,
       packageSnapshot: {
         name: pkg.step1_eventAndCrew?.packageName,
-        price: pkg.step3_policiesAndCharges?.packagePricing?.price ?? null,
-        billingUnit: pkg.step3_policiesAndCharges?.packagePricing?.billingUnit ?? null,
+        // getEffectivePackagePrice — see that util's comment: a plain read
+        // here would snapshot ₹0/null for every Caterer/Decorator package.
+        price: getEffectivePackagePrice(pkg),
+        billingUnit:
+          pkg.step3_policiesAndCharges?.packagePricing?.billingUnit ?? pkg.step3_policiesAndCharges?.teamAndEquipment?.billingUnit ?? null,
         image: pkg.step4_sampleMedia?.media?.[0]?.url,
         vendorType: pkg.vendorType,
         variantType: pkg.variantType,
