@@ -9,6 +9,7 @@ import Vendor from "../models/Vendor.js";
 import CalendarBlock from "../models/CalendarBlock.js";
 import { generateISTId } from "../utils/idGenerator.js";
 import { snapshotDeliverables } from "../utils/packageDeliverables.js";
+import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 import {
   applyPricingBreakdown,
   withPricingBreakdown,
@@ -121,7 +122,8 @@ const normaliseAttachments = (attachments) => {
 /** Freeze a package onto the enquiry the same way a booking freezes it. */
 const snapshotPackage = (pkg) => ({
   name: pkg.step1_eventAndCrew?.packageName || "Untitled Package",
-  price: pkg.step3_policiesAndCharges?.packagePricing?.price || 0,
+  // getEffectivePackagePrice — see that util's comment.
+  price: getEffectivePackagePrice(pkg),
   image: pkg.step4_sampleMedia?.media?.[0]?.url || null,
   vendorType: pkg.vendorType || null,
   variantType: pkg.variantType || "Premium",

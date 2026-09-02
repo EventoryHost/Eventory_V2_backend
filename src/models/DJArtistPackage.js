@@ -64,6 +64,11 @@ const DJArtistPackage = Package.discriminator(
         price: { type: Number },
         billingUnit: { type: String },
         noOfPeople: { type: String },
+        // Pre-discount price — see Package.js's own packagePricing.originalPrice
+        // comment. Redeclared here (not inherited) because this discriminator
+        // already redeclares its own step3_policiesAndCharges.packagePricing
+        // in full rather than reusing the base schema's.
+        originalPrice: { type: Number, default: null },
       },
       lastMinuteChargesDocUrl: { type: String },
       lastMinuteChargesDescription: { type: String },

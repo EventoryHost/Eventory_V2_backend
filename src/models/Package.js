@@ -206,6 +206,19 @@ const PackageSchema = new mongoose.Schema(
         price: { type: Number },
         billingUnit: { type: String },
         noOfPeople: { type: String },
+        // Pre-discount price — added 2026-09-01 for the PDP variants
+        // section's strikethrough pricing (e.g. "₹46,000 ₹42,000"), per the
+        // frontend team's own spec. Only meaningful when it's greater than
+        // `price` above (a real discount in effect); left null otherwise.
+        // The vendor's package-creation form is expected to only populate
+        // this when actually offering a discount — updatePackageStep
+        // already writes step3_policiesAndCharges.* generically from
+        // whatever the form sends, so no controller change was needed for
+        // vendors to start setting this once their form adds a field for
+        // it. Nothing here enforces originalPrice > price — a vendor
+        // entering a strikethrough lower than the real price is a
+        // data-entry mistake, not something to silently coerce or reject.
+        originalPrice: { type: Number, default: null },
       },
       // Whether the quoted prices are inclusive of GST.
       gstInclusive: { type: Boolean, default: false },

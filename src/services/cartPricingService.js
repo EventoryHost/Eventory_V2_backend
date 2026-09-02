@@ -1,6 +1,7 @@
 import CartItem from "../models/CartItem.js";
 import Package from "../models/Package.js";
 import { round2 } from "../utils/money.js";
+import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 
 /**
  * Cart pricing/due-now calculation — Phase 3 Step 14. This is the
@@ -140,7 +141,13 @@ export async function computeQuoteForLines(lines, discount = 0) {
       };
     }
 
-    const currentPrice = pkg.step3_policiesAndCharges?.packagePricing?.price ?? 0;
+    // getEffectivePackagePrice (not a plain ?? 0) — see that util's own
+    // comment: packagePricing.price is never actually set for Caterer/
+    // Decorator packages (their vendor-side flows have no input for it),
+    // which was silently pricing every one of them at ₹0 in this quote
+    // before this fix. Found 2026-09-02 while fixing a PDP price-display
+    // report — this is the real, money-critical instance of the same bug.
+    const currentPrice = getEffectivePackagePrice(pkg);
     const quantity = item.quantity || 1;
     const addonsTotal = (item.selectedAddOns || []).reduce((sum, a) => sum + a.price * a.quantity, 0);
     const chargeableItemsTotal = (item.selectedItems || []).filter((s) => s.isChargeable).reduce((sum, s) => sum + (s.price || 0), 0);

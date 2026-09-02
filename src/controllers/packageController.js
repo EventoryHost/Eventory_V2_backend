@@ -4,6 +4,7 @@ import Vendor from "../models/Vendor.js";
 import { getModelForVendor } from "../utils/modelRegistry.js";
 import { validatePackageSubmission } from "../validators/packageValidators.js";
 import { generateISTId } from "../utils/idGenerator.js";
+import { buildGroupFilter } from "../utils/packageGroupFilter.js";
 
 /**
  * @desc Initialize a new package draft
@@ -261,33 +262,6 @@ export const updatePackage = async (req, res) => {
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to update package", error: error.message });
   }
-};
-
-const OBJECT_ID_HEX = /^[0-9a-fA-F]{24}$/;
-
-/**
- * @desc Resolve a packageGroupId to a filter that matches both the current
- * String ids (PKG_GRP…) and legacy rows that still store a BSON ObjectId.
- * The raw driver is used for the legacy lookup because Mongoose would cast an
- * ObjectId back to a string for this now-String path.
- */
-const buildGroupFilter = async (rawId) => {
-  const id = String(rawId ?? "").trim();
-  const stringFilter = { packageGroupId: id };
-
-  if (!OBJECT_ID_HEX.test(id)) return stringFilter;
-  if (await Package.exists(stringFilter)) return stringFilter;
-
-  const legacy = await Package.collection
-    .find(
-      { packageGroupId: new mongoose.Types.ObjectId(id) },
-      { projection: { _id: 1 } }
-    )
-    .toArray();
-
-  return legacy.length
-    ? { _id: { $in: legacy.map((d) => d._id) } }
-    : stringFilter;
 };
 
 /**

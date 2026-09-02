@@ -7,6 +7,7 @@ import Vendor from "../models/Vendor.js";
 import CalendarBlock from "../models/CalendarBlock.js";
 import { generateISTId } from "../utils/idGenerator.js";
 import { snapshotDeliverables } from "../utils/packageDeliverables.js";
+import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 import {
   applyPricingBreakdown,
   withPricingBreakdown,
@@ -207,7 +208,11 @@ export const createBooking = async (req, res) => {
       endTime: req.body.endTime,
       packageSnapshot: {
         name: pkg.step1_eventAndCrew?.packageName || "Untitled Package",
-        price: pkg.step3_policiesAndCharges?.packagePricing?.price || 0,
+        // getEffectivePackagePrice, not a plain read — see that util's
+        // comment: packagePricing.price is never set for Caterer/Decorator
+        // packages, which would otherwise snapshot a manually-created
+        // booking's price as ₹0.
+        price: getEffectivePackagePrice(pkg),
         image: pkg.step4_sampleMedia?.media?.[0]?.url || null,
         vendorType: pkg.vendorType || null,
         variantType: pkg.variantType || "Premium",

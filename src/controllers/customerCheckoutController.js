@@ -7,6 +7,7 @@ import { computeQuoteForLines } from "../services/cartPricingService.js";
 import { computeContactValidation, computeLinesValidation } from "../services/checkoutValidationService.js";
 import { computeAvailability } from "../utils/packageAvailability.js";
 import { resolveVendorRefId } from "../utils/resolveVendor.js";
+import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 
 /**
  * Checkout session — Phase 4 Steps 15-16. A short-lived, price-locked
@@ -74,8 +75,11 @@ async function buildLine({
       sourceCartItemId: sourceCartItemId || null,
       packageSnapshot: {
         name: pkg.step1_eventAndCrew?.packageName,
-        price: pkg.step3_policiesAndCharges?.packagePricing?.price ?? null,
-        billingUnit: pkg.step3_policiesAndCharges?.packagePricing?.billingUnit ?? null,
+        // getEffectivePackagePrice — see that util's comment: a plain read
+        // snapshots ₹0/null for every Caterer/Decorator package.
+        price: getEffectivePackagePrice(pkg),
+        billingUnit:
+          pkg.step3_policiesAndCharges?.packagePricing?.billingUnit ?? pkg.step3_policiesAndCharges?.teamAndEquipment?.billingUnit ?? null,
         image: pkg.step4_sampleMedia?.media?.[0]?.url,
         vendorType: pkg.vendorType,
         variantType: pkg.variantType,
@@ -358,8 +362,10 @@ export const updateCheckoutLine = async (req, res) => {
       line.vendorId = resolvedNewVendorId;
       line.packageSnapshot = {
         name: newPkg.step1_eventAndCrew?.packageName,
-        price: newPkg.step3_policiesAndCharges?.packagePricing?.price ?? null,
-        billingUnit: newPkg.step3_policiesAndCharges?.packagePricing?.billingUnit ?? null,
+        // getEffectivePackagePrice — see that util's comment.
+        price: getEffectivePackagePrice(newPkg),
+        billingUnit:
+          newPkg.step3_policiesAndCharges?.packagePricing?.billingUnit ?? newPkg.step3_policiesAndCharges?.teamAndEquipment?.billingUnit ?? null,
         image: newPkg.step4_sampleMedia?.media?.[0]?.url,
         vendorType: newPkg.vendorType,
         variantType: newPkg.variantType,
