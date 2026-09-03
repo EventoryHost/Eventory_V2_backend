@@ -37,6 +37,7 @@ async function buildLine({
   selectedItems,
   customizeRequests,
   specialRequest,
+  noteAttachments,
   quantity,
 }) {
   const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" });
@@ -95,6 +96,7 @@ async function buildLine({
       selectedItems: selectedItems || [],
       customizeRequests: customizeRequests || [],
       specialRequest: specialRequest || "",
+      noteAttachments: noteAttachments || [],
       quantity: quantity || 1,
     },
   };
@@ -218,6 +220,7 @@ export const createCheckoutSession = async (req, res) => {
           selectedItems: item.selectedItems,
           customizeRequests: item.customizeRequests,
           specialRequest: item.specialRequest,
+          noteAttachments: item.noteAttachments,
           quantity: item.quantity,
         });
         if (built.error) return res.status(built.error.status).json({ status: "FAILED", message: built.error.message });
@@ -230,8 +233,20 @@ export const createCheckoutSession = async (req, res) => {
       // yet), but wired through so it starts working the moment that does.
       discount = cart.coupon?.discountAmount || 0;
     } else {
-      const { packageId, eventType, guests, date, timeSlot, location, selectedAddOns, selectedItems, customizeRequests, specialRequest, quantity } =
-        req.body;
+      const {
+        packageId,
+        eventType,
+        guests,
+        date,
+        timeSlot,
+        location,
+        selectedAddOns,
+        selectedItems,
+        customizeRequests,
+        specialRequest,
+        noteAttachments,
+        quantity,
+      } = req.body;
       const built = await buildLine({
         packageId,
         eventType,
@@ -243,6 +258,7 @@ export const createCheckoutSession = async (req, res) => {
         selectedItems,
         customizeRequests,
         specialRequest,
+        noteAttachments,
         quantity,
       });
       if (built.error) return res.status(built.error.status).json({ status: "FAILED", message: built.error.message });
@@ -336,8 +352,20 @@ export const updateCheckoutLine = async (req, res) => {
     const line = session.lines.id(req.params.lineId);
     if (!line) return res.status(404).json({ status: "FAILED", message: "Line not found in this checkout session" });
 
-    const { packageId, eventType, guests, date, timeSlot, location, selectedAddOns, selectedItems, customizeRequests, specialRequest, quantity } =
-      req.body;
+    const {
+      packageId,
+      eventType,
+      guests,
+      date,
+      timeSlot,
+      location,
+      selectedAddOns,
+      selectedItems,
+      customizeRequests,
+      specialRequest,
+      noteAttachments,
+      quantity,
+    } = req.body;
 
     if (packageId && packageId !== String(line.packageId)) {
       // .lean() — same reasoning as buildLine's own fetch above and
@@ -394,6 +422,7 @@ export const updateCheckoutLine = async (req, res) => {
     if (selectedItems !== undefined) line.selectedItems = selectedItems;
     if (customizeRequests !== undefined) line.customizeRequests = customizeRequests;
     if (specialRequest !== undefined) line.specialRequest = specialRequest;
+    if (noteAttachments !== undefined) line.noteAttachments = noteAttachments;
     if (quantity !== undefined) line.quantity = quantity;
 
     await lockQuote(session, session.lockedQuote?.discount || 0);

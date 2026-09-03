@@ -61,6 +61,10 @@ const CheckoutLineSchema = new mongoose.Schema(
     // not a place that re-validates this shape.
     customizeRequests: { type: mongoose.Schema.Types.Mixed, default: [] },
     specialRequest: { type: String, trim: true, maxlength: 500, default: "" },
+    // "Notes for vendor" image attachments — see CartItem.js's own comment
+    // on noteAttachments for the full context. Carried over the same way
+    // specialRequest is, right above.
+    noteAttachments: { type: [String], default: [] },
     quantity: { type: Number, default: 1, min: 1 },
   },
   { timestamps: true }
