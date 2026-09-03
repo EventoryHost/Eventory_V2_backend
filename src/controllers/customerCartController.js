@@ -46,9 +46,16 @@ async function getOrCreateCart(req) {
   return { cart, mintedGuestId };
 }
 
+// step3_policiesAndCharges.teamAndEquipment — added 2026-09-03: found live
+// while verifying an unrelated change that GET /customer/cart's currentPrice
+// was showing 0 for Caterer/Decorator packages even after
+// getEffectivePackagePrice's fallback fix, because this select list never
+// fetched teamAndEquipment in the first place — the fallback had nothing to
+// fall back to. addCartItem's own package fetch (no restricted .select())
+// was never affected, only this narrower revalidation path.
 const PACKAGE_REVALIDATION_FIELDS =
   "packageStatus vendorId step1_eventAndCrew.capacity step3_policiesAndCharges.packagePricing " +
-  "availabilityCalendar availabilitySettings bookingCapacity";
+  "step3_policiesAndCharges.teamAndEquipment availabilityCalendar availabilitySettings bookingCapacity";
 
 // Builds the full cart payload: items grouped by vendor, per-item
 // revalidation (still-available / price-changed / live availability for the
@@ -215,8 +222,20 @@ export const getCartQuote = async (req, res) => {
  */
 export const addCartItem = async (req, res) => {
   try {
-    const { packageId, eventType, guests, date, timeSlot, location, selectedAddOns, selectedItems, customizeRequests, specialRequest, quantity } =
-      req.body;
+    const {
+      packageId,
+      eventType,
+      guests,
+      date,
+      timeSlot,
+      location,
+      selectedAddOns,
+      selectedItems,
+      customizeRequests,
+      specialRequest,
+      noteAttachments,
+      quantity,
+    } = req.body;
 
     // .lean() matters here beyond the usual perf reason: ANOTHER layer of
     // the same real bug (see the vendorId comment below) — Mongoose
@@ -284,6 +303,7 @@ export const addCartItem = async (req, res) => {
       selectedItems: selectedItems || [],
       customizeRequests: customizeRequests || [],
       specialRequest: specialRequest || "",
+      noteAttachments: noteAttachments || [],
       quantity,
     });
 
@@ -327,6 +347,7 @@ export const updateCartItem = async (req, res) => {
       selectedItems,
       customizeRequests,
       specialRequest,
+      noteAttachments,
       quantity,
       selectedForCheckout,
     } = req.body;
@@ -341,6 +362,7 @@ export const updateCartItem = async (req, res) => {
     if (selectedItems !== undefined) item.selectedItems = selectedItems;
     if (customizeRequests !== undefined) item.customizeRequests = customizeRequests;
     if (specialRequest !== undefined) item.specialRequest = specialRequest;
+    if (noteAttachments !== undefined) item.noteAttachments = noteAttachments;
     if (quantity !== undefined) item.quantity = quantity;
     if (selectedForCheckout !== undefined) item.selectedForCheckout = selectedForCheckout;
 

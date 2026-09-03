@@ -105,6 +105,11 @@ router.delete("/", clearCart);
  *                   type: object
  *                   properties: { groupKey: { type: string }, itemId: { type: string }, itemName: { type: string }, price: { type: number }, isChargeable: { type: boolean } }
  *               specialRequest: { type: string, maxLength: 500 }
+ *               noteAttachments:
+ *                 type: array
+ *                 maxItems: 5
+ *                 items: { type: string, format: uri, maxLength: 2000 }
+ *                 description: Real S3/CloudFront URLs only, uploaded client-side first — never a data:/base64 URI
  *               quantity: { type: integer, default: 1 }
  *     responses:
  *       201: { description: Added, full cart payload returned }
