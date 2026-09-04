@@ -4,11 +4,22 @@ import Vendor from "../models/Vendor.js";
 // GET /api/admin/packages/review-queue
 export const getReviewQueue = async (req, res) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
+    const { page = 1, limit = 10, search } = req.query;
     const skip = (page - 1) * limit;
 
+    const matchStage = { packageStatus: "Under Review" };
+    if (search) {
+      const vendors = await Vendor.find({ businessName: { $regex: search, $options: "i" } }).select("id").lean();
+      const matchingVendorIds = vendors.map(v => v.id);
+
+      matchStage.$or = [
+        { "step1_eventAndCrew.packageName": { $regex: search, $options: "i" } },
+        { vendorId: { $in: matchingVendorIds } }
+      ];
+    }
+
     const groupsRaw = await Package.aggregate([
-      { $match: { packageStatus: "Under Review" } },
+      { $match: matchStage },
       { $sort: { updatedAt: 1 } },
       {
         $group: {
@@ -39,7 +50,7 @@ export const getReviewQueue = async (req, res) => {
     }));
 
     const counts = await Package.aggregate([
-      { $match: { packageStatus: "Under Review" } },
+      { $match: matchStage },
       { $group: { _id: { $ifNull: ["$packageGroupId", "$_id"] } } },
       { $count: "total" }
     ]);
