@@ -1,6 +1,32 @@
 import mongoose from "mongoose";
 import { generateISTId } from "../utils/idGenerator.js";
 import policySchema from "./schemas/policySchema.js";
+import {
+  EmActionSchema,
+  PackageReviewEventSchema,
+} from "./schemas/emActionSchema.js";
+
+/**
+ * The package lifecycle.
+ *
+ *   Draft ──submit──> Under Review ──┬── approve ──────> Approved ──go-live──> Live
+ *                                    ├── raise-action ─> Action Required ──resubmit──> Under Review
+ *                                    └── reject ───────> Deleted
+ *
+ * "Approved" is deliberately distinct from "Live": the EM clears a package for
+ * sale, the vendor decides when it actually appears on the marketplace.
+ */
+export const PACKAGE_STATUSES = [
+  "Draft",
+  "Under Review",
+  "Action Required",
+  "Approved",
+  "Live",
+  "Deleted",
+];
+
+/** Statuses in which the vendor may still edit the package. */
+export const EDITABLE_STATUSES = ["Draft", "Action Required"];
 
 const packageOptions = {
   discriminatorKey: "vendorType", // This will store the vendor type (e.g., 'Caterer')
@@ -16,7 +42,7 @@ const PackageSchema = new mongoose.Schema(
     },
     packageStatus: {
       type: String,
-      enum: ["Draft", "Under Review", "Live", "Deleted"],
+      enum: PACKAGE_STATUSES,
       default: "Draft",
     },
     bookingSettings: {
@@ -278,12 +304,18 @@ const PackageSchema = new mongoose.Schema(
         other: { type: String },
       },
     },
-    adminReview: {
-      step1: { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
-      step2: { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
-      step3: { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
-      step4: { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
-    }
+    // The review the EM is building, and once raised, the fixes the vendor has
+    // to clear. Each raised action is also appended to reviewHistory, so the
+    // audit trail survives a resubmit.
+    emAction: { type: EmActionSchema, default: null },
+
+    submission: {
+      count: { type: Number, default: 0 },
+      submittedAt: { type: Date, default: null },
+      lastDecisionAt: { type: Date, default: null },
+    },
+
+    reviewHistory: { type: [PackageReviewEventSchema], default: [] },
   },
   packageOptions
 );

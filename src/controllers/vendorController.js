@@ -4,6 +4,7 @@ import {
   DELETION_RETENTION_DAYS,
   purgeEligibleAt,
 } from "../utils/accountDeletion.js";
+import { VENDOR_DOC_FIELDS } from "../models/schemas/emActionSchema.js";
 
 /**
  * Strip any base64 / data URI values from an update payload.
@@ -91,6 +92,14 @@ export const getVendorById = async (req, res, next) => {
 export const updateVendor = async (req, res, next) => {
   try {
     const cleanBody = sanitizeBase64Fields(req.body);
+
+    // A freshly uploaded business document has not been checked yet, so
+    // writing one always clears its verified flag — however it was uploaded,
+    // and whether or not an EM asked for it.
+    for (const { url, verified } of Object.values(VENDOR_DOC_FIELDS)) {
+      if (cleanBody[url]) cleanBody[verified] = false;
+    }
+
     const vendor = await Vendor.findOneAndUpdate(
       { id: req.params.id },
       cleanBody,
