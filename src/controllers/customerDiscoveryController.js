@@ -8,6 +8,8 @@ import { utcDayRange } from "../utils/dateRange.js";
 import { computeAvailability } from "../utils/packageAvailability.js";
 import { round2 } from "../utils/money.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
+import { buildGroupFilter } from "../utils/packageGroupFilter.js";
+import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 
 /**
  * Public (no-auth), read-only discovery endpoints for the customer side:
@@ -44,6 +46,25 @@ import { resolveVendorForPackage } from "../utils/resolveVendor.js";
  * src/utils/resolveVendor.js so Wishlist/Compare/Cart/Booking (which hit
  * the exact same crash — see testsuite.pdf) can share one implementation.
  */
+
+/**
+ * Backfills a package's own step3_policiesAndCharges.packagePricing.price
+ * in-place with getEffectivePackagePrice's fallback — see that util's own
+ * comment for why (packagePricing.price is never set for Caterer/Decorator
+ * packages, whose vendor-side flows never write it). Run on every package
+ * object returned by this controller's read endpoints so the frontend's
+ * existing price-reading code (which reads exactly this path — e.g.
+ * getPackageDetail.ts's priceOf()) picks up the real, effective price with
+ * no frontend change needed, rather than every caller re-deriving it.
+ * Mutates a lean object in place; safe since these are throwaway response
+ * objects, never re-saved.
+ */
+function normalizePackagePricing(pkg) {
+  if (!pkg?.step3_policiesAndCharges) return pkg;
+  if (!pkg.step3_policiesAndCharges.packagePricing) pkg.step3_policiesAndCharges.packagePricing = {};
+  pkg.step3_policiesAndCharges.packagePricing.price = getEffectivePackagePrice(pkg);
+  return pkg;
+}
 
 /**
  * @desc Browse/search Live packages by event category, vendor type, city,
@@ -134,9 +155,9 @@ export const browsePackages = async (req, res) => {
       "vendorId vendorType variantType packageGroupId packageStatus " +
       "step1_eventAndCrew.packageName step1_eventAndCrew.eventCategories " +
       "step1_eventAndCrew.capacity step1_eventAndCrew.duration " +
-      "step3_policiesAndCharges.packagePricing step3_policiesAndCharges.gstInclusive " +
-      "step3_policiesAndCharges.gstRatePercent step3_policiesAndCharges.guestTiers " +
-      "step4_sampleMedia.media createdAt";
+      "step3_policiesAndCharges.packagePricing step3_policiesAndCharges.teamAndEquipment " +
+      "step3_policiesAndCharges.gstInclusive step3_policiesAndCharges.gstRatePercent " +
+      "step3_policiesAndCharges.guestTiers step4_sampleMedia.media createdAt";
 
     let packages;
     const total = await Package.countDocuments(query);
@@ -193,6 +214,8 @@ export const browsePackages = async (req, res) => {
         delete pkg._rawVendorId;
       })
     );
+
+    packages.forEach(normalizePackagePricing);
 
     return res.status(200).json({
       status: "SUCCESS",
@@ -257,9 +280,9 @@ export const getPopularPackages = async (req, res) => {
       "vendorId vendorType variantType packageGroupId packageStatus " +
       "step1_eventAndCrew.packageName step1_eventAndCrew.eventCategories " +
       "step1_eventAndCrew.capacity step1_eventAndCrew.duration " +
-      "step3_policiesAndCharges.packagePricing step3_policiesAndCharges.gstInclusive " +
-      "step3_policiesAndCharges.gstRatePercent step3_policiesAndCharges.guestTiers " +
-      "step4_sampleMedia.media createdAt";
+      "step3_policiesAndCharges.packagePricing step3_policiesAndCharges.teamAndEquipment " +
+      "step3_policiesAndCharges.gstInclusive step3_policiesAndCharges.gstRatePercent " +
+      "step3_policiesAndCharges.guestTiers step4_sampleMedia.media createdAt";
 
     const rankedIds = ranked.map((r) => r._id);
     const rankedPackages = rankedIds.length
@@ -303,6 +326,7 @@ export const getPopularPackages = async (req, res) => {
         pkg.vendorId = await resolveVendorForPackage(pkg.vendorId);
       })
     );
+    packages.forEach(normalizePackagePricing);
 
     return res.status(200).json({ status: "SUCCESS", count: packages.length, usingFallback, packages });
   } catch (error) {
@@ -337,6 +361,7 @@ export const getPackageDetail = async (req, res) => {
       return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
     }
     pkg.vendorId = await resolveVendorForPackage(pkg.vendorId);
+    normalizePackagePricing(pkg);
 
     const { date, guests, time } = req.query;
     const [availability, pricingPreview, reviews] = await Promise.all([
@@ -566,10 +591,18 @@ export const getPackageGroupVariants = async (req, res) => {
       "step1_eventAndCrew.packageName step1_eventAndCrew.eventCategories " +
       "step1_eventAndCrew.capacity step1_eventAndCrew.duration " +
       "step2_productsAndPricing.setups step3_policiesAndCharges.packagePricing " +
-      "step3_policiesAndCharges.gstInclusive step3_policiesAndCharges.gstRatePercent " +
-      "step4_sampleMedia.media createdAt";
+      "step3_policiesAndCharges.teamAndEquipment step3_policiesAndCharges.gstInclusive " +
+      "step3_policiesAndCharges.gstRatePercent step4_sampleMedia.media createdAt";
 
-    const packages = await Package.find({ packageGroupId, packageStatus: "Live" })
+    // buildGroupFilter (src/utils/packageGroupFilter.js) — NOT a plain
+    // {packageGroupId} match: real Live package data (in both dev and prod,
+    // confirmed 2026-09-01) has this field stored as a legacy raw ObjectId
+    // even though the schema declares it String, which a plain match
+    // silently 0-matches. See that util's own comment for the full story —
+    // this endpoint was effectively 404-ing for every real package until
+    // this was found and fixed while building the "Most booked" work below.
+    const groupFilter = await buildGroupFilter(packageGroupId);
+    const packages = await Package.find({ ...groupFilter, packageStatus: "Live" })
       .select(PACKAGE_FIELDS)
       .sort({ createdAt: 1 })
       .lean();
@@ -583,8 +616,52 @@ export const getPackageGroupVariants = async (req, res) => {
         pkg.vendorId = await resolveVendorForPackage(pkg.vendorId);
       })
     );
+    // normalizePackagePricing — added 2026-09-02, fixing the exact "PDP
+    // variant price isn't displaying" report: this is the endpoint the PDP
+    // variant cards actually read. See getEffectivePackagePrice's own
+    // comment — packagePricing.price is never set for Caterer/Decorator
+    // packages at all, which was rendering ₹0/blank here.
+    packages.forEach(normalizePackagePricing);
 
-    return res.status(200).json({ status: "SUCCESS", count: packages.length, packageGroupId, packages });
+    // "Most booked" badge — added 2026-09-01 per the frontend team's PDP
+    // variants spec (option (b) from their handoff: reuse the same
+    // booking-volume ranking already built for GET /customer/packages/popular,
+    // scoped within this packageGroupId). Same EXCLUDED_FROM_POPULARITY_COUNT
+    // reasoning as getPopularPackages — Declined/Cancelled bookings never
+    // really happened, don't count as demand. Returns a bookingsCount per
+    // variant (not just a single winner) so the frontend can pick the max
+    // itself if it wants to, per their own "or a bookingsCount per variant"
+    // suggestion — mostBookedVariantId is provided too since most callers
+    // just need the one id.
+    const packageIds = packages.map((pkg) => String(pkg._id));
+    const bookingCounts = await Booking.aggregate([
+      { $match: { packageId: { $in: packageIds }, status: { $nin: EXCLUDED_FROM_POPULARITY_COUNT } } },
+      { $group: { _id: "$packageId", bookingsCount: { $sum: 1 } } },
+    ]);
+    const countByPackageId = new Map(bookingCounts.map((b) => [String(b._id), b.bookingsCount]));
+
+    let mostBookedVariantId = null;
+    let maxCount = 0;
+    packages.forEach((pkg) => {
+      const count = countByPackageId.get(String(pkg._id)) || 0;
+      pkg.bookingsCount = count;
+      if (count > maxCount) {
+        maxCount = count;
+        mostBookedVariantId = pkg._id;
+      }
+    });
+    // Every variant tied at 0 real bookings isn't "most booked" by anything
+    // — badging one arbitrarily would be misleading, so only surface a
+    // winner once at least one real booking actually exists.
+    if (maxCount === 0) mostBookedVariantId = null;
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      count: packages.length,
+      packageGroupId,
+      mostBookedVariantId,
+      packages,
+    });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to fetch package group variants", error: error.message });
   }
