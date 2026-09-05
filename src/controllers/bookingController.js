@@ -47,18 +47,6 @@ const failed = (res, message, error) => {
 };
 
 /**
- * Resolve a human-readable vendor ID (e.g. "VEN...") to a MongoDB ObjectId.
- */
-const resolveVendorId = async (vendorId) => {
-  if (typeof vendorId === "string" && vendorId.startsWith("VEN")) {
-    const vendorDoc = await Vendor.findOne({ id: vendorId }).select("_id");
-    if (!vendorDoc) return null;
-    return vendorDoc._id;
-  }
-  return vendorId;
-};
-
-/**
  * Check if a date has conflicts for the vendor (other bookings or calendar blocks).
  * Returns true if conflicting.
  */
@@ -173,20 +161,18 @@ export const createBooking = async (req, res) => {
     const validation = validateCreateBooking(req.body);
     if (!validation.valid) return invalid(res, validation.errors);
 
-    const actualVendorId = await resolveVendorId(vendorId);
-    if (!actualVendorId) return notFound(res, "Vendor not found");
+    if (!(await Vendor.exists({ id: vendorId }))) {
+      return notFound(res, "Vendor not found");
+    }
 
     const pkg = await Package.findById(req.body.packageId);
     if (!pkg) return notFound(res, "Package not found");
 
-    const conflictDetected = await detectConflict(
-      actualVendorId,
-      req.body.eventDate
-    );
+    const conflictDetected = await detectConflict(vendorId, req.body.eventDate);
 
     const booking = new Booking({
       bookingId: generateISTId("EVT"),
-      vendorId: actualVendorId,
+      vendorId,
       packageId: pkg._id,
       customer: {
         name: req.body.customer.name.trim(),
@@ -266,10 +252,7 @@ export const getVendorBookings = async (req, res) => {
       limit = 20,
     } = req.query;
 
-    const actualVendorId = await resolveVendorId(vendorId);
-    if (!actualVendorId) return notFound(res, "Vendor not found");
-
-    const query = { vendorId: actualVendorId };
+    const query = { vendorId };
     if (status) query.status = status;
     if (paymentType) query.paymentType = paymentType;
     if (startDate || endDate) {
@@ -294,7 +277,7 @@ export const getVendorBookings = async (req, res) => {
       results.push({
         ...withPricingBreakdown(booking),
         conflictDetected: await detectConflict(
-          actualVendorId,
+          vendorId,
           booking.eventDate,
           booking._id
         ),
