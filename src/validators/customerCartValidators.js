@@ -50,6 +50,29 @@ const customizeRequestSchema = z.object({
   volume: z.string().trim().max(50).optional(),
 });
 
+// "Notes for vendor" image attachments — added 2026-09-03 (see CartItem.js's
+// own comment on noteAttachments for the full context). Real https URLs
+// only — the frontend uploads to S3 itself and sends back the resulting
+// URL. z.string().url() alone does NOT reject this — confirmed live while
+// testing this fix: a "data:image/...;base64,..." string is a technically
+// valid URL per the WHATWG spec (the same URL constructor Zod's .url()
+// uses under the hood accepts a data: scheme), so it round-tripped straight
+// into the database on the first version of this validator. The explicit
+// .refine() below is the actual guard — same convention as
+// rejectBase64Fields (customerController.js), just enforced per-array-entry
+// here instead of on a flat field.
+const noteAttachmentsSchema = z
+  .array(
+    z
+      .string()
+      .trim()
+      .url()
+      .max(2000)
+      .refine((url) => !url.startsWith("data:"), "Attachments must be an uploaded file URL, not a base64 data URI")
+  )
+  .max(5)
+  .optional();
+
 export const addCartItemSchema = z.object({
   packageId: validId("packageId"),
   eventType: z.string().trim().max(100).optional(),
@@ -61,6 +84,7 @@ export const addCartItemSchema = z.object({
   selectedItems: z.array(selectedItemSchema).max(100).optional(),
   customizeRequests: z.array(customizeRequestSchema).max(100).optional(),
   specialRequest: z.string().trim().max(500).optional(),
+  noteAttachments: noteAttachmentsSchema,
   quantity: z.coerce.number().int().min(1).default(1),
 });
 
@@ -76,6 +100,7 @@ export const updateCartItemSchema = z.object({
   selectedItems: z.array(selectedItemSchema).max(100).optional(),
   customizeRequests: z.array(customizeRequestSchema).max(100).optional(),
   specialRequest: z.string().trim().max(500).optional(),
+  noteAttachments: noteAttachmentsSchema,
   quantity: z.coerce.number().int().min(1).optional(),
   selectedForCheckout: z.coerce.boolean().optional(),
 });

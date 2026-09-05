@@ -8,6 +8,7 @@ import { computeAvailability } from "../utils/packageAvailability.js";
 import { round2 } from "../utils/money.js";
 import { computeCartQuote } from "../services/cartPricingService.js";
 import { resolveVendorRefId } from "../utils/resolveVendor.js";
+import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 
 /**
  * Cart CRUD — Phase 3 Step 13. Every route runs behind identifyCartOwner
@@ -45,9 +46,16 @@ async function getOrCreateCart(req) {
   return { cart, mintedGuestId };
 }
 
+// step3_policiesAndCharges.teamAndEquipment — added 2026-09-03: found live
+// while verifying an unrelated change that GET /customer/cart's currentPrice
+// was showing 0 for Caterer/Decorator packages even after
+// getEffectivePackagePrice's fallback fix, because this select list never
+// fetched teamAndEquipment in the first place — the fallback had nothing to
+// fall back to. addCartItem's own package fetch (no restricted .select())
+// was never affected, only this narrower revalidation path.
 const PACKAGE_REVALIDATION_FIELDS =
   "packageStatus vendorId step1_eventAndCrew.capacity step3_policiesAndCharges.packagePricing " +
-  "availabilityCalendar availabilitySettings bookingCapacity";
+  "step3_policiesAndCharges.teamAndEquipment availabilityCalendar availabilitySettings bookingCapacity";
 
 // Builds the full cart payload: items grouped by vendor, per-item
 // revalidation (still-available / price-changed / live availability for the
@@ -68,7 +76,11 @@ async function buildCartPayload(cart) {
     items.map(async (item) => {
       const pkg = packageById.get(String(item.packageId));
       const stillLive = Boolean(pkg && pkg.packageStatus === "Live");
-      const currentPrice = pkg?.step3_policiesAndCharges?.packagePricing?.price ?? null;
+      // getEffectivePackagePrice, not a plain ?? null — see that util's own
+      // comment: packagePricing.price is never set for Caterer/Decorator
+      // packages, which would otherwise misreport their real (nonzero)
+      // price as a "price changed to null" warning here.
+      const currentPrice = pkg ? getEffectivePackagePrice(pkg) : null;
       const priceChanged =
         stillLive && item.packageSnapshot?.price != null && currentPrice != null && currentPrice !== item.packageSnapshot.price;
 
@@ -210,8 +222,20 @@ export const getCartQuote = async (req, res) => {
  */
 export const addCartItem = async (req, res) => {
   try {
-    const { packageId, eventType, guests, date, timeSlot, location, selectedAddOns, selectedItems, customizeRequests, specialRequest, quantity } =
-      req.body;
+    const {
+      packageId,
+      eventType,
+      guests,
+      date,
+      timeSlot,
+      location,
+      selectedAddOns,
+      selectedItems,
+      customizeRequests,
+      specialRequest,
+      noteAttachments,
+      quantity,
+    } = req.body;
 
     // .lean() matters here beyond the usual perf reason: ANOTHER layer of
     // the same real bug (see the vendorId comment below) — Mongoose
@@ -259,8 +283,11 @@ export const addCartItem = async (req, res) => {
       packageId: pkg._id,
       packageSnapshot: {
         name: pkg.step1_eventAndCrew?.packageName,
-        price: pkg.step3_policiesAndCharges?.packagePricing?.price ?? null,
-        billingUnit: pkg.step3_policiesAndCharges?.packagePricing?.billingUnit ?? null,
+        // getEffectivePackagePrice — see that util's comment: a plain read
+        // here would snapshot ₹0/null for every Caterer/Decorator package.
+        price: getEffectivePackagePrice(pkg),
+        billingUnit:
+          pkg.step3_policiesAndCharges?.packagePricing?.billingUnit ?? pkg.step3_policiesAndCharges?.teamAndEquipment?.billingUnit ?? null,
         image: pkg.step4_sampleMedia?.media?.[0]?.url,
         vendorType: pkg.vendorType,
         variantType: pkg.variantType,
@@ -276,6 +303,7 @@ export const addCartItem = async (req, res) => {
       selectedItems: selectedItems || [],
       customizeRequests: customizeRequests || [],
       specialRequest: specialRequest || "",
+      noteAttachments: noteAttachments || [],
       quantity,
     });
 
@@ -319,6 +347,7 @@ export const updateCartItem = async (req, res) => {
       selectedItems,
       customizeRequests,
       specialRequest,
+      noteAttachments,
       quantity,
       selectedForCheckout,
     } = req.body;
@@ -333,6 +362,7 @@ export const updateCartItem = async (req, res) => {
     if (selectedItems !== undefined) item.selectedItems = selectedItems;
     if (customizeRequests !== undefined) item.customizeRequests = customizeRequests;
     if (specialRequest !== undefined) item.specialRequest = specialRequest;
+    if (noteAttachments !== undefined) item.noteAttachments = noteAttachments;
     if (quantity !== undefined) item.quantity = quantity;
     if (selectedForCheckout !== undefined) item.selectedForCheckout = selectedForCheckout;
 

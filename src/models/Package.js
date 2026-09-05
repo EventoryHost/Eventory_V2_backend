@@ -1,6 +1,32 @@
 import mongoose from "mongoose";
 import { generateISTId } from "../utils/idGenerator.js";
 import policySchema from "./schemas/policySchema.js";
+import {
+  EmActionSchema,
+  PackageReviewEventSchema,
+} from "./schemas/emActionSchema.js";
+
+/**
+ * The package lifecycle.
+ *
+ *   Draft ──submit──> Under Review ──┬── approve ──────> Approved ──go-live──> Live
+ *                                    ├── raise-action ─> Action Required ──resubmit──> Under Review
+ *                                    └── reject ───────> Deleted
+ *
+ * "Approved" is deliberately distinct from "Live": the EM clears a package for
+ * sale, the vendor decides when it actually appears on the marketplace.
+ */
+export const PACKAGE_STATUSES = [
+  "Draft",
+  "Under Review",
+  "Action Required",
+  "Approved",
+  "Live",
+  "Deleted",
+];
+
+/** Statuses in which the vendor may still edit the package. */
+export const EDITABLE_STATUSES = ["Draft", "Action Required"];
 
 const packageOptions = {
   discriminatorKey: "vendorType", // This will store the vendor type (e.g., 'Caterer')
@@ -16,7 +42,7 @@ const PackageSchema = new mongoose.Schema(
     },
     packageStatus: {
       type: String,
-      enum: ["Draft", "Under Review", "Live", "Deleted"],
+      enum: PACKAGE_STATUSES,
       default: "Draft",
     },
     bookingSettings: {
@@ -206,6 +232,19 @@ const PackageSchema = new mongoose.Schema(
         price: { type: Number },
         billingUnit: { type: String },
         noOfPeople: { type: String },
+        // Pre-discount price — added 2026-09-01 for the PDP variants
+        // section's strikethrough pricing (e.g. "₹46,000 ₹42,000"), per the
+        // frontend team's own spec. Only meaningful when it's greater than
+        // `price` above (a real discount in effect); left null otherwise.
+        // The vendor's package-creation form is expected to only populate
+        // this when actually offering a discount — updatePackageStep
+        // already writes step3_policiesAndCharges.* generically from
+        // whatever the form sends, so no controller change was needed for
+        // vendors to start setting this once their form adds a field for
+        // it. Nothing here enforces originalPrice > price — a vendor
+        // entering a strikethrough lower than the real price is a
+        // data-entry mistake, not something to silently coerce or reject.
+        originalPrice: { type: Number, default: null },
       },
       // Whether the quoted prices are inclusive of GST.
       gstInclusive: { type: Boolean, default: false },
@@ -278,12 +317,18 @@ const PackageSchema = new mongoose.Schema(
         other: { type: String },
       },
     },
-    adminReview: {
-      step1: { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
-      step2: { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
-      step3: { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
-      step4: { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
-    }
+    // The review the EM is building, and once raised, the fixes the vendor has
+    // to clear. Each raised action is also appended to reviewHistory, so the
+    // audit trail survives a resubmit.
+    emAction: { type: EmActionSchema, default: null },
+
+    submission: {
+      count: { type: Number, default: 0 },
+      submittedAt: { type: Date, default: null },
+      lastDecisionAt: { type: Date, default: null },
+    },
+
+    reviewHistory: { type: [PackageReviewEventSchema], default: [] },
   },
   packageOptions
 );

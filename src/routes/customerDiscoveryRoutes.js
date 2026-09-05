@@ -168,7 +168,12 @@ router.get("/packages/popular", publicBrowseLimiter, validateRequest(popularPack
  *       router's internal GET /api/packages/group/:packageGroupId, which the
  *       PDP frontend was using as a stopgap (no packageStatus filter there —
  *       could leak Draft/Under Review/Deleted variants to a customer, and no
- *       vendor field whitelist). Added 2026-08-17.
+ *       vendor field whitelist). Added 2026-08-17. Each package now also
+ *       carries a real bookingsCount (Declined/Cancelled bookings excluded),
+ *       and the response's mostBookedVariantId names whichever variant has
+ *       the highest — null if every variant is still tied at zero real
+ *       bookings. Added 2026-09-01, per the PDP variants "Most booked" badge
+ *       spec.
  *     tags: [Customer Discovery]
  *     parameters:
  *       - in: path
@@ -176,7 +181,7 @@ router.get("/packages/popular", publicBrowseLimiter, validateRequest(popularPack
  *         required: true
  *         schema: { type: string }
  *     responses:
- *       200: { description: Every Live variant of this package group, oldest first }
+ *       200: { description: Every Live variant of this package group (oldest first), each with a bookingsCount, plus mostBookedVariantId }
  *       400: { description: Invalid packageGroupId }
  *       404: { description: No Live variants found for this package group }
  */
