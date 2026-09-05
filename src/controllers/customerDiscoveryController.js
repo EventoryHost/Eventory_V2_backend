@@ -151,10 +151,28 @@ export const browsePackages = async (req, res) => {
       query.vendorId = { $in: vendorIds.map((v) => v._id) };
     }
 
+    // step2_productsAndPricing.included — added 2026-09-04, frontend-reported
+    // gap: the listing page's highlight-chip pills ("Bridal Makeup", "Fashion
+    // Photography", ...) were never rendering because this whole endpoint
+    // excluded all of step2_productsAndPricing, so the frontend never
+    // received anything to build them from. `included` IS the real,
+    // vendor-authored field for this — every vendor-type's step2 schema has
+    // it ("PART OF THIS PACKAGE" in the vendor's own package-creation form) —
+    // but confirmed against real prod data before shipping this: for
+    // Decorator/Caterer/PAV/DJArtist, vendors typically enter ONE long
+    // paragraph (sometimes 200+ characters, embedded newlines, numbered
+    // lists) rather than short bulleted tags, whereas MakeupArtist entries
+    // tend to genuinely be short ("Makeup", "Hair drapping", "Manicure").
+    // Not a reason to withhold the field — it's real data and the fix
+    // unblocks the frontend either way — but the frontend needs to defend
+    // against long/single-entry values, not assume every package has 3-6
+    // short tags like the reference mock. Same field also added to
+    // getPopularPackages below, for the landing page's carousel cards.
     const PACKAGE_FIELDS =
       "vendorId vendorType variantType packageGroupId packageStatus " +
       "step1_eventAndCrew.packageName step1_eventAndCrew.eventCategories " +
       "step1_eventAndCrew.capacity step1_eventAndCrew.duration " +
+      "step2_productsAndPricing.included " +
       "step3_policiesAndCharges.packagePricing step3_policiesAndCharges.teamAndEquipment " +
       "step3_policiesAndCharges.gstInclusive step3_policiesAndCharges.gstRatePercent " +
       "step3_policiesAndCharges.guestTiers step4_sampleMedia.media createdAt";
@@ -280,6 +298,7 @@ export const getPopularPackages = async (req, res) => {
       "vendorId vendorType variantType packageGroupId packageStatus " +
       "step1_eventAndCrew.packageName step1_eventAndCrew.eventCategories " +
       "step1_eventAndCrew.capacity step1_eventAndCrew.duration " +
+      "step2_productsAndPricing.included " +
       "step3_policiesAndCharges.packagePricing step3_policiesAndCharges.teamAndEquipment " +
       "step3_policiesAndCharges.gstInclusive step3_policiesAndCharges.gstRatePercent " +
       "step3_policiesAndCharges.guestTiers step4_sampleMedia.media createdAt";
