@@ -1,10 +1,55 @@
-import mongoose from "mongoose";
 import Package from "../models/Package.js";
 import Vendor from "../models/Vendor.js";
 import { getModelForVendor } from "../utils/modelRegistry.js";
-import { validatePackageSubmission } from "../validators/packageValidators.js";
 import { generateISTId } from "../utils/idGenerator.js";
-import { buildGroupFilter } from "../utils/packageGroupFilter.js";
+import {
+  buildGroupFilter,
+  buildGroupFilterFromPackageId,
+} from "../utils/packageGroup.js";
+import {
+  submitGroup,
+  goLiveGroup,
+  ReviewTransitionError,
+} from "../services/packageReviewService.js";
+
+// Statuses in which the vendor may not edit: Under Review, so a submission
+// cannot change under the EM's feet; Approved, so what goes live is exactly
+// what was cleared. Draft and Action Required stay editable — Action Required
+// is the whole point of Fix & Resubmit — and Live stays editable as before.
+const LOCKED_FOR_EDIT = ["Under Review", "Approved"];
+
+const lockedEditResponse = (packageStatus) =>
+  LOCKED_FOR_EDIT.includes(packageStatus)
+    ? {
+        status: "FAILED",
+        message: `This package is "${packageStatus}" and cannot be edited right now.`,
+        packageStatus,
+      }
+    : null;
+
+// packageStatus is writable through the plain update endpoints only for soft
+// delete and restore. Every other transition goes through the review service,
+// so that a client cannot set "Live" directly and skip approval entirely.
+const DIRECTLY_SETTABLE_STATUSES = ["Draft", "Deleted"];
+
+const invalidStatusWriteResponse = (packageStatus) =>
+  packageStatus !== undefined && !DIRECTLY_SETTABLE_STATUSES.includes(packageStatus)
+    ? {
+        status: "FAILED",
+        message: `packageStatus "${packageStatus}" cannot be set directly — use the submit, approve or go-live endpoints.`,
+      }
+    : null;
+
+const sendReviewError = (res, error, fallback) => {
+  if (error instanceof ReviewTransitionError) {
+    return res.status(error.statusCode).json({
+      status: "FAILED",
+      message: error.message,
+      ...(error.details || {}),
+    });
+  }
+  return res.status(500).json({ status: "ERROR", message: fallback, error: error.message });
+};
 
 /**
  * @desc Initialize a new package draft
@@ -26,19 +71,7 @@ export const initializePackage = async (req, res) => {
       });
     }
 
-    // Ensure vendorId is in the custom string format (e.g., "VEN...")
-    let actualVendorId = vendorId;
-    if (mongoose.Types.ObjectId.isValid(vendorId)) {
-      const vendorDoc = await Vendor.findById(vendorId).select('id');
-      if (vendorDoc && vendorDoc.id) {
-        actualVendorId = vendorDoc.id;
-      } else {
-        return res.status(404).json({
-          status: "FAILED",
-          message: `Vendor with ObjectId ${vendorId} not found in database`,
-        });
-      }
-    } else if (typeof vendorId === "string" && !vendorId.startsWith("VEN")) {
+    if (typeof vendorId !== "string" || !vendorId.startsWith("VEN")) {
       return res.status(400).json({
         status: "FAILED",
         message: "Invalid vendorId format",
@@ -74,7 +107,7 @@ export const initializePackage = async (req, res) => {
           variantType: resolvedVariant,
         }
         : {
-          vendorId: actualVendorId,
+          vendorId: vendorId,
           packageStatus: "Draft",
           variantType: resolvedVariant,
           "step1_eventAndCrew.packageName": resolvedName,
@@ -90,7 +123,7 @@ export const initializePackage = async (req, res) => {
     }
 
     const newPackage = new Model({
-      vendorId: actualVendorId,
+      vendorId: vendorId,
       vendorType,
       packageStatus: "Draft",
       packageGroupId: resolvedGroupId,
@@ -164,6 +197,9 @@ export const updatePackageStep = async (req, res) => {
     if (!basePkg) {
       return res.status(404).json({ status: "FAILED", message: "Package not found" });
     }
+
+    const locked = lockedEditResponse(basePkg.packageStatus);
+    if (locked) return res.status(409).json(locked);
 
     // Solve discriminator gotcha by using the subclass Model so subclass-specific fields like step2 are kept
     const Model = getModelForVendor(basePkg.vendorType);
@@ -246,6 +282,15 @@ export const updatePackage = async (req, res) => {
       return res.status(404).json({ status: "FAILED", message: "Package not found" });
     }
 
+    const badStatus = invalidStatusWriteResponse(updates.packageStatus);
+    if (badStatus) return res.status(400).json(badStatus);
+
+    // A soft delete or restore stays allowed whatever the review state; only
+    // edits to the package's own content are locked during review.
+    const editsContent = Object.keys(updates).some((f) => f !== "packageStatus");
+    const locked = editsContent && lockedEditResponse(basePkg.packageStatus);
+    if (locked) return res.status(409).json(locked);
+
     // Use the subclass model so discriminator-specific fields are preserved.
     const Model = getModelForVendor(basePkg.vendorType);
     const updatedPackage = await Model.findByIdAndUpdate(
@@ -264,6 +309,58 @@ export const updatePackage = async (req, res) => {
   }
 };
 
+// Progress order, furthest-along first. A group's variants do not always agree
+// — a duplicate starts as a Draft beside a submitted sibling — so the card the
+// vendor sees, and therefore the tab it is counted under, takes the
+// furthest-along status in the group. Mirrors InventoryBloc._statusRank.
+const STATUS_PROGRESS = [
+  "Live",
+  "Approved",
+  "Under Review",
+  "Action Required",
+  "Draft",
+  "Deleted",
+];
+
+// Which Inventory tab each status is filed under. Soft-deleted packages sit at
+// the bottom of Drafts rather than in a tab of their own.
+const STATUS_TAB = {
+  Live: "live",
+  Approved: "submitted",
+  "Under Review": "submitted",
+  "Action Required": "submitted",
+  Draft: "drafts",
+  Deleted: "drafts",
+};
+
+/**
+ * @desc Per-tab card counts for one vendor, counted per logical package rather
+ * than per variant so they match the cards actually rendered.
+ */
+const getVendorPackageCounts = async (vendorId) => {
+  const groups = await Package.aggregate([
+    { $match: { vendorId } },
+    {
+      $group: {
+        _id: { $ifNull: ["$packageGroupId", { $toString: "$_id" }] },
+        statuses: { $addToSet: "$packageStatus" },
+      },
+    },
+  ]);
+
+  const byStatus = Object.fromEntries(STATUS_PROGRESS.map((s) => [s, 0]));
+  const tabs = { drafts: 0, live: 0, submitted: 0 };
+
+  for (const group of groups) {
+    const status =
+      STATUS_PROGRESS.find((s) => group.statuses.includes(s)) || "Draft";
+    byStatus[status] += 1;
+    tabs[STATUS_TAB[status]] += 1;
+  }
+
+  return { byStatus, tabs };
+};
+
 /**
  * @desc Get all packages for a vendor
  */
@@ -272,18 +369,7 @@ export const getVendorPackages = async (req, res) => {
     const { vendorId } = req.params;
     const { status, packageGroupId } = req.query;
 
-    // Ensure vendorId is in the custom string format (e.g., "VEN...")
-    let actualVendorId = vendorId;
-    if (mongoose.Types.ObjectId.isValid(vendorId)) {
-      const vendorDoc = await Vendor.findById(vendorId).select('id');
-      if (vendorDoc && vendorDoc.id) {
-        actualVendorId = vendorDoc.id;
-      } else {
-        return res.status(200).json({ status: "SUCCESS", count: 0, packages: [] });
-      }
-    }
-
-    const query = { vendorId: actualVendorId };
+    const query = { vendorId: vendorId };
     if (status) query.packageStatus = status;
     if (packageGroupId) {
       Object.assign(query, await buildGroupFilter(packageGroupId));
@@ -291,7 +377,17 @@ export const getVendorPackages = async (req, res) => {
 
     const packages = await Package.find(query).sort({ createdAt: -1 });
 
-    return res.status(200).json({ status: "SUCCESS", count: packages.length, packages });
+    // Counts are deliberately unfiltered by `status`: they drive the Drafts /
+    // Live / Submitted tab badges, which have to stay correct while the list
+    // itself is showing a single tab.
+    const counts = await getVendorPackageCounts(vendorId);
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      count: packages.length,
+      counts,
+      packages,
+    });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to fetch vendor packages", error: error.message });
   }
@@ -345,6 +441,23 @@ export const updatePackageGroup = async (req, res) => {
       });
     }
 
+    const badStatus = invalidStatusWriteResponse(packageStatus);
+    if (badStatus) return res.status(400).json(badStatus);
+
+    const groupFilter = await buildGroupFilter(packageGroupId);
+
+    // A rename or a step write is a content edit; a status-only call (soft
+    // delete / restore) stays allowed whatever the review state.
+    if (packageName !== undefined || step !== undefined) {
+      const locked = await Package.findOne({
+        ...groupFilter,
+        packageStatus: { $in: LOCKED_FOR_EDIT },
+      })
+        .select("packageStatus")
+        .lean();
+      if (locked) return res.status(409).json(lockedEditResponse(locked.packageStatus));
+    }
+
     const set = {};
 
     if (packageName !== undefined) {
@@ -389,11 +502,9 @@ export const updatePackageGroup = async (req, res) => {
 
     // Safe through the base model: every path touched here is on the base
     // schema, and $set never strips discriminator fields.
-    const result = await Package.updateMany(
-      await buildGroupFilter(packageGroupId),
-      update,
-      { runValidators: true }
-    );
+    const result = await Package.updateMany(groupFilter, update, {
+      runValidators: true,
+    });
 
     if (result.matchedCount === 0) {
       return res.status(404).json({ status: "FAILED", message: "Package group not found" });
@@ -411,28 +522,91 @@ export const updatePackageGroup = async (req, res) => {
 };
 
 /**
- * @desc Submit package for EM review
+ * @desc Submit a package for EM review — the whole group.
+ *
+ * A review decision applies to the logical package, so submitting has to as
+ * well: submitting one variant would leave its siblings unreviewed and let the
+ * EM approve half a package.
+ */
+export const submitPackageGroup = async (req, res) => {
+  try {
+    const { packageGroupId } = req.params;
+
+    if (!packageGroupId || !String(packageGroupId).trim()) {
+      return res.status(400).json({
+        status: "FAILED",
+        message: `Invalid packageGroupId: ${packageGroupId}`,
+      });
+    }
+
+    const result = await submitGroup(await buildGroupFilter(packageGroupId), {
+      by: req.body?.submittedBy,
+    });
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Package submitted successfully",
+      packageStatus: result.to,
+      count: result.matched,
+    });
+  } catch (error) {
+    return sendReviewError(res, error, "Failed to submit package");
+  }
+};
+
+/**
+ * @desc Submit by variant id. Kept because the shipped app has no group-level
+ * submit call — it resolves the id to its group and submits the whole package.
  */
 export const submitPackage = async (req, res) => {
   try {
     const { packageId } = req.params;
-    const pkg = await Package.findById(packageId);
 
-    if (!pkg) {
+    const groupFilter = await buildGroupFilterFromPackageId(packageId);
+    if (!groupFilter) {
       return res.status(404).json({ status: "FAILED", message: "Package not found" });
     }
 
-    const errors = validatePackageSubmission(pkg);
-    if (errors.length > 0) {
-      return res.status(400).json({ status: "FAILED", message: "Validation failed", errors });
+    const result = await submitGroup(groupFilter, { by: req.body?.submittedBy });
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Package submitted successfully",
+      packageStatus: result.to,
+      count: result.matched,
+    });
+  } catch (error) {
+    return sendReviewError(res, error, "Failed to submit package");
+  }
+};
+
+/**
+ * @desc Vendor publishes an approved package. The EM's approval only clears a
+ * package for sale — this is the vendor pressing Go Live.
+ */
+export const goLivePackageGroup = async (req, res) => {
+  try {
+    const { packageGroupId } = req.params;
+
+    if (!packageGroupId || !String(packageGroupId).trim()) {
+      return res.status(400).json({
+        status: "FAILED",
+        message: `Invalid packageGroupId: ${packageGroupId}`,
+      });
     }
 
-    pkg.packageStatus = "Under Review";
-    await pkg.save();
+    const result = await goLiveGroup(await buildGroupFilter(packageGroupId), {
+      by: req.body?.publishedBy,
+    });
 
-    return res.status(200).json({ status: "SUCCESS", message: "Package submitted successfully", packageStatus: pkg.packageStatus });
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Package is now live",
+      packageStatus: result.to,
+      count: result.matched,
+    });
   } catch (error) {
-    return res.status(500).json({ status: "ERROR", message: "Failed to submit package", error: error.message });
+    return sendReviewError(res, error, "Failed to publish package");
   }
 };
 
@@ -685,6 +859,13 @@ export const addNestedItem = async (req, res) => {
     const { packageId } = req.params;
     const { arrayName, item } = req.body;
 
+    const current = await Package.findById(packageId).select("packageStatus").lean();
+    if (!current) {
+      return res.status(404).json({ status: "FAILED", message: "Package not found" });
+    }
+    const locked = lockedEditResponse(current.packageStatus);
+    if (locked) return res.status(409).json(locked);
+
     const updatePath = `step2_productsAndPricing.${arrayName}`;
     const updatedPackage = await Package.findByIdAndUpdate(
       packageId,
@@ -710,6 +891,9 @@ export const updateNestedItem = async (req, res) => {
     const pkg = await Package.findById(packageId);
     if (!pkg) return res.status(404).json({ message: "Package not found" });
 
+    const locked = lockedEditResponse(pkg.packageStatus);
+    if (locked) return res.status(409).json(locked);
+
     const array = pkg.step2_productsAndPricing[arrayName];
     const subItem = array.id(itemId);
     if (!subItem) return res.status(404).json({ message: "Item not found" });
@@ -731,6 +915,13 @@ export const removeNestedItem = async (req, res) => {
   try {
     const { packageId } = req.params;
     const { arrayName, itemId } = req.body;
+
+    const current = await Package.findById(packageId).select("packageStatus").lean();
+    if (!current) {
+      return res.status(404).json({ status: "FAILED", message: "Package not found" });
+    }
+    const locked = lockedEditResponse(current.packageStatus);
+    if (locked) return res.status(409).json(locked);
 
     const updatePath = `step2_productsAndPricing.${arrayName}`;
     const updatedPackage = await Package.findByIdAndUpdate(
