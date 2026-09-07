@@ -9,6 +9,7 @@ import Vendor from "../models/Vendor.js";
 import CalendarBlock from "../models/CalendarBlock.js";
 import { generateISTId } from "../utils/idGenerator.js";
 import { snapshotDeliverables } from "../utils/packageDeliverables.js";
+import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 import {
   applyPricingBreakdown,
   withPricingBreakdown,
@@ -54,18 +55,6 @@ const terminal = (res, enquiry, verb) =>
     status: "FAILED",
     message: `Cannot ${verb} an enquiry with status "${enquiry.status}".`,
   });
-
-/**
- * Resolve a human-readable vendor ID (e.g. "VEN...") to a MongoDB ObjectId.
- */
-const resolveVendorId = async (vendorId) => {
-  if (typeof vendorId === "string" && vendorId.startsWith("VEN")) {
-    const vendorDoc = await Vendor.findOne({ id: vendorId }).select("_id");
-    if (!vendorDoc) return null;
-    return vendorDoc._id;
-  }
-  return vendorId;
-};
 
 /**
  * Check if a date has conflicts for the vendor (live bookings or calendar
@@ -121,7 +110,8 @@ const normaliseAttachments = (attachments) => {
 /** Freeze a package onto the enquiry the same way a booking freezes it. */
 const snapshotPackage = (pkg) => ({
   name: pkg.step1_eventAndCrew?.packageName || "Untitled Package",
-  price: pkg.step3_policiesAndCharges?.packagePricing?.price || 0,
+  // getEffectivePackagePrice — see that util's comment.
+  price: getEffectivePackagePrice(pkg),
   image: pkg.step4_sampleMedia?.media?.[0]?.url || null,
   vendorType: pkg.vendorType || null,
   variantType: pkg.variantType || "Premium",
@@ -167,8 +157,9 @@ export const createEnquiry = async (req, res) => {
     const validation = validateCreateEnquiry(req.body);
     if (!validation.valid) return invalid(res, validation.errors);
 
-    const actualVendorId = await resolveVendorId(vendorId);
-    if (!actualVendorId) return notFound(res, "Vendor not found");
+    if (!(await Vendor.exists({ id: vendorId }))) {
+      return notFound(res, "Vendor not found");
+    }
 
     let pkg = null;
     if (req.body.packageId) {
@@ -178,7 +169,7 @@ export const createEnquiry = async (req, res) => {
 
     const enquiry = new Enquiry({
       enquiryId: generateISTId("ENQ"),
-      vendorId: actualVendorId,
+      vendorId,
       vendorType: req.body.vendorType || pkg?.vendorType || null,
       customer: {
         name: req.body.customer.name.trim(),
@@ -238,10 +229,7 @@ export const createEnquiry = async (req, res) => {
     applyPricingBreakdown(enquiry);
     await enquiry.save();
 
-    const conflictDetected = await detectConflict(
-      actualVendorId,
-      enquiry.eventDate
-    );
+    const conflictDetected = await detectConflict(vendorId, enquiry.eventDate);
 
     return res.status(201).json({
       status: "SUCCESS",
@@ -263,10 +251,7 @@ export const getVendorEnquiries = async (req, res) => {
     const { vendorId } = req.params;
     const { status, page = 1, limit = 20 } = req.query;
 
-    const actualVendorId = await resolveVendorId(vendorId);
-    if (!actualVendorId) return notFound(res, "Vendor not found");
-
-    const query = { vendorId: actualVendorId };
+    const query = { vendorId };
     if (status) query.status = status;
 
     const skip = (parseInt(page) - 1) * parseInt(limit);
@@ -284,10 +269,7 @@ export const getVendorEnquiries = async (req, res) => {
     for (const enquiry of enquiries) {
       results.push({
         ...withEnquiryDetails(enquiry),
-        conflictDetected: await detectConflict(
-          actualVendorId,
-          enquiry.eventDate
-        ),
+        conflictDetected: await detectConflict(vendorId, enquiry.eventDate),
       });
     }
 

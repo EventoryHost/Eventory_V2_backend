@@ -4,15 +4,6 @@ import Vendor from "../models/Vendor.js";
 
 // ─── Helpers ────────────────────────────────────────────────
 
-const resolveVendorId = async (vendorId) => {
-  if (typeof vendorId === "string" && vendorId.startsWith("VEN")) {
-    const vendorDoc = await Vendor.findOne({ id: vendorId }).select('_id');
-    if (!vendorDoc) return null;
-    return vendorDoc._id;
-  }
-  return vendorId;
-};
-
 /**
  * Get the start date for a time period filter.
  */
@@ -43,13 +34,6 @@ export const getEarningsOverview = async (req, res) => {
     const { vendorId } = req.params;
     const { period = "1M" } = req.query;
 
-    const actualVendorId = await resolveVendorId(vendorId);
-    if (!actualVendorId) {
-      return res
-        .status(404)
-        .json({ status: "FAILED", message: "Vendor not found" });
-    }
-
     const periodStart = getPeriodStartDate(period);
     const now = new Date();
 
@@ -57,7 +41,7 @@ export const getEarningsOverview = async (req, res) => {
     const revenueResult = await Transaction.aggregate([
       {
         $match: {
-          vendorId: actualVendorId,
+          vendorId: vendorId,
           status: "Received",
           receivedDate: { $gte: periodStart, $lte: now },
         },
@@ -80,7 +64,7 @@ export const getEarningsOverview = async (req, res) => {
     const prevRevenueResult = await Transaction.aggregate([
       {
         $match: {
-          vendorId: actualVendorId,
+          vendorId: vendorId,
           status: "Received",
           receivedDate: { $gte: prevPeriodStart, $lte: periodStart },
         },
@@ -105,7 +89,7 @@ export const getEarningsOverview = async (req, res) => {
 
     // Due amount — sum of PaymentDue milestones across all active bookings
     const dueBookings = await Booking.find({
-      vendorId: actualVendorId,
+      vendorId: vendorId,
       status: { $in: ["Accepted", "Pending"] },
     });
 
@@ -128,7 +112,7 @@ export const getEarningsOverview = async (req, res) => {
     }
 
     // Fetch vendor bank details
-    const vendor = await Vendor.findById(actualVendorId).select('bankDetails');
+    const vendor = await Vendor.findOne({ id: vendorId }).select('bankDetails');
 
     return res.status(200).json({
       status: "SUCCESS",
@@ -159,20 +143,13 @@ export const getEarningsAnalytics = async (req, res) => {
     const { vendorId } = req.params;
     const { period = "1M" } = req.query;
 
-    const actualVendorId = await resolveVendorId(vendorId);
-    if (!actualVendorId) {
-      return res
-        .status(404)
-        .json({ status: "FAILED", message: "Vendor not found" });
-    }
-
     const periodStart = getPeriodStartDate(period);
 
     // Aggregate revenue by day of week
     const analytics = await Transaction.aggregate([
       {
         $match: {
-          vendorId: actualVendorId,
+          vendorId: vendorId,
           status: "Received",
           receivedDate: { $gte: periodStart },
         },
@@ -222,18 +199,11 @@ export const getUpcomingTransactions = async (req, res) => {
     const { vendorId } = req.params;
     const { page = 1, limit = 20 } = req.query;
 
-    const actualVendorId = await resolveVendorId(vendorId);
-    if (!actualVendorId) {
-      return res
-        .status(404)
-        .json({ status: "FAILED", message: "Vendor not found" });
-    }
-
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     // Get all active bookings with upcoming milestones
     const bookings = await Booking.find({
-      vendorId: actualVendorId,
+      vendorId: vendorId,
       status: { $in: ["Accepted", "Pending"] },
     })
       .sort({ eventDate: 1 })
@@ -259,7 +229,7 @@ export const getUpcomingTransactions = async (req, res) => {
 
     // Also include recent received transactions
     const recentTransactions = await Transaction.find({
-      vendorId: actualVendorId,
+      vendorId: vendorId,
       status: "Received",
     })
       .sort({ receivedDate: -1 })

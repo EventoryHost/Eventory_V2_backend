@@ -193,6 +193,11 @@ const BookingSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+
+    // "Notes for vendor" image attachments — see CartItem.js's own comment
+    // on noteAttachments for the full context (this is where that line's
+    // attachments end up once a real Booking is created from it).
+    noteAttachments: { type: [String], default: [] },
     // Vendor-private note from the "Calendar Note" section
     calendarNote: {
       type: String,

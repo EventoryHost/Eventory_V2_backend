@@ -9,6 +9,8 @@ import {
   getPackageGroup,
   updatePackageGroup,
   submitPackage,
+  submitPackageGroup,
+  goLivePackageGroup,
   deletePackage,
   duplicatePackage,
   duplicateVariant,
@@ -561,11 +563,17 @@ router.put("/:packageId/step/:stepNumber", updatePackageStep);
 
 /**
  * @swagger
- * /api/packages/{packageId}/submit:
+ * /api/packages/group/{packageGroupId}/submit:
  *   post:
- *     summary: Submit package for review
+ *     summary: Submit a package for EM review
  *     description: |
- *       Validates the package using vendor-specific rules and moves it to "Under Review" status.
+ *       Submits every variant of the package for review, moving them to
+ *       "Under Review". A review decision applies to the logical package, so
+ *       submitting does too — submitting a single variant would leave its
+ *       siblings unreviewed and let the EM approve half a package.
+ *
+ *       Only variants currently in "Draft" or "Action Required" are moved; a
+ *       sibling that is already Live stays Live.
  *
  *       **Validation rules by vendor:**
  *       - All: packageName required, ≥1 eventCategory
@@ -576,11 +584,11 @@ router.put("/:packageId/step/:stepNumber", updatePackageStep);
  *       - MakeupArtist: ≥1 service item
  *       - VenueProvider: ≥1 space
  *
- *       Returns validation errors if any checks fail.
+ *       Every variant being submitted must pass; failures are returned per variant.
  *     tags: [Packages]
  *     parameters:
  *       - in: path
- *         name: packageId
+ *         name: packageGroupId
  *         required: true
  *         schema:
  *           type: string
@@ -595,11 +603,12 @@ router.put("/:packageId/step/:stepNumber", updatePackageStep);
  *                 status:
  *                   type: string
  *                   example: SUCCESS
- *                 message:
- *                   type: string
  *                 packageStatus:
  *                   type: string
  *                   example: Under Review
+ *                 count:
+ *                   type: integer
+ *                   description: Variants moved
  *       400:
  *         description: Validation failed
  *         content:
@@ -613,11 +622,87 @@ router.put("/:packageId/step/:stepNumber", updatePackageStep);
  *                 message:
  *                   type: string
  *                   example: Validation failed
- *                 errors:
+ *                 variants:
  *                   type: array
  *                   items:
- *                     type: string
- *                   example: ["Package name is required", "At least one menu is required"]
+ *                     type: object
+ *                     properties:
+ *                       packageId:
+ *                         type: string
+ *                       variantType:
+ *                         type: string
+ *                       errors:
+ *                         type: array
+ *                         items:
+ *                           type: string
+ *       409:
+ *         description: No variant is in a submittable status
+ *       500:
+ *         description: Server error
+ */
+router.post("/group/:packageGroupId/submit", submitPackageGroup);
+
+/**
+ * @swagger
+ * /api/packages/group/{packageGroupId}/go-live:
+ *   post:
+ *     summary: Publish an approved package
+ *     description: |
+ *       Moves an "Approved" package to "Live". EM approval only clears a
+ *       package for sale — this is the vendor pressing Go Live, so the moment
+ *       a listing appears on the marketplace stays the vendor's decision.
+ *     tags: [Packages]
+ *     parameters:
+ *       - in: path
+ *         name: packageGroupId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Package is now live
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: SUCCESS
+ *                 packageStatus:
+ *                   type: string
+ *                   example: Live
+ *                 count:
+ *                   type: integer
+ *       409:
+ *         description: Package has not been approved
+ *       500:
+ *         description: Server error
+ */
+router.post("/group/:packageGroupId/go-live", goLivePackageGroup);
+
+/**
+ * @swagger
+ * /api/packages/{packageId}/submit:
+ *   post:
+ *     deprecated: true
+ *     summary: Submit by variant id (resolves to the whole package)
+ *     description: |
+ *       Kept for the shipped app, which has no group-level submit call. It
+ *       resolves the id to its group and submits every variant, so it behaves
+ *       identically to /group/{packageGroupId}/submit.
+ *     tags: [Packages]
+ *     parameters:
+ *       - in: path
+ *         name: packageId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Package submitted for review
+ *       400:
+ *         description: Validation failed
  *       404:
  *         description: Package not found
  *       500:

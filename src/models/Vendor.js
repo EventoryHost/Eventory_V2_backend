@@ -89,6 +89,7 @@ const VendorSchema = new mongoose.Schema({
   gstCertificate: String,
 
   bankDetails: [{
+    beneficiaryId: String,
     beneficiaryName: String,
     accountNumber: String,
     ifscCode: String,

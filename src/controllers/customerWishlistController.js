@@ -6,6 +6,7 @@ import Vendor from "../models/Vendor.js";
 import Customer from "../models/Customer.js";
 import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
+import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 
 /**
  * Authenticated wishlist CRUD + a public read-only share link — Phase 2
@@ -16,7 +17,8 @@ import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 
 const PACKAGE_CARD_FIELDS =
   "vendorId vendorType variantType packageStatus step1_eventAndCrew.packageName " +
-  "step1_eventAndCrew.eventCategories step3_policiesAndCharges.packagePricing step4_sampleMedia.media";
+  "step1_eventAndCrew.eventCategories step3_policiesAndCharges.packagePricing " +
+  "step3_policiesAndCharges.teamAndEquipment step4_sampleMedia.media";
 
 /**
  * @desc Save a Package or Vendor to the logged-in customer's wishlist.
@@ -28,12 +30,13 @@ export const addWishlistItem = async (req, res) => {
     let priceSnapshot = null;
     if (itemType === "Package") {
       const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" }).select(
-        "step3_policiesAndCharges.packagePricing.price"
+        "step3_policiesAndCharges.packagePricing.price step3_policiesAndCharges.teamAndEquipment.price"
       );
       if (!pkg) {
         return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
       }
-      priceSnapshot = pkg.step3_policiesAndCharges?.packagePricing?.price ?? null;
+      // getEffectivePackagePrice — see that util's comment.
+      priceSnapshot = getEffectivePackagePrice(pkg);
     } else {
       // Vendor.isDeactivated may simply be unset on older docs — same
       // "$ne: true" reasoning as the discovery browse endpoints.
@@ -94,7 +97,8 @@ export const getWishlist = async (req, res) => {
         if (item.packageId) {
           item.packageId.vendorId = await resolveVendorForPackage(item.packageId.vendorId);
         }
-        const currentPrice = item.packageId?.step3_policiesAndCharges?.packagePricing?.price ?? null;
+        // getEffectivePackagePrice — see that util's comment.
+        const currentPrice = item.packageId ? getEffectivePackagePrice(item.packageId) : null;
         return {
           ...item,
           packageStillAvailable: Boolean(item.packageId),

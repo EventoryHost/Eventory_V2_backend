@@ -18,19 +18,6 @@ import {
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 /**
- * Resolve a human-readable vendor ID (e.g. "VEN...") to a MongoDB ObjectId.
- * Returns { _id, vendorDoc } or throws.
- */
-const resolveVendorId = async (vendorId) => {
-  if (typeof vendorId === "string" && vendorId.startsWith("VEN")) {
-    const vendorDoc = await Vendor.findOne({ id: vendorId }).select('_id');
-    if (!vendorDoc) return null;
-    return vendorDoc._id;
-  }
-  return vendorId;
-};
-
-/**
  * Enumerate every date between start and end (inclusive) as Date objects at midnight UTC.
  */
 const enumerateDates = (start, end) => {
@@ -131,20 +118,13 @@ export const getVendorSchedule = async (req, res) => {
     const { vendorId } = req.params;
     const { date } = req.query;
 
-    const actualVendorId = await resolveVendorId(vendorId);
-    if (!actualVendorId) {
-      return res
-        .status(404)
-        .json({ status: "FAILED", message: "Vendor not found" });
-    }
-
     // Default to today if no date provided
     const queryDate = date ? new Date(date) : new Date();
     queryDate.setUTCHours(0, 0, 0, 0);
 
     // Blocks that cover the queried date
     const todayBlocks = await CalendarBlock.find({
-      vendorId: actualVendorId,
+      vendorId: vendorId,
       isActive: true,
       startDate: { $lte: queryDate },
       endDate: { $gte: queryDate },
@@ -152,7 +132,7 @@ export const getVendorSchedule = async (req, res) => {
 
     // All active blocks (limited, sorted by upcoming first)
     const allBlocks = await CalendarBlock.find({
-      vendorId: actualVendorId,
+      vendorId: vendorId,
       isActive: true,
     })
       .sort({ startDate: 1 })
@@ -190,13 +170,6 @@ export const getCalendarOverview = async (req, res) => {
     const { vendorId } = req.params;
     const { month, year, startDate: qStart, endDate: qEnd } = req.query;
 
-    const actualVendorId = await resolveVendorId(vendorId);
-    if (!actualVendorId) {
-      return res
-        .status(404)
-        .json({ status: "FAILED", message: "Vendor not found" });
-    }
-
     // Determine date range
     let rangeStart, rangeEnd;
     if (qStart && qEnd) {
@@ -220,14 +193,14 @@ export const getCalendarOverview = async (req, res) => {
 
     // Fetch active blocks overlapping the range
     const blocks = await CalendarBlock.find({
-      vendorId: actualVendorId,
+      vendorId: vendorId,
       isActive: true,
       startDate: { $lte: rangeEnd },
       endDate: { $gte: rangeStart },
     });
 
     // Fetch package availability (Booked entries) in range
-    const packages = await Package.find({ vendorId: actualVendorId });
+    const packages = await Package.find({ vendorId: vendorId });
     const bookedDates = new Set();
     for (const pkg of packages) {
       for (const entry of pkg.availabilityCalendar || []) {
@@ -307,15 +280,14 @@ export const createOfflineBooking = async (req, res) => {
       });
     }
 
-    const actualVendorId = await resolveVendorId(vendorId);
-    if (!actualVendorId) {
+    if (!(await Vendor.exists({ id: vendorId }))) {
       return res
         .status(404)
         .json({ status: "FAILED", message: "Vendor not found" });
     }
 
     const block = new CalendarBlock({
-      vendorId: actualVendorId,
+      vendorId: vendorId,
       blockType: "OfflineBooking",
       startDate: new Date(startDate),
       endDate: new Date(endDate),
@@ -331,7 +303,7 @@ export const createOfflineBooking = async (req, res) => {
     // Sync package availability
     const dates = enumerateDates(block.startDate, block.endDate);
     const affectedPackages = await syncPackageAvailability(
-      actualVendorId,
+      vendorId,
       dates,
       "Blocked",
       serviceType
@@ -399,8 +371,7 @@ export const createHoliday = async (req, res) => {
       holidayEndTime = endTime;
     }
 
-    const actualVendorId = await resolveVendorId(vendorId);
-    if (!actualVendorId) {
+    if (!(await Vendor.exists({ id: vendorId }))) {
       return res
         .status(404)
         .json({ status: "FAILED", message: "Vendor not found" });
@@ -417,7 +388,7 @@ export const createHoliday = async (req, res) => {
         const dayName = DAY_NAMES[date.getUTCDay()];
         if (recurringDays.includes(dayName)) {
           const block = new CalendarBlock({
-            vendorId: actualVendorId,
+            vendorId: vendorId,
             blockType: "Holiday",
             startDate: date,
             endDate: date,
@@ -432,7 +403,7 @@ export const createHoliday = async (req, res) => {
     } else {
       // Single block for the full range
       const block = new CalendarBlock({
-        vendorId: actualVendorId,
+        vendorId: vendorId,
         blockType: "Holiday",
         startDate: start,
         endDate: end,
@@ -453,7 +424,7 @@ export const createHoliday = async (req, res) => {
         : allDates;
 
     const affectedPackages = await syncPackageAvailability(
-      actualVendorId,
+      vendorId,
       affectedDates,
       "Blocked"
     );
@@ -732,14 +703,7 @@ export const getVendorBlocks = async (req, res) => {
       limit = 20,
     } = req.query;
 
-    const actualVendorId = await resolveVendorId(vendorId);
-    if (!actualVendorId) {
-      return res
-        .status(404)
-        .json({ status: "FAILED", message: "Vendor not found" });
-    }
-
-    const query = { vendorId: actualVendorId, isActive: true };
+    const query = { vendorId: vendorId, isActive: true };
 
     if (blockType) query.blockType = blockType;
     if (startDate || endDate) {

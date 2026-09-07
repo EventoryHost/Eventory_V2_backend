@@ -3,6 +3,7 @@ import CompareSession from "../models/CompareSession.js";
 import Package from "../models/Package.js";
 import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
+import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 
 /**
  * Compare-up-to-3-packages — Phase 2 Step 11. Packages only (see
@@ -55,8 +56,12 @@ function buildComparisonPayload(packages) {
           }
         : null,
       price: {
-        amount: pricing.price ?? null,
-        billingUnit: pricing.billingUnit ?? null,
+        // getEffectivePackagePrice — see that util's comment: a plain
+        // pricing.price read shows ₹0/null for every Caterer/Decorator
+        // package in the compare table. Found 2026-09-03 while auditing
+        // every other packagePricing read site for the same gap.
+        amount: getEffectivePackagePrice(pkg),
+        billingUnit: pricing.billingUnit ?? pkg.step3_policiesAndCharges?.teamAndEquipment?.billingUnit ?? null,
         gstInclusive: !!pkg.step3_policiesAndCharges?.gstInclusive,
         gstRatePercent: pkg.step3_policiesAndCharges?.gstRatePercent ?? null,
       },

@@ -58,6 +58,11 @@ router.use(protectCustomer);
  *               selectedAddOns: { type: array, items: { type: object } }
  *               selectedItems: { type: array, items: { type: object } }
  *               specialRequest: { type: string, maxLength: 500 }
+ *               noteAttachments:
+ *                 type: array
+ *                 maxItems: 5
+ *                 items: { type: string, format: uri, maxLength: 2000 }
+ *                 description: Real S3/CloudFront URLs only, uploaded client-side first — never a data:/base64 URI
  *               quantity: { type: integer, default: 1 }
  *     responses:
  *       201: { description: Session created, with lockedQuote + per-line availability + readyForPayment }

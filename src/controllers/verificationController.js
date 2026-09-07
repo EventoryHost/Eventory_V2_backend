@@ -9,6 +9,7 @@ import {
   filterBranches,
 } from "../utils/ifscDataset.js";
 import Vendor from "../models/Vendor.js";
+import { generateISTId } from "../utils/idGenerator.js";
 
 dotenv.config();
 
@@ -555,6 +556,7 @@ export const verifyBankDetails = async (req, res) => {
         const vendor = await Vendor.findOne({ id: vendor_id });
         if (vendor) {
           const newBankAccount = {
+            beneficiaryId: generateISTId("BEN"),
             beneficiaryName: name,
             accountNumber: cleanedAcc,
             ifscCode: cleanedIfsc,
@@ -638,6 +640,7 @@ export const verifyBankDetails = async (req, res) => {
           const vendor = await Vendor.findOne({ id: vendor_id });
           if (vendor) {
             const newBankAccount = {
+              beneficiaryId: generateISTId("BEN"),
               beneficiaryName: name,
               accountNumber: cleanedAcc,
               ifscCode: cleanedIfsc,

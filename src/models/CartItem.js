@@ -137,6 +137,22 @@ const CartItemSchema = new mongoose.Schema(
     // Booking Summary read, not a data integrity concern.
     specialRequest: { type: String, trim: true, maxlength: 500, default: "" },
 
+    // "Notes for vendor" image attachments — added 2026-09-03. The frontend
+    // (NotesForVendor.tsx / VendorNotePromptModal.tsx) already lets the
+    // customer attach photos alongside the note, but this field never
+    // existed to send them to — the frontend's own code comment on
+    // NotesForVendor.tsx said as much ("no backend field to land in yet...
+    // kept local-only"). Same convention already used for Vendor.
+    // businessPhotos/profilePicture and Package.step4_sampleMedia: this
+    // backend never runs its own upload/multer/S3 endpoint for images —
+    // the frontend uploads directly to S3 via its own Next.js API route
+    // (src/app/api/upload/route.ts in Eventory_V2_frontend) and only the
+    // resulting URL is ever sent/stored here. Plain URL strings, not an
+    // object, since there's no per-image metadata (caption, size, etc.)
+    // worth keeping — same shape as SelectedAddOnSchema-adjacent
+    // mediaUrls[] arrays elsewhere in this codebase.
+    noteAttachments: { type: [String], default: [] },
+
     quantity: { type: Number, default: 1, min: 1 },
 
     // Item-level select checkbox (final BRD Section 9) — lets the customer

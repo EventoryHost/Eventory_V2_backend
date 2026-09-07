@@ -37,6 +37,22 @@ const customizeRequestSchema = z.object({
   volume: z.string().trim().max(50).optional(),
 });
 
+// "Notes for vendor" image attachments — same shape/reasoning as
+// customerCartValidators.js's identical schema (2026-09-03), including the
+// explicit data: URI rejection (z.string().url() alone does NOT reject
+// one — confirmed live, see that file's own comment for the full story).
+const noteAttachmentsSchema = z
+  .array(
+    z
+      .string()
+      .trim()
+      .url()
+      .max(2000)
+      .refine((url) => !url.startsWith("data:"), "Attachments must be an uploaded file URL, not a base64 data URI")
+  )
+  .max(5)
+  .optional();
+
 // source:"cart" needs nothing else — pulls the customer's own current cart.
 // source:"direct" is a "Book Now" purchase that never touched the cart.
 export const createCheckoutSessionSchema = z
@@ -52,6 +68,7 @@ export const createCheckoutSessionSchema = z
     selectedItems: z.array(selectedItemSchema).max(100).optional(),
     customizeRequests: z.array(customizeRequestSchema).max(100).optional(),
     specialRequest: z.string().trim().max(500).optional(),
+    noteAttachments: noteAttachmentsSchema,
     quantity: z.coerce.number().int().min(1).default(1),
   })
   .superRefine((data, ctx) => {
@@ -74,6 +91,7 @@ export const updateCheckoutLineSchema = z.object({
   selectedItems: z.array(selectedItemSchema).max(100).optional(),
   customizeRequests: z.array(customizeRequestSchema).max(100).optional(),
   specialRequest: z.string().trim().max(500).optional(),
+  noteAttachments: noteAttachmentsSchema,
   quantity: z.coerce.number().int().min(1).optional(),
 });
 

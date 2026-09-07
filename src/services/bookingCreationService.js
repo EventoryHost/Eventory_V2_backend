@@ -182,6 +182,9 @@ export async function createBookingsFromCheckoutSession(session, payment, option
       // Booking.js's CustomizeRequestSchema comment for the full chain.
       customizeRequests: line.customizeRequests || [],
       notes: line.specialRequest || null,
+      // "Notes for vendor" image attachments — see CartItem.js's own
+      // comment on noteAttachments for the full context/chain.
+      noteAttachments: line.noteAttachments || [],
     });
     // Vendor's own utility (utils/pricingBreakdown.js) — runs first so the
     // "Pricing Breakdown" card's own fields (subtotal/tax/etc.) are
