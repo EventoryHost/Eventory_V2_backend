@@ -329,6 +329,9 @@ const PackageSchema = new mongoose.Schema(
     },
 
     reviewHistory: { type: [PackageReviewEventSchema], default: [] },
+
+    assignedEmId: { type: String, default: null },
+    assignedEmName: { type: String, default: null },
   },
   packageOptions
 );
