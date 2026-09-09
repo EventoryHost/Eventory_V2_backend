@@ -53,9 +53,16 @@ async function getOrCreateCart(req) {
 // fetched teamAndEquipment in the first place — the fallback had nothing to
 // fall back to. addCartItem's own package fetch (no restricted .select())
 // was never affected, only this narrower revalidation path.
+// step2_productsAndPricing.setups — added 2026-09-09: getEffectivePackagePrice
+// was rewritten to price a Decorator package correctly (setups[].price
+// SUMMED as the base price, teamAndEquipment.price ADDED on top as a real
+// separate charge — not a fallback substitute for one another, see
+// packagePrice.js's own comment for the full story/real bug this fixes).
+// Without this field the sum has nothing to sum.
 const PACKAGE_REVALIDATION_FIELDS =
-  "packageStatus vendorId step1_eventAndCrew.capacity step3_policiesAndCharges.packagePricing " +
-  "step3_policiesAndCharges.teamAndEquipment availabilityCalendar availabilitySettings bookingCapacity";
+  "packageStatus vendorId step1_eventAndCrew.capacity step2_productsAndPricing.setups " +
+  "step3_policiesAndCharges.packagePricing step3_policiesAndCharges.teamAndEquipment " +
+  "availabilityCalendar availabilitySettings bookingCapacity";
 
 // Builds the full cart payload: items grouped by vendor, per-item
 // revalidation (still-available / price-changed / live availability for the
