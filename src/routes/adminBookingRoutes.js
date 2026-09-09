@@ -8,7 +8,8 @@ import {
   forceAccept,
   getStats,
   getAllBookings,
-  getTodaysBookings
+  getTodaysBookings,
+  assignEmToBooking,
 } from "../controllers/adminBookingController.js";
 
 const router = express.Router();
@@ -22,5 +23,6 @@ router.get("/today", getTodaysBookings);
 router.get("/:bookingId", getBookingDetails);
 router.put("/:bookingId/reassign", reassignBooking);
 router.put("/:bookingId/force-accept", forceAccept);
+router.put("/:bookingId/assign-em", assignEmToBooking);
 
 export default router;

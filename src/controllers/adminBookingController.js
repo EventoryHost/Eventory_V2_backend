@@ -257,3 +257,26 @@ export const getTodaysBookings = async (req, res) => {
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// PUT /api/admin/bookings/:bookingId/assign-em
+// Body: { emId, emName }
+export const assignEmToBooking = async (req, res) => {
+  try {
+    const { emId, emName } = req.body;
+    const isObjectId = mongoose.isValidObjectId(req.params.bookingId);
+    const filter = isObjectId
+      ? { $or: [{ bookingId: req.params.bookingId }, { _id: req.params.bookingId }] }
+      : { bookingId: req.params.bookingId };
+
+    const booking = await Booking.findOneAndUpdate(
+      filter,
+      { assignedEmId: emId || null, assignedEmName: emName || null },
+      { new: true }
+    );
+    if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
+
+    res.status(200).json({ success: true, data: booking });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};

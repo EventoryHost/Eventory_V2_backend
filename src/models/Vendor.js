@@ -147,6 +147,14 @@ const VendorSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  assignedEmId: {
+    type: String,
+    default: null,
+  },
+  assignedEmName: {
+    type: String,
+    default: null,
+  },
 
   createdAt: {
     type: Date,
