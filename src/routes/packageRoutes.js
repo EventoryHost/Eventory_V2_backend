@@ -572,8 +572,10 @@ router.put("/:packageId/step/:stepNumber", updatePackageStep);
  *       submitting does too — submitting a single variant would leave its
  *       siblings unreviewed and let the EM approve half a package.
  *
- *       Only variants currently in "Draft" or "Action Required" are moved; a
- *       sibling that is already Live stays Live.
+ *       Only variants currently in "Draft", "Action Required" or "Under
+ *       Review" are moved; a sibling that is already Live stays Live.
+ *       Resubmitting a package that is still Under Review is allowed — the
+ *       revision goes back in front of the EM and submission.count increments.
  *
  *       **Validation rules by vendor:**
  *       - All: packageName required, ≥1 eventCategory

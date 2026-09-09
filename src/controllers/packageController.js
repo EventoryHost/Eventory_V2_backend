@@ -12,11 +12,12 @@ import {
   ReviewTransitionError,
 } from "../services/packageReviewService.js";
 
-// Statuses in which the vendor may not edit: Under Review, so a submission
-// cannot change under the EM's feet; Approved, so what goes live is exactly
-// what was cleared. Draft and Action Required stay editable — Action Required
-// is the whole point of Fix & Resubmit — and Live stays editable as before.
-const LOCKED_FOR_EDIT = ["Under Review", "Approved"];
+// Only Approved is frozen, so what goes live is exactly what the EM cleared.
+// Under Review stays editable: the vendor can keep working on a package that is
+// waiting for review and resubmit it, which puts the revision back in front of
+// the EM (see the Submitted transition). Draft, Action Required and Live have
+// always been editable.
+const LOCKED_FOR_EDIT = ["Approved"];
 
 const lockedEditResponse = (packageStatus) =>
   LOCKED_FOR_EDIT.includes(packageStatus)
@@ -49,6 +50,29 @@ const sendReviewError = (res, error, fallback) => {
     });
   }
   return res.status(500).json({ status: "ERROR", message: fallback, error: error.message });
+};
+
+// The shipped app submits by writing packageStatus "Under Review" through the
+// update endpoints — it has no submit call of its own — so a status-only write
+// of it is honoured as a submit rather than refused. It still goes through the
+// review service, so validation, the Draft / Action Required precondition and
+// the audit row all apply: this is another spelling of /submit, not a way past
+// it. "Approved" and "Live" stay refused; those are the EM's to grant and the
+// go-live endpoint's to publish.
+const SUBMIT_STATUS = "Under Review";
+
+const submitViaStatusWrite = async (res, groupFilter, by) => {
+  try {
+    const result = await submitGroup(groupFilter, { by });
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Package submitted successfully",
+      packageStatus: result.to,
+      count: result.matched,
+    });
+  } catch (error) {
+    return sendReviewError(res, error, "Failed to submit package");
+  }
 };
 
 /**
@@ -282,6 +306,16 @@ export const updatePackage = async (req, res) => {
       return res.status(404).json({ status: "FAILED", message: "Package not found" });
     }
 
+    // Submitting is a whole-group decision, so a variant id resolves to its
+    // group here exactly as it does in submitPackage.
+    if (updates.packageStatus === SUBMIT_STATUS && Object.keys(updates).length === 1) {
+      const groupFilter = await buildGroupFilterFromPackageId(packageId);
+      if (!groupFilter) {
+        return res.status(404).json({ status: "FAILED", message: "Package not found" });
+      }
+      return submitViaStatusWrite(res, groupFilter, req.body?.submittedBy);
+    }
+
     const badStatus = invalidStatusWriteResponse(updates.packageStatus);
     if (badStatus) return res.status(400).json(badStatus);
 
@@ -441,10 +475,21 @@ export const updatePackageGroup = async (req, res) => {
       });
     }
 
+    const groupFilter = await buildGroupFilter(packageGroupId);
+
+    // A status-only write of "Under Review" is the shipped app submitting.
+    // Combined with a rename or a step write it is not, so that falls through
+    // to the guard below rather than silently submitting alongside an edit.
+    if (
+      packageStatus === SUBMIT_STATUS &&
+      packageName === undefined &&
+      step === undefined
+    ) {
+      return submitViaStatusWrite(res, groupFilter, req.body?.submittedBy);
+    }
+
     const badStatus = invalidStatusWriteResponse(packageStatus);
     if (badStatus) return res.status(400).json(badStatus);
-
-    const groupFilter = await buildGroupFilter(packageGroupId);
 
     // A rename or a step write is a content edit; a status-only call (soft
     // delete / restore) stays allowed whatever the review state.

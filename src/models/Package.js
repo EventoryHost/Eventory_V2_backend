@@ -13,6 +13,9 @@ import {
  *                                    ├── raise-action ─> Action Required ──resubmit──> Under Review
  *                                    └── reject ───────> Deleted
  *
+ * A package stays editable while it is Under Review, and resubmitting it there
+ * simply puts the revision back in front of the EM.
+ *
  * "Approved" is deliberately distinct from "Live": the EM clears a package for
  * sale, the vendor decides when it actually appears on the marketplace.
  */
@@ -329,6 +332,9 @@ const PackageSchema = new mongoose.Schema(
     },
 
     reviewHistory: { type: [PackageReviewEventSchema], default: [] },
+
+    assignedEmId: { type: String, default: null },
+    assignedEmName: { type: String, default: null },
   },
   packageOptions
 );

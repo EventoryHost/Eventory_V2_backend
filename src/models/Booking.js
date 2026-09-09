@@ -153,6 +153,17 @@ const BookingSchema = new mongoose.Schema(
       type: String,
       enum: BOOKING_STATUSES,
       default: "NewBooking",
+      index: true,
+    },
+
+    assignedEmId: {
+      type: String,
+      default: null,
+      index: true,
+    },
+    assignedEmName: {
+      type: String,
+      default: null,
     },
 
     // Status transition trail — backs the message card on the details screen

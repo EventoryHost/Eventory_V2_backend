@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Vendor from "../models/Vendor.js";
 import axios from "axios";
 import { getPayoutsBaseUrl, buildPayoutsHeaders } from "../utils/cashfreePayoutsHelper.js";
@@ -387,6 +388,29 @@ export const getPayoutHistory = async (req, res) => {
     // Actually, CF Payouts API does not support GET /transfers by beneficiary_id in the new version without date filters.
     // We'll skip fetching history from Cashfree to avoid errors, and just return empty array since DB logging isn't requested yet.
     return res.status(200).json({ success: true, data: [], message: "History fetch from Cashfree not implemented without local DB sync." });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// PUT /api/admin/vendors/:id/assign-em
+// Body: { emId, emName }
+export const assignEmToVendor = async (req, res) => {
+  try {
+    const { emId, emName } = req.body;
+    const isObjectId = mongoose.isValidObjectId(req.params.id);
+    const filter = isObjectId
+      ? { $or: [{ id: req.params.id }, { _id: req.params.id }] }
+      : { id: req.params.id };
+
+    const vendor = await Vendor.findOneAndUpdate(
+      filter,
+      { assignedEmId: emId || null, assignedEmName: emName || null },
+      { new: true }
+    );
+    if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
+
+    res.status(200).json({ success: true, data: vendor });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }

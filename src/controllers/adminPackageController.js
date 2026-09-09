@@ -16,6 +16,7 @@ import {
   removeReviewItem,
   raiseActionGroup,
   rejectGroup,
+  goLiveGroup,
   ReviewTransitionError,
 } from "../services/packageReviewService.js";
 
@@ -113,8 +114,15 @@ const parseAction = (body) => {
 // GET /api/admin/packages/review-queue
 export const getReviewQueue = async (req, res) => {
   try {
-    const { page = 1, limit = 10, search } = req.query;
+    const {
+      page = 1,
+      limit = 10,
+      search,
+      sortBy = "updatedAt",
+      sortOrder = "desc",
+    } = req.query;
     const skip = (page - 1) * limit;
+    const dir = sortOrder === "asc" ? 1 : -1;
 
     const matchStage = { packageStatus: "Under Review" };
     if (search) {
@@ -127,20 +135,88 @@ export const getReviewQueue = async (req, res) => {
       ];
     }
 
-    const groupsRaw = await Package.aggregate([
-      { $match: matchStage },
-      { $sort: { updatedAt: 1 } },
+    const pipeline = [{ $match: matchStage }];
+
+    if (sortBy === "price") {
+      pipeline.push({
+        $addFields: {
+          sortVal: {
+            $ifNull: [
+              "$step2_productsAndPricing.totalPackagePrice",
+              { $ifNull: ["$step3_policiesAndCharges.packagePricing.price", 0] },
+            ],
+          },
+        },
+      });
+    } else if (sortBy === "packageName") {
+      pipeline.push({
+        $addFields: {
+          sortVal: { $toLower: { $ifNull: ["$step1_eventAndCrew.packageName", ""] } },
+        },
+      });
+    } else if (sortBy === "createdAt") {
+      pipeline.push({
+        $addFields: {
+          sortVal: "$createdAt",
+        },
+      });
+    } else if (sortBy === "submittedAt") {
+      pipeline.push({
+        $addFields: {
+          sortVal: { $ifNull: ["$submission.submittedAt", "$updatedAt"] },
+        },
+      });
+    } else if (sortBy === "assignedEmName") {
+      pipeline.push({
+        $addFields: {
+          sortVal: { $toLower: { $ifNull: ["$assignedEmName", ""] } },
+        },
+      });
+    } else if (sortBy === "vendor") {
+      pipeline.push(
+        {
+          $lookup: {
+            from: "vendors",
+            localField: "vendorId",
+            foreignField: "id",
+            as: "vendorDoc",
+          },
+        },
+        {
+          $addFields: {
+            sortVal: {
+              $toLower: {
+                $ifNull: [{ $arrayElemAt: ["$vendorDoc.businessName", 0] }, ""],
+              },
+            },
+          },
+        }
+      );
+    } else {
+      pipeline.push({
+        $addFields: {
+          sortVal: "$updatedAt",
+        },
+      });
+    }
+
+    pipeline.push(
+      { $sort: { sortVal: dir, updatedAt: -1 } },
       {
         $group: {
           _id: { $ifNull: ["$packageGroupId", "$_id"] },
           variants: { $push: "$$ROOT" },
-          updatedAt: { $first: "$updatedAt" }
-        }
+          sortVal: { $first: "$sortVal" },
+          updatedAt: { $first: "$updatedAt" },
+          createdAt: { $first: "$createdAt" },
+        },
       },
-      { $sort: { updatedAt: 1 } },
+      { $sort: { sortVal: dir, updatedAt: -1 } },
       { $skip: skip },
       { $limit: parseInt(limit) }
-    ]);
+    );
+
+    const groupsRaw = await Package.aggregate(pipeline);
 
     const vendorIds = [...new Set(groupsRaw.flatMap(g => g.variants.map(v => v.vendorId)))];
     const vendors = await Vendor.find({ id: { $in: vendorIds } })
@@ -353,7 +429,8 @@ export const deleteReviewItem = async (req, res) => {
  */
 export const requestFix = async (req, res) => {
   try {
-    const { notes } = req.body;
+    const { notes, summary, reasonCategory } = req.body || {};
+    const actionSummary = (summary || notes || "").trim();
 
     const groupFilter = await resolveGroupFilter(req);
     if (!groupFilter) {
@@ -365,17 +442,21 @@ export const requestFix = async (req, res) => {
     // vendor back a card with nothing to act on.
     const current = await getGroupAction(groupFilter);
     const hasRows = (current?.items || []).some((i) => i.status === "Rejected");
-    if (!hasRows && notes?.trim()) {
+    if (!hasRows && actionSummary) {
       await upsertReviewItem(groupFilter, {
         type: "Custom",
-        note: notes.trim(),
+        label: reasonCategory ? `Category: ${reasonCategory}` : undefined,
+        note: actionSummary,
         status: "Rejected",
       });
     }
 
     const result = await raiseActionGroup(groupFilter, {
-      action: { summary: notes?.trim() },
-      by: req.body?.reviewedBy,
+      action: {
+        summary: actionSummary,
+        reasonCategory: reasonCategory || undefined,
+      },
+      by: req.body?.reviewedBy || req.adminUser?.username || "Admin",
     });
     const data = await Package.find(groupFilter).lean();
 
@@ -393,7 +474,7 @@ export const requestFix = async (req, res) => {
 /**
  * PUT /api/admin/packages/group/:packageGroupId/reject
  * PUT /api/admin/packages/:packageId/reject
- * Body: { reason?: { category, summary, items } }
+ * Body: { reason?: { category, summary, items } } or { reasonCategory, notes/summary }
  *
  * Terminal: the package is soft-deleted and does not come back for review.
  */
@@ -404,9 +485,16 @@ export const rejectPackage = async (req, res) => {
       return res.status(404).json({ success: false, message: "Package not found" });
     }
 
+    let reason = req.body?.reason;
+    if (typeof reason === "string") {
+      reason = { category: req.body?.reasonCategory || "Other", summary: reason };
+    } else if (!reason && req.body?.reasonCategory) {
+      reason = { category: req.body.reasonCategory, summary: req.body.summary || req.body.notes || "" };
+    }
+
     const result = await rejectGroup(groupFilter, {
-      reason: req.body?.reason,
-      by: req.body?.reviewedBy,
+      reason,
+      by: req.body?.reviewedBy || req.adminUser?.username || "Admin",
     });
     const data = await Package.find(groupFilter).lean();
 
@@ -518,40 +606,57 @@ export const updatePackageStatus = async (req, res) => {
   }
 };
 
+
+
 /**
- * PUT /api/admin/packages/:packageId/review-step
- * Body: { step: "step1".."step4", status, notes }
- *
- * The legacy per-step shape, kept for the existing EM panel. Steps are no
- * longer a separate block — this writes the same review row that review-item
- * does, labelled "Step N". Marking a step never changes packageStatus; the EM
- * finishes with approve or raise-action.
+ * PUT /api/admin/packages/:packageId/assign-em
+ * PUT /api/admin/packages/group/:packageGroupId/assign-em
+ * Body: { emId, emName }
  */
-export const reviewPackageStep = async (req, res) => {
+export const assignEmToPackage = async (req, res) => {
   try {
-    const { step, status, notes } = req.body;
-
-    const stepNumber = /^step[1-4]$/.test(String(step)) ? String(step).slice(-1) : null;
-    if (!stepNumber) {
-      return res.status(400).json({ success: false, message: "Invalid step name" });
-    }
-
-    const { error, item } = parseItem({ label: `Step ${stepNumber}`, note: notes, status });
-    if (error) return res.status(400).json({ success: false, message: error });
-
-    const groupFilter = await buildGroupFilterFromPackageId(req.params.packageId);
+    const { emId, emName } = req.body;
+    const groupFilter = await resolveGroupFilter(req);
     if (!groupFilter) {
-      return res.status(404).json({ success: false, message: "Package not found" });
+      return res.status(404).json({ success: false, message: "Package or group not found" });
     }
 
-    const result = await upsertReviewItem(groupFilter, item);
+    const result = await Package.updateMany(groupFilter, {
+      $set: { assignedEmId: emId || null, assignedEmName: emName || null },
+    });
 
     res.status(200).json({
       success: true,
-      count: result.matched,
-      emAction: result.emAction,
+      message: "EM assigned to package group successfully",
+      matchedCount: result.matchedCount,
+      modifiedCount: result.modifiedCount,
     });
   } catch (error) {
-    sendReviewError(res, error, "Failed to review step");
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * PUT /api/admin/packages/:packageId/go-live
+ * PUT /api/admin/packages/group/:packageGroupId/go-live
+ * Body: { by?: string }
+ */
+export const adminGoLive = async (req, res) => {
+  try {
+    const groupFilter = await resolveGroupFilter(req);
+    if (!groupFilter) {
+      return res.status(404).json({ success: false, message: "Package or group not found" });
+    }
+
+    const by = req.body?.by || req.adminUser?.username || "Admin";
+    const result = await goLiveGroup(groupFilter, { by });
+
+    res.status(200).json({
+      success: true,
+      message: "Package went live successfully",
+      data: result,
+    });
+  } catch (error) {
+    sendReviewError(res, error, "Failed to go live");
   }
 };
