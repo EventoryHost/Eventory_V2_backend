@@ -142,11 +142,13 @@ export async function computeQuoteForLines(lines, discount = 0) {
     }
 
     // getEffectivePackagePrice (not a plain ?? 0) — see that util's own
-    // comment: packagePricing.price is never actually set for Caterer/
-    // Decorator packages (their vendor-side flows have no input for it),
-    // which was silently pricing every one of them at ₹0 in this quote
-    // before this fix. Found 2026-09-02 while fixing a PDP price-display
-    // report — this is the real, money-critical instance of the same bug.
+    // comment (rewritten 2026-09-09 after a real customer-reported PDP-vs-
+    // cart price mismatch): this is base price (packagePricing.price, or
+    // summed setups[].price for Decorator) PLUS teamAndEquipment.price as a
+    // real, separate, ALWAYS-additive charge — not a fallback substitute
+    // for one another. Was silently dropping teamAndEquipment.price
+    // whenever packagePricing.price was already set (most packages outside
+    // Decorator/Caterer), undercharging every quote with one configured.
     const currentPrice = getEffectivePackagePrice(pkg);
     const quantity = item.quantity || 1;
     const addonsTotal = (item.selectedAddOns || []).reduce((sum, a) => sum + a.price * a.quantity, 0);

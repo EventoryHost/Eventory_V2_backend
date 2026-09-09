@@ -9,7 +9,7 @@ import { computeAvailability } from "../utils/packageAvailability.js";
 import { round2 } from "../utils/money.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { buildGroupFilter } from "../utils/packageGroupFilter.js";
-import { getEffectivePackagePrice } from "../utils/packagePrice.js";
+import { getPackageBasePrice } from "../utils/packagePrice.js";
 
 /**
  * Public (no-auth), read-only discovery endpoints for the customer side:
@@ -49,20 +49,38 @@ import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 
 /**
  * Backfills a package's own step3_policiesAndCharges.packagePricing.price
- * in-place with getEffectivePackagePrice's fallback — see that util's own
- * comment for why (packagePricing.price is never set for Caterer/Decorator
- * packages, whose vendor-side flows never write it). Run on every package
+ * in-place with getPackageBasePrice — see that util's own comment for why
+ * (packagePricing.price is never set for Decorator packages, whose vendor-
+ * side flow has no input for it at all — the real base price is the sum of
+ * step2_productsAndPricing.setups[].price instead). Run on every package
  * object returned by this controller's read endpoints so the frontend's
  * existing price-reading code (which reads exactly this path — e.g.
- * getPackageDetail.ts's priceOf()) picks up the real, effective price with
- * no frontend change needed, rather than every caller re-deriving it.
+ * getPackageDetail.ts's priceOf()) picks up the real base price with no
+ * frontend change needed, rather than every caller re-deriving it.
+ *
+ * DELIBERATELY base price only, NOT getEffectivePackagePrice (base +
+ * teamAndEquipment combined) — REAL BUG FIXED 2026-09-09, found via a
+ * customer-reported PDP-vs-cart price mismatch: PackageDetailPage.tsx
+ * already adds teamAndEquipmentCharge on top of priceOf(pkg) ITSELF
+ * (packageTotal = selectedVariant.price + teamAndEquipmentCharge +
+ * addonsTotal, its own explicit code comment: "Team & equipment is a real,
+ * separate flat charge on top of the package's base price"). Backfilling
+ * this field with the COMBINED total would double-count teamAndEquipment on
+ * every PDP/browse/popular/group-variants read — confirmed this was
+ * happening (with the two numbers coincidentally equal on the one package
+ * that surfaced the report, masking it). Cart/checkout/wishlist/booking/
+ * enquiry/compare are the opposite case — no separate frontend addition
+ * exists there, so those call sites correctly use the COMBINED
+ * getEffectivePackagePrice instead; see that util's own comment for the
+ * full split.
+ *
  * Mutates a lean object in place; safe since these are throwaway response
  * objects, never re-saved.
  */
 function normalizePackagePricing(pkg) {
   if (!pkg?.step3_policiesAndCharges) return pkg;
   if (!pkg.step3_policiesAndCharges.packagePricing) pkg.step3_policiesAndCharges.packagePricing = {};
-  pkg.step3_policiesAndCharges.packagePricing.price = getEffectivePackagePrice(pkg);
+  pkg.step3_policiesAndCharges.packagePricing.price = getPackageBasePrice(pkg);
   return pkg;
 }
 
@@ -172,8 +190,9 @@ export const browsePackages = async (req, res) => {
       "vendorId vendorType variantType packageGroupId packageStatus " +
       "step1_eventAndCrew.packageName step1_eventAndCrew.eventCategories " +
       "step1_eventAndCrew.capacity step1_eventAndCrew.duration " +
-      "step2_productsAndPricing.included " +
+      "step2_productsAndPricing.included step2_productsAndPricing.setups " +
       "step3_policiesAndCharges.packagePricing step3_policiesAndCharges.teamAndEquipment " +
+      "step3_policiesAndCharges.overallPriceOfPackage " +
       "step3_policiesAndCharges.gstInclusive step3_policiesAndCharges.gstRatePercent " +
       "step3_policiesAndCharges.guestTiers step4_sampleMedia.media createdAt";
 
@@ -298,8 +317,9 @@ export const getPopularPackages = async (req, res) => {
       "vendorId vendorType variantType packageGroupId packageStatus " +
       "step1_eventAndCrew.packageName step1_eventAndCrew.eventCategories " +
       "step1_eventAndCrew.capacity step1_eventAndCrew.duration " +
-      "step2_productsAndPricing.included " +
+      "step2_productsAndPricing.included step2_productsAndPricing.setups " +
       "step3_policiesAndCharges.packagePricing step3_policiesAndCharges.teamAndEquipment " +
+      "step3_policiesAndCharges.overallPriceOfPackage " +
       "step3_policiesAndCharges.gstInclusive step3_policiesAndCharges.gstRatePercent " +
       "step3_policiesAndCharges.guestTiers step4_sampleMedia.media createdAt";
 
@@ -610,8 +630,9 @@ export const getPackageGroupVariants = async (req, res) => {
       "step1_eventAndCrew.packageName step1_eventAndCrew.eventCategories " +
       "step1_eventAndCrew.capacity step1_eventAndCrew.duration " +
       "step2_productsAndPricing.setups step3_policiesAndCharges.packagePricing " +
-      "step3_policiesAndCharges.teamAndEquipment step3_policiesAndCharges.gstInclusive " +
-      "step3_policiesAndCharges.gstRatePercent step4_sampleMedia.media createdAt";
+      "step3_policiesAndCharges.teamAndEquipment step3_policiesAndCharges.overallPriceOfPackage " +
+      "step3_policiesAndCharges.gstInclusive step3_policiesAndCharges.gstRatePercent " +
+      "step4_sampleMedia.media createdAt";
 
     // buildGroupFilter (src/utils/packageGroupFilter.js) — NOT a plain
     // {packageGroupId} match: real Live package data (in both dev and prod,
