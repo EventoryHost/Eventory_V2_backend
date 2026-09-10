@@ -16,7 +16,13 @@ import { buildGroupFilter } from "../utils/packageGroup.js";
  */
 
 const TRANSITIONS = {
-  Submitted: { from: ["Draft", "Action Required"], to: "Under Review" },
+  // "Under Review" is in `from` so a vendor can revise a package that is still
+  // waiting on the EM: the revision re-enters review rather than sitting
+  // unreviewed. submission.count tells a resubmit from a first submission.
+  Submitted: {
+    from: ["Draft", "Action Required", "Under Review"],
+    to: "Under Review",
+  },
   Approved: { from: ["Under Review"], to: "Approved" },
   ActionRaised: { from: ["Under Review"], to: "Action Required" },
   Rejected: { from: ["Under Review"], to: "Deleted" },

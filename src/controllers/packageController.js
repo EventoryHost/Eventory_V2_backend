@@ -12,11 +12,12 @@ import {
   ReviewTransitionError,
 } from "../services/packageReviewService.js";
 
-// Statuses in which the vendor may not edit: Under Review, so a submission
-// cannot change under the EM's feet; Approved, so what goes live is exactly
-// what was cleared. Draft and Action Required stay editable — Action Required
-// is the whole point of Fix & Resubmit — and Live stays editable as before.
-const LOCKED_FOR_EDIT = ["Under Review", "Approved"];
+// Only Approved is frozen, so what goes live is exactly what the EM cleared.
+// Under Review stays editable: the vendor can keep working on a package that is
+// waiting for review and resubmit it, which puts the revision back in front of
+// the EM (see the Submitted transition). Draft, Action Required and Live have
+// always been editable.
+const LOCKED_FOR_EDIT = ["Approved"];
 
 const lockedEditResponse = (packageStatus) =>
   LOCKED_FOR_EDIT.includes(packageStatus)
