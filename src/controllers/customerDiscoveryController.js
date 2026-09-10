@@ -9,7 +9,8 @@ import { computeAvailability } from "../utils/packageAvailability.js";
 import { round2 } from "../utils/money.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { buildGroupFilter } from "../utils/packageGroupFilter.js";
-import { getPackageBasePrice } from "../utils/packagePrice.js";
+import { getPackageBasePrice, getEffectivePackagePrice } from "../utils/packagePrice.js";
+import { computeLineConvenienceFee } from "../services/convenienceFeeService.js";
 
 /**
  * Public (no-auth), read-only discovery endpoints for the customer side:
@@ -408,6 +409,20 @@ export const getPackageDetail = async (req, res) => {
       Promise.resolve(computePricingPreview(pkg, { date, guests })),
       getPdpReviewsSection(pkg),
     ]);
+    // Convenience-fee preview — added 2026-09-10. Uses the same
+    // convenienceFeeService the cart/checkout quote uses, so the PDP shows
+    // a realistic number. Needs an event date (`?date=`), so before one is
+    // picked it comes back `configured:false` with a reason. linePrice here
+    // is the pre-GST package price (base + team & equipment), matching what
+    // the cart line subtotal will be for a plain add-to-cart. The resolved
+    // pkg.vendorId already carries teamSize/bookingsPerYear/experience
+    // (PUBLIC_VENDOR_FIELDS whitelist).
+    pricingPreview.convenienceFee = computeLineConvenienceFee({
+      vendorType: pkg.vendorType,
+      vendor: pkg.vendorId,
+      linePrice: getEffectivePackagePrice(pkg),
+      eventDate: date || null,
+    });
 
     return res.status(200).json({
       status: "SUCCESS",
