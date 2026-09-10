@@ -213,10 +213,12 @@ export const createBooking = async (req, res) => {
         : new Date(Date.now() + RESPONSE_WINDOW_MS),
       pricing: {
         basePrice: req.body.basePrice ?? null,
+        // 0 when neither the request nor the package specifies a GST rate —
+        // GST is never assumed (see PricingSchema.taxRatePct's own comment).
         taxRatePct:
           req.body.taxRatePct ??
           pkg.step3_policiesAndCharges?.gstRatePercent ??
-          undefined,
+          0,
       },
       totalReceived: 0,
       notes: req.body.notes || null,

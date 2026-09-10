@@ -5,6 +5,7 @@ import Package from "../models/Package.js";
 import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
 import { getOrCreateInvoiceForBooking, renderInvoicePdf } from "../services/invoiceService.js";
 import { withPricingBreakdown } from "../utils/pricingBreakdown.js";
+import { round2 } from "../utils/money.js";
 
 /**
  * "My Bookings" dashboard — Phase 5 Step 20. Pure read-only projection over
@@ -183,16 +184,31 @@ export const getBookingDetail = async (req, res) => {
       { label: booking.packageSnapshot?.name || "Package", amount: pricingBreakdown.originalPackagePrice, type: "Base" },
       ...pricingBreakdown.additions.map((a) => ({ label: a.label, amount: a.amount, type: "Fee" })),
       ...pricingBreakdown.deductions.filter((d) => d.key !== "discountAllowed").map((d) => ({ label: d.label, amount: d.amount, type: "Fee" })),
-      { label: pricingBreakdown.tax.label, amount: pricingBreakdown.tax.amount, type: "Tax" },
+      // Only show a tax row when GST actually applies (the vendor set a
+      // rate) — no "Taxes (0% GST): ₹0" clutter on a GST-free package. Same
+      // as invoiceService.js's own `if (invoice.taxAmount)` guard.
+      ...(pricingBreakdown.tax.amount ? [{ label: pricingBreakdown.tax.label, amount: pricingBreakdown.tax.amount, type: "Tax" }] : []),
     ];
+    // Convenience fee (platform fee) — a real amount frozen onto the
+    // Booking at creation (see convenienceFeeService.js). It is NOT folded
+    // into booking.totalAmount (which is the per-line package+addons+GST
+    // figure, matching paymentMilestones); it's a separate line, so
+    // grandTotal below is the true "what the customer owes in full". null
+    // when the checkout quote couldn't compute one.
+    const convenienceFee = booking.convenienceFee ?? null;
+    const grandTotal = round2((booking.totalAmount || 0) + (convenienceFee || 0));
+
     const priceBreakdown = {
       charges,
       subtotal: pricingBreakdown.subtotal,
       taxAmount: pricingBreakdown.tax.amount,
       discountAmount: discountRow ? Math.abs(discountRow.amount) : 0,
+      convenienceFee,
+      convenienceFeeBreakdown: booking.convenienceFeeBreakdown ?? null,
       totalAmount: booking.totalAmount,
+      grandTotal,
       totalReceived: booking.totalReceived,
-      amountDue: Math.max(0, (booking.totalAmount || 0) - (booking.totalReceived || 0)),
+      amountDue: Math.max(0, grandTotal - (booking.totalReceived || 0)),
     };
 
     // Payment timeline — Booking.paymentMilestones already carries

@@ -37,7 +37,10 @@ export async function getOrCreateInvoiceForBooking(booking, vendor) {
     { label: booking.packageSnapshot?.name || "Package", amount: pricingBreakdown.originalPackagePrice, type: "Base" },
     ...pricingBreakdown.additions.map((a) => ({ label: a.label, amount: a.amount, type: "Fee" })),
     ...pricingBreakdown.deductions.filter((d) => d.key !== "discountAllowed").map((d) => ({ label: d.label, amount: d.amount, type: "Fee" })),
-    { label: pricingBreakdown.tax.label, amount: pricingBreakdown.tax.amount, type: "Tax" },
+    // Tax line only when GST actually applies (vendor set a rate) — no
+    // zero-rate row on a GST-free package. Matches the totals-row guard
+    // (`if (invoice.taxAmount)`) further down and getBookingDetail.
+    ...(pricingBreakdown.tax.amount ? [{ label: pricingBreakdown.tax.label, amount: pricingBreakdown.tax.amount, type: "Tax" }] : []),
   ];
   const subtotal = pricingBreakdown.subtotal;
   const taxAmount = pricingBreakdown.tax.amount;

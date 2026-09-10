@@ -209,6 +209,16 @@ const BookingSchema = new mongoose.Schema(
     // on noteAttachments for the full context (this is where that line's
     // attachments end up once a real Booking is created from it).
     noteAttachments: { type: [String], default: [] },
+
+    // Customer convenience fee (platform fee, NOT a vendor charge) frozen
+    // from the checkout quote at booking-creation time — added 2026-09-10.
+    // A real amount the customer paid, so it's stored, not recomputed on
+    // read (the vendor's own attributes / the fee tables could change
+    // later). null when the quote couldn't produce one. See
+    // src/services/convenienceFeeService.js for the calculation.
+    convenienceFee: { type: Number, default: null },
+    convenienceFeeBreakdown: { type: mongoose.Schema.Types.Mixed, default: null },
+
     // Vendor-private note from the "Calendar Note" section
     calendarNote: {
       type: String,

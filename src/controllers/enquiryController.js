@@ -219,10 +219,12 @@ export const createEnquiry = async (req, res) => {
         : undefined,
       pricing: {
         basePrice: req.body.basePrice ?? null,
+        // 0 when neither the request nor the package specifies a GST rate —
+        // GST is never assumed (see PricingSchema.taxRatePct's own comment).
         taxRatePct:
           req.body.taxRatePct ??
           pkg?.step3_policiesAndCharges?.gstRatePercent ??
-          undefined,
+          0,
       },
     });
 
