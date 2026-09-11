@@ -516,13 +516,19 @@ function computePricingPreview(pkg, { date, guests }) {
 
   const subtotal = amount != null ? round2(amount) : null;
   const gstInclusive = !!pricing.gstInclusive;
-  const gstRatePercent = pricing.gstRatePercent ?? null;
+  const rawGstRatePercent = pricing.gstRatePercent ?? null;
 
+  // GST rule (explicit, 2026-09-11): shown/added ONLY when the vendor marked
+  // the price NOT inclusive of GST and set a real rate. When gstInclusive is
+  // true, GST is already baked into the price — not a separate charge, so it
+  // must not be shown at all (gstRatePercent/gstAmount both null here, same
+  // as "no GST configured"), not just left out of `total`.
   let gstAmount = null;
   let total = subtotal;
-  if (subtotal != null && gstRatePercent != null) {
-    gstAmount = gstInclusive ? round2(subtotal - subtotal / (1 + gstRatePercent / 100)) : round2((subtotal * gstRatePercent) / 100);
-    total = gstInclusive ? subtotal : round2(subtotal + gstAmount);
+  const gstRatePercent = gstInclusive ? null : rawGstRatePercent;
+  if (!gstInclusive && subtotal != null && rawGstRatePercent != null) {
+    gstAmount = round2((subtotal * rawGstRatePercent) / 100);
+    total = round2(subtotal + gstAmount);
   }
 
   return {
