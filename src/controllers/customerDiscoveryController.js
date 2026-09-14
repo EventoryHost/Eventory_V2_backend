@@ -245,7 +245,9 @@ export const browsePackages = async (req, res) => {
     // $unwind) and the plain find()'s un-populated raw vendorId.
     await Promise.all(
       packages.map(async (pkg) => {
-        const alreadyResolved = pkg.vendorId && typeof pkg.vendorId === "object" && pkg.vendorId.businessName;
+        // Sniffed via `.id`, not `.businessName` — see resolveVendorForPackage's
+        // own comment (2026-09-14): businessName no longer reaches this object.
+        const alreadyResolved = pkg.vendorId && typeof pkg.vendorId === "object" && pkg.vendorId.id;
         if (alreadyResolved) return;
         const raw = pkg._rawVendorId ?? pkg.vendorId;
         pkg.vendorId = await resolveVendorForPackage(raw);
