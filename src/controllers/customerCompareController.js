@@ -49,7 +49,12 @@ function buildComparisonPayload(packages) {
       vendor: pkg.vendorId
         ? {
             id: pkg.vendorId.id,
-            businessName: pkg.vendorId.businessName,
+            // pocName, not businessName — must never reach the customer
+            // side (2026-09-14). Kept as the literal `pocName` key, same
+            // as every other customer-facing vendor read (PUBLIC_VENDOR_FIELDS,
+            // src/utils/publicFields.js) rather than aliasing it to
+            // something else here — one consistent field name everywhere.
+            pocName: pkg.vendorId.pocName,
             rating: pkg.vendorId.rating,
             reviewsCount: pkg.vendorId.reviewsCount,
             city: pkg.vendorId.city,
@@ -203,7 +208,7 @@ export const clearCompare = async (req, res) => {
 function toCsv(comparison) {
   const rows = [
     ["Attribute", ...comparison.items.map((i) => i.packageName || "Package")],
-    ["Vendor", ...comparison.items.map((i) => i.vendor?.businessName || "")],
+    ["Vendor", ...comparison.items.map((i) => i.vendor?.pocName || "")],
     ["Vendor rating", ...comparison.items.map((i) => i.vendor?.rating ?? "")],
     ["City", ...comparison.items.map((i) => i.vendor?.city || "")],
     ["Variant", ...comparison.items.map((i) => i.variantType || "")],

@@ -58,15 +58,20 @@ function tryComputeMilestoneDueDate(eventDate, dueDaysRaw) {
   return due;
 }
 
+// GST rule (explicit, 2026-09-11): show/add GST ONLY when the vendor marked
+// the package price as NOT inclusive of GST (gstInclusive:false) and set a
+// real rate. When gstInclusive:true, GST is already baked into the price the
+// vendor entered — it is NOT a separate charge, so it must not be shown or
+// added at all: gstRatePercent/gstAmount both come back null, same as the
+// "vendor never configured GST" case, rather than surfacing the
+// tax-portion-of-an-inclusive-price figure this function used to compute.
 function computeGst(subtotal, pricing) {
   const gstInclusive = !!pricing?.gstInclusive;
   const gstRatePercent = pricing?.gstRatePercent ?? null;
-  if (subtotal == null || gstRatePercent == null) {
-    return { gstInclusive, gstRatePercent, gstAmount: null };
+  if (gstInclusive || subtotal == null || gstRatePercent == null) {
+    return { gstInclusive, gstRatePercent: gstInclusive ? null : gstRatePercent, gstAmount: null };
   }
-  const gstAmount = gstInclusive
-    ? round2(subtotal - subtotal / (1 + gstRatePercent / 100))
-    : round2((subtotal * gstRatePercent) / 100);
+  const gstAmount = round2((subtotal * gstRatePercent) / 100);
   return { gstInclusive, gstRatePercent, gstAmount };
 }
 
@@ -175,7 +180,9 @@ export async function computeQuoteForLines(lines, discount = 0) {
     const lineSubtotal = round2(packagePriceTotal + addonsTotal + chargeableItemsTotal);
 
     const { gstInclusive, gstRatePercent, gstAmount } = computeGst(lineSubtotal, pkg.step3_policiesAndCharges);
-    const lineTotalInclGst = gstAmount == null ? lineSubtotal : gstInclusive ? lineSubtotal : round2(lineSubtotal + gstAmount);
+    // gstAmount is null both when GST isn't configured AND when it's
+    // inclusive (see computeGst) — either way, nothing to add on top.
+    const lineTotalInclGst = gstAmount == null ? lineSubtotal : round2(lineSubtotal + gstAmount);
 
     const token = computeLineToken(lineTotalInclGst, pkg);
     // Same base as token (lineTotalInclGst, tax-INCLUDED), not lineSubtotal

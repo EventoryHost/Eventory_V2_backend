@@ -57,7 +57,9 @@ export async function getOrCreateInvoiceForBooking(booking, vendor) {
       email: booking.customer?.email || null,
     },
     vendorSnapshot: {
-      businessName: vendor?.businessName || null,
+      // pocName, not businessName — the customer's invoice must show the
+      // vendor's real name, never their business name (2026-09-14).
+      pocName: vendor?.pocName || null,
       city: vendor?.city || null,
     },
     packageSnapshot: {
@@ -106,7 +108,7 @@ export function renderInvoicePdf(invoice, booking) {
     doc.moveDown(0.5);
 
     doc.fontSize(12).text("Vendor:", { underline: true });
-    doc.fontSize(10).text(invoice.vendorSnapshot.businessName || "Vendor");
+    doc.fontSize(10).text(invoice.vendorSnapshot.pocName || "Vendor");
     if (invoice.vendorSnapshot.city) doc.text(invoice.vendorSnapshot.city);
     if (invoice.packageSnapshot.name) doc.text(`Package: ${invoice.packageSnapshot.name}`);
     doc.moveDown();
