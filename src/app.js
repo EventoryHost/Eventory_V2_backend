@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import helmet from "helmet";
@@ -9,6 +10,8 @@ import errorHandler from "./middlewares/errorHandler.js";
 import swaggerUi from "swagger-ui-express";
 import swaggerSpec from "./config/swagger.js";
 const app = express();
+
+app.set("trust proxy", Number(process.env.TRUST_PROXY_HOPS) || 0);
 
 // --------------- Middleware ---------------
 

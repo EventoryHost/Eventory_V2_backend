@@ -62,3 +62,17 @@ export const publicBrowseLimiter = rateLimit({
   legacyHeaders: false,
   message: { success: false, message: "Too many requests. Please slow down." },
 });
+
+// POST /api/uploads/presign, /api/uploads/multipart/create, DELETE /api/uploads
+// — these mint credentials to write to (or delete from) the bucket, and the
+// vendor API carries no auth yet, so IP is the only key available. Sized for a
+// vendor bulk-adding portfolio media, not for a script enumerating the bucket.
+// Deliberately not applied to multipart complete/abort: those finish an upload
+// already in flight, and throttling them strands parts that then sit billable.
+export const uploadLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: "Too many upload requests. Please slow down." },
+});
