@@ -67,6 +67,12 @@ const pavStep2Schema = new mongoose.Schema({
     ],
   included: [{ type: String }],
   notIncluded: [{ type: String }],
+  // Crew breakdown. A PAV team running as a venue's in-house service has no
+  // Step 1 of its own, so the service body carries it.
+  totalTeamSize: { type: Number },
+  photographers: { type: Number },
+  videographers: { type: Number },
+  otherRoles: { type: String },
 }, { _id: false });
 
 export default pavStep2Schema;
