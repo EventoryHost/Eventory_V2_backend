@@ -185,6 +185,13 @@ export async function createBookingsFromCheckoutSession(session, payment, option
       // "Notes for vendor" image attachments — see CartItem.js's own
       // comment on noteAttachments for the full context/chain.
       noteAttachments: line.noteAttachments || [],
+      // Customer convenience fee for THIS line, frozen from the locked
+      // quote — this is a real amount the customer was charged, so it's
+      // persisted (not re-derived on read) the same way totalAmount/
+      // paymentMilestones are. See convenienceFeeService.js. `null` when
+      // the quote couldn't compute one (no event date at checkout, etc.).
+      convenienceFee: quoteLine.convenienceFee ?? null,
+      convenienceFeeBreakdown: quoteLine.convenienceFeeBreakdown ?? null,
     });
     // Vendor's own utility (utils/pricingBreakdown.js) — runs first so the
     // "Pricing Breakdown" card's own fields (subtotal/tax/etc.) are

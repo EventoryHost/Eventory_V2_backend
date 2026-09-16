@@ -81,7 +81,18 @@ export const PricingSchema = new mongoose.Schema(
 
     discountAmount: { type: Number, default: 0, min: 0 },
     discountLabel: { type: String, default: "Discount Allowed" },
-    taxRatePct: { type: Number, default: 18, min: 0, max: 100 },
+    // default 0, NOT 18 — changed 2026-09-10 per an explicit product rule:
+    // GST is applied ONLY when the vendor actually specified a rate on their
+    // package (step3_policiesAndCharges.gstRatePercent), never assumed. A
+    // default of 18 meant every Booking/Enquiry whose `pricing` object was
+    // built without an explicit taxRatePct (vendor-side manual bookings and
+    // enquiries both did `... ?? undefined` -> Mongoose applied the default)
+    // silently taxed the customer 18% on a package the vendor left GST-free.
+    // The cart/checkout quote path was already correct (computeGst guards on
+    // gstRatePercent != null); this closes the same gap on the persisted
+    // Booking/Enquiry records the customer sees in their booking summary /
+    // invoice.
+    taxRatePct: { type: Number, default: 0, min: 0, max: 100 },
     taxLabel: { type: String, default: "GST" },
     updatedAt: { type: Date, default: null },
   },

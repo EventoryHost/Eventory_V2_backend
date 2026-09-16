@@ -41,7 +41,9 @@ const InvoiceSchema = new mongoose.Schema(
       email: { type: String },
     },
     vendorSnapshot: {
-      businessName: { type: String },
+      // pocName, not businessName — the customer's invoice must show the
+      // vendor's real name, never their business name (2026-09-14).
+      pocName: { type: String },
       city: { type: String },
     },
     packageSnapshot: {

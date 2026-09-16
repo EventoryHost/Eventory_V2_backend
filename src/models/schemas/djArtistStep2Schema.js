@@ -62,6 +62,16 @@ const djArtistStep2Schema = new mongoose.Schema({
   ],
   included: [{ type: String }],
   notIncluded: [{ type: String }],
+  // Set length, crew breakdown and experience. A DJ running as a venue's
+  // in-house service has no Step 1 of its own, so the service body carries
+  // them. `performingArtists` is a headcount here, unlike the named list on
+  // step1_eventAndCrew.performers.
+  minDurationMinutes: { type: Number },
+  maxDurationMinutes: { type: Number },
+  totalTeamSize: { type: Number },
+  performingArtists: { type: Number },
+  supportingTeam: { type: Number },
+  experience: { type: String },
 }, { _id: false });
 
 export default djArtistStep2Schema;

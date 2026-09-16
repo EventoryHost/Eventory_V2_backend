@@ -199,6 +199,7 @@ export const createCheckoutSession = async (req, res) => {
     let sourceCartId = null;
     let bookingNote = "";
     let discount = 0;
+    let coupon = null;
 
     if (source === "cart") {
       const cart = await Cart.findOne({ customerId: req.customer._id });
@@ -232,6 +233,13 @@ export const createCheckoutSession = async (req, res) => {
       // per Step 13's honest placeholder (no Coupon/Offer model exists
       // yet), but wired through so it starts working the moment that does.
       discount = cart.coupon?.discountAmount || 0;
+      // Carried onto the session itself too (see CheckoutSession.js's own
+      // comment on `coupon`) — this is the actual fix for "no persistent
+      // applied-coupon indicator at checkout": the code, not just the
+      // number it worked out to.
+      if (cart.coupon?.code) {
+        coupon = { code: cart.coupon.code, discountAmount: cart.coupon.discountAmount || 0 };
+      }
     } else {
       const {
         packageId,
@@ -280,6 +288,7 @@ export const createCheckoutSession = async (req, res) => {
       sourceCartId,
       lines,
       bookingNote,
+      coupon,
       contactDetails,
       status: "Active",
       expiresAt: new Date(Date.now() + SESSION_TTL_MS),

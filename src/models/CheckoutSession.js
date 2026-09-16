@@ -81,6 +81,24 @@ const CheckoutSessionSchema = new mongoose.Schema(
     lines: { type: [CheckoutLineSchema], default: [] },
     bookingNote: { type: String, trim: true, maxlength: 1000, default: "" },
 
+    // Carried over from the cart's own coupon slot (Cart.js's
+    // CartCouponSchema — see that file's own comment on why this is a
+    // SLOT, not the full Coupon/Offer model the BRD calls for, which still
+    // doesn't exist) at session-creation time, source:"cart" only — same
+    // "snapshot once, never re-synced" treatment as bookingNote/
+    // contactDetails right above/below. Added 2026-09-08 specifically so
+    // the frontend has something to render a persistent "Coupon XYZ
+    // applied" chip from — previously only lockedQuote.discount (a bare
+    // number) existed, with no code attached to it anywhere on this
+    // session. discountAmount is real today but always 0 (applyCoupon has
+    // no real Coupon model to validate/price against yet — same honest
+    // placeholder as Cart's own field); code is real as soon as the
+    // customer applies one, regardless of that.
+    coupon: {
+      code: { type: String, trim: true, uppercase: true, default: null },
+      discountAmount: { type: Number, default: 0 },
+    },
+
     // Phase 4 Step 17 — ONE contact-details set for the whole order (final
     // BRD Section 10: "Enter your communication details to secure your
     // vendor lineup"), not per vendor/line. Pre-filled from the customer's

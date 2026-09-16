@@ -15,10 +15,13 @@ import { getEffectivePackagePrice } from "../utils/packagePrice.js";
  * rather than trusting a customerId the client could otherwise supply.
  */
 
+// step2_productsAndPricing.setups — needed for getEffectivePackagePrice's
+// Decorator base-price sum; see that util's own comment (2026-09-09 rewrite).
 const PACKAGE_CARD_FIELDS =
   "vendorId vendorType variantType packageStatus step1_eventAndCrew.packageName " +
-  "step1_eventAndCrew.eventCategories step3_policiesAndCharges.packagePricing " +
-  "step3_policiesAndCharges.teamAndEquipment step4_sampleMedia.media";
+  "step1_eventAndCrew.eventCategories step2_productsAndPricing.setups " +
+  "step3_policiesAndCharges.packagePricing step3_policiesAndCharges.teamAndEquipment " +
+  "step3_policiesAndCharges.overallPriceOfPackage step4_sampleMedia.media";
 
 /**
  * @desc Save a Package or Vendor to the logged-in customer's wishlist.
@@ -30,7 +33,8 @@ export const addWishlistItem = async (req, res) => {
     let priceSnapshot = null;
     if (itemType === "Package") {
       const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" }).select(
-        "step3_policiesAndCharges.packagePricing.price step3_policiesAndCharges.teamAndEquipment.price"
+        "vendorType step2_productsAndPricing.setups step3_policiesAndCharges.packagePricing.price " +
+          "step3_policiesAndCharges.teamAndEquipment.price step3_policiesAndCharges.overallPriceOfPackage.price"
       );
       if (!pkg) {
         return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
