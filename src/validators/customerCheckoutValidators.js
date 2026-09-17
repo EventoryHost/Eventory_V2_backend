@@ -9,11 +9,19 @@ const validId = (label) =>
 
 // addOnId/itemId NOT validated as strict ObjectIds — same real bug/fix as
 // customerCartValidators.js's identical schemas (2026-08-21, frontend-reported).
+// category/subCategory/color/image — same 2026-09-17 addition as
+// customerCartValidators.js's identical schema; kept in sync since checkout
+// lines can be updated directly (see updateCheckoutLine below), not just
+// copied over from the cart at checkout-start.
 const selectedAddOnSchema = z.object({
   addOnId: z.string().trim().max(200).optional(),
   name: z.string().trim().min(1).max(200),
   price: z.coerce.number().min(0).default(0),
   quantity: z.coerce.number().int().min(1).default(1),
+  category: z.string().trim().max(100).optional(),
+  subCategory: z.string().trim().max(100).optional(),
+  color: z.string().trim().max(50).optional(),
+  image: z.string().trim().max(2000).optional(),
 });
 
 const selectedItemSchema = z.object({

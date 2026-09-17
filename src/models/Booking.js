@@ -60,6 +60,31 @@ const CustomizeRequestSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// Added 2026-09-17 — Booking previously had NO field for the selected
+// add-ons at all: pricing.addonsAdded only ever kept a rolled-up total
+// (see bookingCreationService.js), and this schema itself never carried the
+// per-addon list forward from the checkout line. That's a bigger gap than
+// just missing color/category — the "Added Add-ons" list on the booking
+// summary page had nothing real to read AT ALL, for any field, not just the
+// ones the frontend flagged. Mirrors CartItem.js's SelectedAddOnSchema
+// exactly (same category/subCategory/color/image fields, same reasoning:
+// snapshot what the customer actually picked, not re-derivable catalog
+// data) — kept as its own copy rather than a shared import since Booking.js
+// and CartItem.js don't otherwise share schema modules.
+const SelectedAddOnSchema = new mongoose.Schema(
+  {
+    addOnId: { type: String, default: null },
+    name: { type: String, required: true },
+    price: { type: Number, required: true, default: 0 },
+    quantity: { type: Number, default: 1, min: 1 },
+    category: { type: String, default: null, trim: true },
+    subCategory: { type: String, default: null, trim: true },
+    color: { type: String, default: null, trim: true },
+    image: { type: String, default: null },
+  },
+  { _id: false }
+);
+
 const BookingSchema = new mongoose.Schema(
   {
     bookingId: {
@@ -181,6 +206,11 @@ const BookingSchema = new mongoose.Schema(
     // PDP "Customize items" workshop requests — see CustomizeRequestSchema's
     // own comment above for why this is separate from changeRequests.
     customizeRequests: [CustomizeRequestSchema],
+
+    // The add-ons actually selected on this booking's line at checkout —
+    // see SelectedAddOnSchema's own comment above for why this was missing
+    // entirely until now.
+    selectedAddOns: { type: [SelectedAddOnSchema], default: [] },
 
     pricing: {
       type: PricingSchema,
