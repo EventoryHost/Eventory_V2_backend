@@ -11,10 +11,16 @@ export const addressSchema = new mongoose.Schema(
       type: String, // e.g. "Home", "Office", "Venue"
       trim: true,
     },
+    // Recipient details, captured per address by the customer-side Saved
+    // Address form (Figma node 1414:9025) — a venue/banquet contact is often
+    // not the account holder, so these can't be read off the Customer.
+    fullName: { type: String, trim: true },
+    phone: { type: String, trim: true },
     line1: { type: String, trim: true },
     line2: { type: String, trim: true },
     city: { type: String, trim: true },
     state: { type: String, trim: true },
+    landmark: { type: String, trim: true },
     pincode: { type: String, trim: true },
     country: { type: String, trim: true, default: "India" },
     mapLink: { type: String, trim: true },
