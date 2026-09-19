@@ -57,6 +57,10 @@ const makeupArtistStep2Schema = new mongoose.Schema({
   notIncluded: [{ type: String }],
   drapingIncluded: { type: Boolean, default: false },
   drapingServiceTypes: [{ type: String }],
+  // Time per client and crew size. An artist running as a venue's in-house
+  // service has no Step 1 of its own, so the service body carries them.
+  durationPerPersonMinutes: { type: Number },
+  totalTeamSize: { type: Number },
 }, { _id: false });
 
 export default makeupArtistStep2Schema;

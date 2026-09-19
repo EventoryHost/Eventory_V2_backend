@@ -35,9 +35,10 @@ export async function resolveVendorForPackage(vendorIdRaw, fields = PUBLIC_VENDO
   if (!vendorIdRaw) return null;
   // Already a populated Mongoose/plain object (e.g. a prior successful
   // populate) — nothing to resolve. Sniffed via `.id` (the business-id
-  // string, e.g. "VEN...") rather than `.businessName`: that field was
-  // removed from PUBLIC_VENDOR_FIELDS (businessName must never reach the
-  // customer side), so a genuinely-resolved vendor object no longer has it.
+  // string, e.g. "VEN...") rather than `.businessName` — that field was
+  // removed from PUBLIC_VENDOR_FIELDS 2026-09-14 (businessName must never
+  // reach the customer side), so a genuinely-resolved vendor object no
+  // longer reliably has it.
   if (typeof vendorIdRaw === "object" && !mongoose.Types.ObjectId.isValid(vendorIdRaw) && vendorIdRaw.id) {
     return vendorIdRaw;
   }

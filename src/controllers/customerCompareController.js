@@ -49,10 +49,11 @@ function buildComparisonPayload(packages) {
       vendor: pkg.vendorId
         ? {
             id: pkg.vendorId.id,
-            // pocName, not businessName — businessName must never reach the
-            // customer side and is no longer in PUBLIC_VENDOR_FIELDS, so
-            // reading it here would have quietly emptied the vendor name in
-            // both the comparison and its CSV export.
+            // pocName, not businessName — must never reach the customer
+            // side (2026-09-14). Kept as the literal `pocName` key, same
+            // as every other customer-facing vendor read (PUBLIC_VENDOR_FIELDS,
+            // src/utils/publicFields.js) rather than aliasing it to
+            // something else here — one consistent field name everywhere.
             pocName: pkg.vendorId.pocName,
             rating: pkg.vendorId.rating,
             reviewsCount: pkg.vendorId.reviewsCount,

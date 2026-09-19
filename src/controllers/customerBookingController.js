@@ -362,7 +362,9 @@ export const getInvoicePdf = async (req, res) => {
       return res.status(400).json({ status: "FAILED", message: "No payment has been received for this booking yet — nothing to invoice" });
     }
 
-    const vendor = await Vendor.findById(booking.vendorId).select("businessName city").lean();
+    // pocName, not businessName — the customer-facing invoice must show the
+    // vendor's real name, never their business name (2026-09-14).
+    const vendor = await Vendor.findById(booking.vendorId).select("pocName city").lean();
     const invoice = await getOrCreateInvoiceForBooking(booking, vendor);
     const pdfBuffer = await renderInvoicePdf(invoice, booking);
 

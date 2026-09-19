@@ -957,15 +957,19 @@ router.post("/:packageId/duplicate-variant", duplicateVariant);
  *                 item:
  *                   name: "Grand Ballroom"
  *                   spaceType: "Banquet Hall"
- *                   area: { value: 5000, unit: "sq.ft" }
- *                   height: { value: 20, unit: "ft" }
+ *                   area: { value: 5000, unit: "Sq. Ft." }
+ *                   height: { value: 20, unit: "Ft." }
  *                   layout: "Theatre"
  *                   capacity: { standing: 500, sitting: 300, dining: 200 }
  *                   environment: "Indoor"
- *                   activities: ["Wedding", "Reception", "Conference"]
- *                   amenities: { power: true, ac: true, stage: true, lighting: true, security: true }
+ *                   activities: ["Weddings", "Corporate Events"]
+ *                   amenities: ["Power", "Wi-Fi", "Parking", "Security"]
  *                   price: 150000
  *                   billingUnit: "Per Day"
+ *                   numberOfRooms: 12
+ *                   roomIncluded: true
+ *                   mandatory: false
+ *                   parking: { fourWheelerCapacity: 120, twoWheelerCapacity: 80, valetService: true }
  *             venue_inhouse_caterer:
  *               summary: "Add an in-house Caterer service to a Venue"
  *               value:
@@ -980,6 +984,7 @@ router.post("/:packageId/duplicate-variant", duplicateVariant);
  *                         serviceStyle: "Buffet"
  *                         items:
  *                           starters: [{ name: "Paneer Tikka", price: 250 }]
+ *                   mandatory: true
  *                   sampleMedia:
  *                     - url: "https://cdn.example.com/venue_food.jpg"
  *                       type: "image"
