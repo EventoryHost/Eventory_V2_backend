@@ -49,7 +49,11 @@ function buildComparisonPayload(packages) {
       vendor: pkg.vendorId
         ? {
             id: pkg.vendorId.id,
-            businessName: pkg.vendorId.businessName,
+            // pocName, not businessName — businessName must never reach the
+            // customer side and is no longer in PUBLIC_VENDOR_FIELDS, so
+            // reading it here would have quietly emptied the vendor name in
+            // both the comparison and its CSV export.
+            pocName: pkg.vendorId.pocName,
             rating: pkg.vendorId.rating,
             reviewsCount: pkg.vendorId.reviewsCount,
             city: pkg.vendorId.city,
@@ -203,7 +207,7 @@ export const clearCompare = async (req, res) => {
 function toCsv(comparison) {
   const rows = [
     ["Attribute", ...comparison.items.map((i) => i.packageName || "Package")],
-    ["Vendor", ...comparison.items.map((i) => i.vendor?.businessName || "")],
+    ["Vendor", ...comparison.items.map((i) => i.vendor?.pocName || "")],
     ["Vendor rating", ...comparison.items.map((i) => i.vendor?.rating ?? "")],
     ["City", ...comparison.items.map((i) => i.vendor?.city || "")],
     ["Variant", ...comparison.items.map((i) => i.variantType || "")],

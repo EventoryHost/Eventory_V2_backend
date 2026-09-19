@@ -5,6 +5,11 @@
  * PDP, reviews, wishlist, and anything added later — enforces the exact
  * same privacy rule from one place.
  *
+ * businessName is deliberately NOT here: customer-facing surfaces show the
+ * vendor's own name (pocName), never the registered business name. Anything
+ * that used to sniff a resolved vendor object via `.businessName` must key
+ * off `.id` instead — see resolveVendor.js.
+ *
  * Per the Vendor Page PRD (see info.txt PART 3): customers never see a
  * vendor's direct contact info or verification/KYC internals. Deliberately
  * excludes: email, phone, aadharNumber/panNumber/gstNumber + their doc
@@ -14,6 +19,6 @@
  * the overall isVerified).
  */
 export const PUBLIC_VENDOR_FIELDS =
-  "id businessName isIndividual vendorType eventCategories city state serviceAreas " +
+  "id pocName isIndividual vendorType eventCategories city state serviceAreas " +
   "teamSize bookingsPerYear experience profilePicture description businessPhotos " +
-  "coverImage isVerified rating reviewsCount createdAt";
+  "coverImage isVerified rating reviewsCount wishlistCount createdAt";

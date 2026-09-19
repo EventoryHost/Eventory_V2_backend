@@ -60,6 +60,29 @@ const CustomizeRequestSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// Snapshot of the add-ons this booking was placed with — the same
+// name/price/quantity shape CartItem.js's SelectedAddOnSchema carries, kept
+// here for the same reason packageSnapshot is: what the customer bought must
+// survive the vendor later editing their package. Defined locally rather than
+// imported, matching CustomizeRequestSchema's precedent above.
+//
+// Added 2026-09-18: `pricing.addonsAdded` already carried the MONEY
+// (bookingCreationService.js sums line.selectedAddOns into it), but the lines
+// themselves were dropped at that hop, so nothing downstream could say WHICH
+// add-ons were bought — the customer's booking detail screen lists them.
+// addOnId is a String for the same reason it is in CartItem.js: vendor step2
+// add-on subdocuments frequently have no _id at all, and the frontend falls
+// back to a synthetic id ("addon-0").
+const SelectedAddOnSchema = new mongoose.Schema(
+  {
+    addOnId: { type: String, default: null },
+    name: { type: String, required: true },
+    price: { type: Number, required: true, default: 0 },
+    quantity: { type: Number, default: 1, min: 1 },
+  },
+  { _id: false }
+);
+
 const BookingSchema = new mongoose.Schema(
   {
     bookingId: {
@@ -181,6 +204,11 @@ const BookingSchema = new mongoose.Schema(
     // PDP "Customize items" workshop requests — see CustomizeRequestSchema's
     // own comment above for why this is separate from changeRequests.
     customizeRequests: [CustomizeRequestSchema],
+
+    // The add-ons chosen at checkout, carried through cart -> checkout line
+    // -> here. Empty on vendor-created bookings (walk-ins etc.), which never
+    // go through a cart.
+    selectedAddOns: [SelectedAddOnSchema],
 
     pricing: {
       type: PricingSchema,
