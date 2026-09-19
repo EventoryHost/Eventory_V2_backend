@@ -81,8 +81,11 @@ function mapMilestonesToBookingSchema(quoteMilestones, tokenAmountPaid, paidAt, 
 // "Blocked" entry (a vendor's manual block takes precedence).
 async function reserveSlot(packageId, eventDate) {
   if (!eventDate) return;
-  const pkg = await Package.findById(packageId).select("availabilityCalendar");
+  const pkg = await Package.findById(packageId).select("availabilityCalendar availabilitySettings.workMode");
   if (!pkg) return;
+  // TIME_SLOTS packages are booked per slot (see computeSlotsForDate) — one
+  // booking must not mark the whole day Booked and shut out the other slots.
+  if (pkg.availabilitySettings?.workMode === "TIME_SLOTS") return;
 
   const { start, end } = utcDayRange(eventDate);
   const existing = (pkg.availabilityCalendar || []).find((e) => {
@@ -156,6 +159,13 @@ export async function createBookingsFromCheckoutSession(session, payment, option
       eventDate: line.eventDetails?.date,
       guestRange: { min: line.eventDetails?.guestCount || null, max: line.eventDetails?.guestCount || null },
       location: line.eventDetails?.location || null,
+      // Chosen slot ("HH:MM - HH:MM", the `value` from GET
+      // /customer/packages/:id/slots) — persisted so the slots endpoint can
+      // mark that slot taken for later customers (added 2026-09-19).
+      ...(() => {
+        const m = String(line.eventDetails?.timeSlot || "").match(/^\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\s*$/);
+        return m ? { startTime: m[1], endTime: m[2] } : {};
+      })(),
       packageSnapshot: {
         name: line.packageSnapshot?.name,
         price: line.packageSnapshot?.price,

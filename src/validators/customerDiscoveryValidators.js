@@ -42,6 +42,11 @@ export const popularPackagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(30).default(6),
 });
 
+// PDP "Event timing" picker — the date is required (slots are per date).
+export const packageSlotsQuerySchema = z.object({
+  date: z.coerce.date(),
+});
+
 export const browseVendorsQuerySchema = z.object({
   vendorType: z.string().trim().min(1).max(60).optional(),
   eventCategory: z.string().trim().min(1).max(100).optional(),

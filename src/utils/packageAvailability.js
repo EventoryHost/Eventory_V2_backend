@@ -129,4 +129,110 @@ function parseTimeToMinutes(str) {
   return null;
 }
 
+function minutesToHHMM(mins) {
+  const h = String(Math.floor(mins / 60)).padStart(2, "0");
+  const m = String(mins % 60).padStart(2, "0");
+  return `${h}:${m}`;
+}
+
+/**
+ * Bookable slots for ONE date — backs GET /customer/packages/:packageId/slots
+ * (the PDP's "Event timing" picker, added 2026-09-19).
+ *
+ * What the vendor side actually stores (Step2Availability.tsx ->
+ * Package.availabilitySettings): package-LEVEL working days
+ * (weeklyAvailability), an optional custom date window, a workMode
+ * (FULL_DAY | TIME_SLOTS), and — for TIME_SLOTS — one list of
+ * {startTime,endTime} that applies to EVERY working day. There is no
+ * per-date slot list; the per-date part is availabilityCalendar
+ * (Available/Blocked/Booked) plus live Bookings. So "the slots for the
+ * selected date" = the package's slot list, minus whatever that date's
+ * calendar/weekday/bookings rule out.
+ *
+ * Per-slot booked detection needs Booking.startTime/endTime; bookings
+ * without them (all pre-2026-09-19 customer bookings — creation never set
+ * them) cannot be attributed to a slot, so they are not held against any
+ * individual slot here.
+ */
+export async function computeSlotsForDate(pkg, date) {
+  const { start } = utcDayRange(date);
+  const end = utcDayRange(date).end;
+  const settings = pkg.availabilitySettings || {};
+  const workMode = settings.workMode || "FULL_DAY";
+  const result = { date: start.toISOString().slice(0, 10), workMode, dayAvailable: true, reason: null, slots: [] };
+
+  const calendarEntry = (pkg.availabilityCalendar || []).find((e) => {
+    const d = new Date(e.date);
+    return d >= start && d < end;
+  });
+  if (calendarEntry?.status === "Blocked" || calendarEntry?.status === "Booked") {
+    return { ...result, dayAvailable: false, reason: calendarEntry.status === "Blocked" ? "BLOCKED_BY_VENDOR" : "FULLY_BOOKED" };
+  }
+
+  const weekly = settings.weeklyAvailability || [];
+  const weekday = start.toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" });
+  if (weekly.length && !weekly.includes(weekday)) {
+    return { ...result, dayAvailable: false, reason: "NOT_A_WORKING_DAY" };
+  }
+
+  const range = settings.customDateRange;
+  if (settings.repeatType === "CUSTOM" && range?.startDate && range?.endDate) {
+    if (start < utcDayRange(range.startDate).start || start > utcDayRange(range.endDate).start) {
+      return { ...result, dayAvailable: false, reason: "OUTSIDE_AVAILABLE_RANGE" };
+    }
+  }
+
+  let vendorObjectId = pkg.vendorId?._id || pkg.vendorId;
+  if (!mongoose.Types.ObjectId.isValid(vendorObjectId)) {
+    vendorObjectId = await resolveVendorRefId(vendorObjectId);
+  }
+  const bookings = vendorObjectId
+    ? await Booking.find({
+        vendorId: vendorObjectId,
+        eventDate: { $gte: start, $lt: end },
+        status: { $nin: ["Cancelled", "Declined"] },
+      })
+        .select("startTime endTime")
+        .lean()
+    : [];
+
+  if (workMode !== "TIME_SLOTS") {
+    const dailyCapacity = pkg.bookingCapacity?.dailyCapacity ?? null;
+    if (dailyCapacity != null && bookings.length >= dailyCapacity) {
+      return { ...result, dayAvailable: false, reason: "FULLY_BOOKED" };
+    }
+    return result;
+  }
+
+  const simultaneous = pkg.bookingCapacity?.simultaneousBookings ?? 1;
+  const booked = bookings
+    .map((b) => ({ s: parseTimeToMinutes(b.startTime), e: parseTimeToMinutes(b.endTime) }))
+    .filter((b) => b.s != null && b.e != null);
+
+  result.slots = (settings.timeSlots || [])
+    .map((slot) => {
+      const s = parseTimeToMinutes(slot.startTime);
+      const e = parseTimeToMinutes(slot.endTime);
+      if (s == null || e == null) return null;
+      const overlapping = booked.filter((b) => b.s < e && b.e > s).length;
+      return {
+        startTime: slot.startTime,
+        endTime: slot.endTime,
+        label: `${slot.startTime} - ${slot.endTime}`,
+        value: `${minutesToHHMM(s)} - ${minutesToHHMM(e)}`,
+        available: overlapping < simultaneous,
+        sortKey: s,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.sortKey - b.sortKey)
+    .map(({ sortKey, ...rest }) => rest);
+
+  if (result.slots.length && result.slots.every((sl) => !sl.available)) {
+    result.dayAvailable = false;
+    result.reason = "ALL_SLOTS_BOOKED";
+  }
+  return result;
+}
+
 export default computeAvailability;

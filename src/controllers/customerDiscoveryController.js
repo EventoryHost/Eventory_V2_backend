@@ -5,7 +5,7 @@ import Review from "../models/Review.js";
 import Booking from "../models/Booking.js";
 import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
 import { utcDayRange } from "../utils/dateRange.js";
-import { computeAvailability } from "../utils/packageAvailability.js";
+import { computeAvailability, computeSlotsForDate } from "../utils/packageAvailability.js";
 import { round2 } from "../utils/money.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { buildGroupFilter } from "../utils/packageGroupFilter.js";
@@ -435,6 +435,31 @@ export const getPackageDetail = async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to fetch package detail", error: error.message });
+  }
+};
+
+/**
+ * @desc Bookable time slots for one package on one date — feeds the PDP's
+ * "Event timing" picker after the customer picks a date. Public, Live
+ * packages only. See computeSlotsForDate (src/utils/packageAvailability.js)
+ * for what the vendor side stores and how each slot's `available` is decided.
+ */
+export const getPackageSlots = async (req, res) => {
+  try {
+    const { packageId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(packageId)) {
+      return res.status(400).json({ status: "FAILED", message: "Invalid packageId" });
+    }
+    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" })
+      .select("vendorId availabilitySettings availabilityCalendar bookingCapacity")
+      .lean();
+    if (!pkg) {
+      return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
+    }
+    const slots = await computeSlotsForDate(pkg, req.query.date);
+    return res.status(200).json({ status: "SUCCESS", packageId, ...slots });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to fetch slots", error: error.message });
   }
 };
 
