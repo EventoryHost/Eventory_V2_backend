@@ -145,6 +145,7 @@ async function computeLinesAvailability(session) {
       const availability = await computeAvailability(pkg, {
         date: line.eventDetails?.date || undefined,
         guests: line.eventDetails?.guestCount || undefined,
+        timeSlot: line.eventDetails?.timeSlot || undefined,
       });
       return { lineId: line._id, packageStillAvailable: true, availability };
     })

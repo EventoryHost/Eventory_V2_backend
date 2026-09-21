@@ -47,6 +47,13 @@ export const packageSlotsQuerySchema = z.object({
   date: z.coerce.date(),
 });
 
+// Location serviceability — either an explicit pincode or a free-text
+// location string (the PDP's fetched location) that contains one.
+export const serviceabilityQuerySchema = z.object({
+  pincode: z.string().trim().regex(/^\d{6}$/, "pincode must be 6 digits").optional(),
+  location: z.string().trim().min(1).max(500).optional(),
+});
+
 export const browseVendorsQuerySchema = z.object({
   vendorType: z.string().trim().min(1).max(60).optional(),
   eventCategory: z.string().trim().min(1).max(100).optional(),

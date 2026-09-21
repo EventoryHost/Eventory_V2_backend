@@ -229,7 +229,9 @@ export async function createBookingsFromCheckoutSession(session, payment, option
     // Best-effort — a slot-reservation failure must not roll back a
     // successful Booking (the payment already went through).
     try {
-      await reserveSlot(line.packageId, line.eventDetails?.date);
+      // A booking with a chosen slot is tracked per slot (Booking.startTime/
+      // endTime), so it must not also mark the whole day Booked.
+      if (!booking.startTime) await reserveSlot(line.packageId, line.eventDetails?.date);
     } catch (err) {
       console.error(`[bookingCreationService] Failed to reserve slot for package ${line.packageId}:`, err.message);
     }

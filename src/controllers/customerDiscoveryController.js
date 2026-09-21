@@ -6,6 +6,7 @@ import Booking from "../models/Booking.js";
 import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
 import { utcDayRange } from "../utils/dateRange.js";
 import { computeAvailability, computeSlotsForDate } from "../utils/packageAvailability.js";
+import { checkServiceability, describeVendorAreas, extractPincode, lookupPincode } from "../utils/serviceability.js";
 import { round2 } from "../utils/money.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { buildGroupFilter } from "../utils/packageGroupFilter.js";
@@ -451,7 +452,12 @@ export const getPackageSlots = async (req, res) => {
       return res.status(400).json({ status: "FAILED", message: "Invalid packageId" });
     }
     const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" })
-      .select("vendorId availabilitySettings availabilityCalendar bookingCapacity")
+      // price fields feed the auto-slot length (getEffectivePackagePrice)
+      .select(
+        "vendorId vendorType availabilitySettings availabilityCalendar bookingCapacity " +
+          "step2_productsAndPricing.setups.price step3_policiesAndCharges.packagePricing " +
+          "step3_policiesAndCharges.teamAndEquipment step3_policiesAndCharges.overallPriceOfPackage"
+      )
       .lean();
     if (!pkg) {
       return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
@@ -460,6 +466,71 @@ export const getPackageSlots = async (req, res) => {
     return res.status(200).json({ status: "SUCCESS", packageId, ...slots });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to fetch slots", error: error.message });
+  }
+};
+
+function pincodeFromQuery(query) {
+  return query.pincode || extractPincode(query.location);
+}
+
+/**
+ * @desc Platform-level serviceability for a location: is this pincode inside
+ * the Delhi NCR area Eventory operates in? No package/vendor involved — for
+ * the location-detect step before/independent of any PDP. Public.
+ */
+export const getLocationServiceability = async (req, res) => {
+  try {
+    const pincode = pincodeFromQuery(req.query);
+    if (!pincode) {
+      return res.status(400).json({ status: "FAILED", message: "A 6-digit pincode is required (send pincode, or a location string containing one)" });
+    }
+    const info = lookupPincode(pincode);
+    return res.status(200).json({
+      status: "SUCCESS",
+      pincode,
+      serviceable: Boolean(info),
+      reason: info ? null : "OUTSIDE_SERVICE_REGION",
+      location: info ? { pincode: info.pincode, city: info.city, district: info.district, state: info.state, areas: info.areas } : null,
+    });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to check serviceability", error: error.message });
+  }
+};
+
+/**
+ * @desc PDP: is THIS package's vendor available at the customer's location,
+ * and if not, where do they serve. See src/utils/serviceability.js for the
+ * two-layer rule (platform region, then the vendor's own service areas).
+ * Public, Live packages only. Always returns the vendor's service areas so
+ * the UI can show "available in: ..." on a miss.
+ */
+export const getPackageServiceability = async (req, res) => {
+  try {
+    const { packageId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(packageId)) {
+      return res.status(400).json({ status: "FAILED", message: "Invalid packageId" });
+    }
+    const pincode = pincodeFromQuery(req.query);
+    if (!pincode) {
+      return res.status(400).json({ status: "FAILED", message: "A 6-digit pincode is required (send pincode, or a location string containing one)" });
+    }
+    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" }).select("vendorId").lean();
+    if (!pkg) {
+      return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
+    }
+    const vendor = await resolveVendorForPackage(pkg.vendorId);
+    const areas = vendor?.serviceAreas || [];
+    const result = checkServiceability(pincode, areas);
+    return res.status(200).json({
+      status: "SUCCESS",
+      packageId,
+      pincode,
+      ...result,
+      vendorAreasDeclared: areas.length > 0,
+      vendorServiceAreas: describeVendorAreas(areas),
+    });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to check serviceability", error: error.message });
   }
 };
 
