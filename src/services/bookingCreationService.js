@@ -206,6 +206,14 @@ export async function createBookingsFromCheckoutSession(session, payment, option
       // the quote couldn't compute one (no event date at checkout, etc.).
       convenienceFee: quoteLine.convenienceFee ?? null,
       convenienceFeeBreakdown: quoteLine.convenienceFeeBreakdown ?? null,
+      // The actual event timing from the Contact page — ONE value for the
+      // whole checkout session, carried onto every booking it produces (see
+      // Booking.js's own eventTiming comment for why this is separate from
+      // startTime/endTime above).
+      eventTiming: {
+        startTime: session.eventTiming?.startTime || null,
+        endTime: session.eventTiming?.endTime || null,
+      },
     });
     // Vendor's own utility (utils/pricingBreakdown.js) — runs first so the
     // "Pricing Breakdown" card's own fields (subtotal/tax/etc.) are

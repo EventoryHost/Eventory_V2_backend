@@ -118,3 +118,23 @@ export const updateContactDetailsSchema = z
   .refine((data) => data.name !== undefined || data.phone !== undefined || data.email !== undefined, {
     message: "Provide at least one of name, phone, or email",
   });
+
+// "When's the event?" (Contact page's EventTimingSection.tsx) — "HH:MM" 24h,
+// same TIME_OPTIONS half-hour-step values the frontend's picker already
+// generates. Not required to both be present together (letting one field
+// save on its own change, like updateContactDetailsSchema above), but when
+// both are present end must be after start — a real, checkable business
+// rule, unlike start/end being independently optional.
+const HHMM_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
+export const updateEventTimingSchema = z
+  .object({
+    startTime: z.string().trim().regex(HHMM_REGEX, "startTime must be HH:MM (24h)").optional(),
+    endTime: z.string().trim().regex(HHMM_REGEX, "endTime must be HH:MM (24h)").optional(),
+  })
+  .refine((data) => data.startTime !== undefined || data.endTime !== undefined, {
+    message: "Provide at least one of startTime or endTime",
+  })
+  .refine((data) => !(data.startTime && data.endTime) || data.endTime > data.startTime, {
+    message: "endTime must be after startTime",
+    path: ["endTime"],
+  });

@@ -154,6 +154,9 @@ const BookingSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    // The vendor's BOOKED slot — "HH:MM" 24h, from the chosen time slot
+    // (getPackageSlots/timeSlot), not the event's own actual timing. See
+    // eventTiming below for that.
     startTime: {
       type: String,
       default: null,
@@ -161,6 +164,17 @@ const BookingSchema = new mongoose.Schema(
     endTime: {
       type: String,
       default: null,
+    },
+    // "When's the event?" (Contact page's EventTimingSection.tsx, added
+    // 2026-09-22) — the ACTUAL start/end of the event itself, told to the
+    // vendor so they can plan arrival/setup. Deliberately separate from
+    // startTime/endTime above (the slot the vendor was BOOKED for) — see
+    // CheckoutSession.js's own comment on why these can legitimately
+    // differ. Carried over from CheckoutSession.eventTiming (one set for
+    // the whole order) at booking-creation time — see bookingCreationService.js.
+    eventTiming: {
+      startTime: { type: String, default: null },
+      endTime: { type: String, default: null },
     },
 
     packageSnapshot: {
