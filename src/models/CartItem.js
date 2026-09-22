@@ -36,6 +36,23 @@ const SelectedAddOnSchema = new mongoose.Schema(
     name: { type: String, required: true },
     price: { type: Number, required: true, default: 0 },
     quantity: { type: Number, default: 1, min: 1 },
+    // category/subCategory/color/image — added 2026-09-17. Previously this
+    // schema only ever kept name/price/quantity, so the vendor's add-on
+    // catalog metadata (category/subCategory) AND, critically, the SPECIFIC
+    // color the customer actually picked never survived past the moment an
+    // add-on was added to cart — confirmed a real gap (frontend team
+    // checked: nothing to re-derive this from later, since re-fetching the
+    // package's addon catalog by id would only show the available color
+    // OPTIONS, not which one this customer chose). Snapshotted here at
+    // add-to-cart time instead, same "freeze what the customer saw/picked"
+    // philosophy as packageSnapshot above. All optional — most add-ons have
+    // no color/material choice at all (see Package.js's addOn schemas:
+    // category/subCategory are universal, color only exists on Decorator's
+    // materialOptions/physicalSpec.color today).
+    category: { type: String, default: null, trim: true, maxlength: 100 },
+    subCategory: { type: String, default: null, trim: true, maxlength: 100 },
+    color: { type: String, default: null, trim: true, maxlength: 50 },
+    image: { type: String, default: null },
   },
   { _id: false }
 );
