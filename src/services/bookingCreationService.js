@@ -193,7 +193,10 @@ export async function createBookingsFromCheckoutSession(session, payment, option
       customizeRequests: line.customizeRequests || [],
       // Same chain (Cart -> CheckoutSession line -> here) for the selected
       // add-ons themselves — previously dropped entirely at this step (see
-      // Booking.js's SelectedAddOnSchema comment, added 2026-09-17).
+      // Booking.js's SelectedAddOnSchema comment, added 2026-09-17). Not
+      // just their total (which goes into pricing.addonsAdded above): the
+      // customer's booking detail screen lists each one, and the package
+      // they came from may be edited later.
       selectedAddOns: line.selectedAddOns || [],
       notes: line.specialRequest || null,
       // "Notes for vendor" image attachments — see CartItem.js's own

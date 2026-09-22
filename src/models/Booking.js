@@ -70,7 +70,11 @@ const CustomizeRequestSchema = new mongoose.Schema(
 // exactly (same category/subCategory/color/image fields, same reasoning:
 // snapshot what the customer actually picked, not re-derivable catalog
 // data) — kept as its own copy rather than a shared import since Booking.js
-// and CartItem.js don't otherwise share schema modules.
+// and CartItem.js don't otherwise share schema modules. addOnId is a String
+// for the same reason it is in CartItem.js: vendor step2 add-on
+// subdocuments frequently have no _id at all, and the frontend falls back
+// to a synthetic id ("addon-0"). Empty on vendor-created bookings (walk-ins
+// etc.), which never go through a cart.
 const SelectedAddOnSchema = new mongoose.Schema(
   {
     addOnId: { type: String, default: null },
@@ -221,8 +225,9 @@ const BookingSchema = new mongoose.Schema(
     // own comment above for why this is separate from changeRequests.
     customizeRequests: [CustomizeRequestSchema],
 
-    // The add-ons actually selected on this booking's line at checkout —
-    // see SelectedAddOnSchema's own comment above for why this was missing
+    // The add-ons actually selected on this booking's line at checkout,
+    // carried through cart -> checkout line -> here — see
+    // SelectedAddOnSchema's own comment above for why this was missing
     // entirely until now.
     selectedAddOns: { type: [SelectedAddOnSchema], default: [] },
 
