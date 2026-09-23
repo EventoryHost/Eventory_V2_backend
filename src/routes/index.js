@@ -11,6 +11,8 @@ import customerCartRoutes from "./customerCartRoutes.js";
 import customerCheckoutRoutes from "./customerCheckoutRoutes.js";
 import customerPaymentRoutes from "./customerPaymentRoutes.js";
 import customerBookingRoutes from "./customerBookingRoutes.js";
+import customerViewedRoutes from "./customerViewedRoutes.js";
+import customerPaymentMethodRoutes from "./customerPaymentMethodRoutes.js";
 import customerChatRoutes from "./customerChatRoutes.js";
 import authRoutes from "./authRoutes.js";
 import verificationRoutes from "./verificationRoutes.js";
@@ -21,6 +23,7 @@ import bookingRoutes from "./bookingRoutes.js";
 import enquiryRoutes from "./enquiryRoutes.js";
 import transactionRoutes from "./transactionRoutes.js";
 import redirectRoutes from "./redirectRoutes.js";
+import uploadRoutes from "./uploadRoutes.js";
 
 // Admin Routes
 import adminVendorRoutes from "./adminVendorRoutes.js";
@@ -91,6 +94,8 @@ router.use("/customer/compare", customerCompareRoutes);
 router.use("/customer/cart", customerCartRoutes);
 router.use("/customer/checkout", customerCheckoutRoutes);
 router.use("/customer/payments", customerPaymentRoutes);
+router.use("/customer/viewed", customerViewedRoutes);
+router.use("/customer/payment-methods", customerPaymentMethodRoutes);
 router.use("/customer/bookings", customerBookingRoutes);
 router.use("/customer/chat", customerChatRoutes);
 router.use("/auth", authRoutes);
@@ -102,6 +107,7 @@ router.use("/bookings", bookingRoutes);
 router.use("/enquiries", enquiryRoutes);
 router.use("/transactions", transactionRoutes);
 router.use("/redirect", redirectRoutes);
+router.use("/uploads", uploadRoutes);
 
 // Mount Admin Routes
 router.use("/admin/vendors", adminVendorRoutes);

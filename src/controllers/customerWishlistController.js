@@ -7,6 +7,7 @@ import Customer from "../models/Customer.js";
 import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
+import { bumpVendorWishlistCount, bumpVendorWishlistCounts, vendorRefForWishlistItem } from "../utils/wishlistCount.js";
 
 /**
  * Authenticated wishlist CRUD + a public read-only share link — Phase 2
@@ -15,10 +16,13 @@ import { getEffectivePackagePrice } from "../utils/packagePrice.js";
  * rather than trusting a customerId the client could otherwise supply.
  */
 
+// step2_productsAndPricing.setups — needed for getEffectivePackagePrice's
+// Decorator base-price sum; see that util's own comment (2026-09-09 rewrite).
 const PACKAGE_CARD_FIELDS =
   "vendorId vendorType variantType packageStatus step1_eventAndCrew.packageName " +
-  "step1_eventAndCrew.eventCategories step3_policiesAndCharges.packagePricing " +
-  "step3_policiesAndCharges.teamAndEquipment step4_sampleMedia.media";
+  "step1_eventAndCrew.eventCategories step2_productsAndPricing.setups " +
+  "step3_policiesAndCharges.packagePricing step3_policiesAndCharges.teamAndEquipment " +
+  "step3_policiesAndCharges.overallPriceOfPackage step4_sampleMedia.media";
 
 /**
  * @desc Save a Package or Vendor to the logged-in customer's wishlist.
@@ -30,7 +34,8 @@ export const addWishlistItem = async (req, res) => {
     let priceSnapshot = null;
     if (itemType === "Package") {
       const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" }).select(
-        "step3_policiesAndCharges.packagePricing.price step3_policiesAndCharges.teamAndEquipment.price"
+        "vendorType step2_productsAndPricing.setups step3_policiesAndCharges.packagePricing.price " +
+          "step3_policiesAndCharges.teamAndEquipment.price step3_policiesAndCharges.overallPriceOfPackage.price"
       );
       if (!pkg) {
         return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
@@ -57,6 +62,11 @@ export const addWishlistItem = async (req, res) => {
       note: note || "",
       priceSnapshot,
     });
+
+    // +1 only on a create that actually happened — a re-save of the same
+    // item throws 11000 and is handled in the catch below, which must NOT
+    // increment or the counter would climb on every repeat click.
+    await bumpVendorWishlistCount(await vendorRefForWishlistItem(item), 1);
 
     return res.status(201).json({ status: "SUCCESS", message: "Added to wishlist", item });
   } catch (error) {
@@ -155,6 +165,10 @@ export const removeWishlistItem = async (req, res) => {
       return res.status(404).json({ status: "FAILED", message: "Wishlist item not found" });
     }
 
+    // findOneAndDelete hands back the deleted doc, so the vendor is still
+    // resolvable here — it would not be after the row is gone.
+    await bumpVendorWishlistCount(await vendorRefForWishlistItem(item), -1);
+
     return res.status(200).json({ status: "SUCCESS", message: "Removed from wishlist" });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to remove wishlist item", error: error.message });
@@ -166,7 +180,18 @@ export const removeWishlistItem = async (req, res) => {
  */
 export const clearWishlist = async (req, res) => {
   try {
+    // Read the rows before deleting them — deleteMany reports only a count,
+    // and the vendor behind each row is unresolvable once it is gone.
+    const items = await WishlistItem.find({ customerId: req.customer._id })
+      .select("itemType packageId vendorId")
+      .lean();
+
     const { deletedCount } = await WishlistItem.deleteMany({ customerId: req.customer._id });
+
+    // Grouped by vendor inside — five saved packages from one vendor is a
+    // single -5 write, not five -1 writes.
+    await bumpVendorWishlistCounts(items, -1);
+
     return res.status(200).json({ status: "SUCCESS", message: "Wishlist cleared", count: deletedCount });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to clear wishlist", error: error.message });

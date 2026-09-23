@@ -23,6 +23,14 @@ const selectedAddOnSchema = z.object({
   name: z.string().trim().min(1).max(200),
   price: z.coerce.number().min(0).default(0),
   quantity: z.coerce.number().int().min(1).default(1),
+  // Added 2026-09-17 alongside CartItem.js's SelectedAddOnSchema — without
+  // these, zod's default object() parsing silently STRIPS any category/
+  // subCategory/color/image the frontend sends, so the fields would never
+  // reach the DB even once the frontend started sending them.
+  category: z.string().trim().max(100).optional(),
+  subCategory: z.string().trim().max(100).optional(),
+  color: z.string().trim().max(50).optional(),
+  image: z.string().trim().max(2000).optional(),
 });
 
 const selectedItemSchema = z.object({

@@ -26,6 +26,9 @@ export const browsePackagesQuerySchema = z.object({
   q: z.string().trim().min(1).max(200).optional(),
   eventCategory: z.string().trim().min(1).max(100).optional(),
   vendorType: z.enum(SUPPORTED_TYPES).optional(),
+  // Accepts either a Mongo _id or the business-facing "VEN..." id — the
+  // controller resolves one to the other. Backs the vendor profile page.
+  vendorId: z.string().trim().min(1).max(64).optional(),
   city: z.string().trim().min(1).max(100).optional(),
   guests: z.coerce.number().int().min(1).optional(), // must fit within capacity.minGuests/maxGuests
   date: z.coerce.date().optional(), // must not be Blocked/Booked on availabilityCalendar
@@ -42,7 +45,22 @@ export const popularPackagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(30).default(6),
 });
 
+// PDP "Event timing" picker — the date is required (slots are per date).
+export const packageSlotsQuerySchema = z.object({
+  date: z.coerce.date(),
+});
+
+// Location serviceability — either an explicit pincode or a free-text
+// location string (the PDP's fetched location) that contains one.
+export const serviceabilityQuerySchema = z.object({
+  pincode: z.string().trim().regex(/^\d{6}$/, "pincode must be 6 digits").optional(),
+  location: z.string().trim().min(1).max(500).optional(),
+});
+
 export const browseVendorsQuerySchema = z.object({
+  // Free-text search over pocName/description/vendorType/city/serviceAreas/
+  // eventCategories — the vendor listing's search box.
+  q: z.string().trim().min(1).max(200).optional(),
   vendorType: z.string().trim().min(1).max(60).optional(),
   eventCategory: z.string().trim().min(1).max(100).optional(),
   city: z.string().trim().min(1).max(100).optional(),

@@ -145,6 +145,7 @@ async function computeLinesAvailability(session) {
       const availability = await computeAvailability(pkg, {
         date: line.eventDetails?.date || undefined,
         guests: line.eventDetails?.guestCount || undefined,
+        timeSlot: line.eventDetails?.timeSlot || undefined,
       });
       return { lineId: line._id, packageStillAvailable: true, availability };
     })
@@ -199,6 +200,7 @@ export const createCheckoutSession = async (req, res) => {
     let sourceCartId = null;
     let bookingNote = "";
     let discount = 0;
+    let coupon = null;
 
     if (source === "cart") {
       const cart = await Cart.findOne({ customerId: req.customer._id });
@@ -232,6 +234,13 @@ export const createCheckoutSession = async (req, res) => {
       // per Step 13's honest placeholder (no Coupon/Offer model exists
       // yet), but wired through so it starts working the moment that does.
       discount = cart.coupon?.discountAmount || 0;
+      // Carried onto the session itself too (see CheckoutSession.js's own
+      // comment on `coupon`) — this is the actual fix for "no persistent
+      // applied-coupon indicator at checkout": the code, not just the
+      // number it worked out to.
+      if (cart.coupon?.code) {
+        coupon = { code: cart.coupon.code, discountAmount: cart.coupon.discountAmount || 0 };
+      }
     } else {
       const {
         packageId,
@@ -280,6 +289,7 @@ export const createCheckoutSession = async (req, res) => {
       sourceCartId,
       lines,
       bookingNote,
+      coupon,
       contactDetails,
       status: "Active",
       expiresAt: new Date(Date.now() + SESSION_TTL_MS),
@@ -511,5 +521,38 @@ export const updateContactDetails = async (req, res) => {
     return respondWithSession(res, 200, session, availabilityResult, req.customer);
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to update contact details", error: error.message });
+  }
+};
+
+/**
+ * @desc Capture/edit "When's the event?" — the ACTUAL start/end of the
+ * event itself (Contact page's EventTimingSection.tsx), told to vendors so
+ * they can plan arrival/setup. Deliberately separate from each line's
+ * eventDetails.timeSlot (the slot the vendor was BOOKED for — see
+ * CheckoutSession.js's own comment on why these can legitimately differ).
+ * One set for the whole order, same partial-update ("only fields sent are
+ * touched") convention as updateContactDetails above.
+ */
+export const updateEventTiming = async (req, res) => {
+  try {
+    const resolved = await resolveSession(req, { requireActive: true });
+    if (resolved.error) return res.status(resolved.error.status).json({ status: "FAILED", message: resolved.error.message });
+    const { session } = resolved;
+
+    const { startTime, endTime } = req.body;
+    const nextStart = startTime !== undefined ? startTime : session.eventTiming?.startTime;
+    const nextEnd = endTime !== undefined ? endTime : session.eventTiming?.endTime;
+    if (nextStart && nextEnd && nextEnd <= nextStart) {
+      return res.status(400).json({ status: "FAILED", message: "endTime must be after startTime" });
+    }
+
+    if (startTime !== undefined) session.eventTiming.startTime = startTime;
+    if (endTime !== undefined) session.eventTiming.endTime = endTime;
+    await session.save();
+
+    const availabilityResult = await computeLinesAvailability(session);
+    return respondWithSession(res, 200, session, availabilityResult, req.customer);
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to update event timing", error: error.message });
   }
 };

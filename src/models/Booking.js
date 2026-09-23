@@ -60,6 +60,35 @@ const CustomizeRequestSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// Added 2026-09-17 — Booking previously had NO field for the selected
+// add-ons at all: pricing.addonsAdded only ever kept a rolled-up total
+// (see bookingCreationService.js), and this schema itself never carried the
+// per-addon list forward from the checkout line. That's a bigger gap than
+// just missing color/category — the "Added Add-ons" list on the booking
+// summary page had nothing real to read AT ALL, for any field, not just the
+// ones the frontend flagged. Mirrors CartItem.js's SelectedAddOnSchema
+// exactly (same category/subCategory/color/image fields, same reasoning:
+// snapshot what the customer actually picked, not re-derivable catalog
+// data) — kept as its own copy rather than a shared import since Booking.js
+// and CartItem.js don't otherwise share schema modules. addOnId is a String
+// for the same reason it is in CartItem.js: vendor step2 add-on
+// subdocuments frequently have no _id at all, and the frontend falls back
+// to a synthetic id ("addon-0"). Empty on vendor-created bookings (walk-ins
+// etc.), which never go through a cart.
+const SelectedAddOnSchema = new mongoose.Schema(
+  {
+    addOnId: { type: String, default: null },
+    name: { type: String, required: true },
+    price: { type: Number, required: true, default: 0 },
+    quantity: { type: Number, default: 1, min: 1 },
+    category: { type: String, default: null, trim: true },
+    subCategory: { type: String, default: null, trim: true },
+    color: { type: String, default: null, trim: true },
+    image: { type: String, default: null },
+  },
+  { _id: false }
+);
+
 const BookingSchema = new mongoose.Schema(
   {
     bookingId: {
@@ -129,6 +158,9 @@ const BookingSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    // The vendor's BOOKED slot — "HH:MM" 24h, from the chosen time slot
+    // (getPackageSlots/timeSlot), not the event's own actual timing. See
+    // eventTiming below for that.
     startTime: {
       type: String,
       default: null,
@@ -136,6 +168,17 @@ const BookingSchema = new mongoose.Schema(
     endTime: {
       type: String,
       default: null,
+    },
+    // "When's the event?" (Contact page's EventTimingSection.tsx, added
+    // 2026-09-22) — the ACTUAL start/end of the event itself, told to the
+    // vendor so they can plan arrival/setup. Deliberately separate from
+    // startTime/endTime above (the slot the vendor was BOOKED for) — see
+    // CheckoutSession.js's own comment on why these can legitimately
+    // differ. Carried over from CheckoutSession.eventTiming (one set for
+    // the whole order) at booking-creation time — see bookingCreationService.js.
+    eventTiming: {
+      startTime: { type: String, default: null },
+      endTime: { type: String, default: null },
     },
 
     packageSnapshot: {
@@ -182,6 +225,12 @@ const BookingSchema = new mongoose.Schema(
     // own comment above for why this is separate from changeRequests.
     customizeRequests: [CustomizeRequestSchema],
 
+    // The add-ons actually selected on this booking's line at checkout,
+    // carried through cart -> checkout line -> here — see
+    // SelectedAddOnSchema's own comment above for why this was missing
+    // entirely until now.
+    selectedAddOns: { type: [SelectedAddOnSchema], default: [] },
+
     pricing: {
       type: PricingSchema,
       default: () => ({}),
@@ -209,6 +258,16 @@ const BookingSchema = new mongoose.Schema(
     // on noteAttachments for the full context (this is where that line's
     // attachments end up once a real Booking is created from it).
     noteAttachments: { type: [String], default: [] },
+
+    // Customer convenience fee (platform fee, NOT a vendor charge) frozen
+    // from the checkout quote at booking-creation time — added 2026-09-10.
+    // A real amount the customer paid, so it's stored, not recomputed on
+    // read (the vendor's own attributes / the fee tables could change
+    // later). null when the quote couldn't produce one. See
+    // src/services/convenienceFeeService.js for the calculation.
+    convenienceFee: { type: Number, default: null },
+    convenienceFeeBreakdown: { type: mongoose.Schema.Types.Mixed, default: null },
+
     // Vendor-private note from the "Calendar Note" section
     calendarNote: {
       type: String,

@@ -5,11 +5,13 @@ import Review from "../models/Review.js";
 import Booking from "../models/Booking.js";
 import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
 import { utcDayRange } from "../utils/dateRange.js";
-import { computeAvailability } from "../utils/packageAvailability.js";
+import { computeAvailability, computeSlotsForDate } from "../utils/packageAvailability.js";
+import { checkServiceability, describeVendorAreas, extractPincode, lookupPincode } from "../utils/serviceability.js";
 import { round2 } from "../utils/money.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { buildGroupFilter } from "../utils/packageGroupFilter.js";
-import { getEffectivePackagePrice } from "../utils/packagePrice.js";
+import { getPackageBasePrice, getEffectivePackagePrice } from "../utils/packagePrice.js";
+import { computeLineConvenienceFee } from "../services/convenienceFeeService.js";
 
 /**
  * Public (no-auth), read-only discovery endpoints for the customer side:
@@ -49,20 +51,38 @@ import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 
 /**
  * Backfills a package's own step3_policiesAndCharges.packagePricing.price
- * in-place with getEffectivePackagePrice's fallback — see that util's own
- * comment for why (packagePricing.price is never set for Caterer/Decorator
- * packages, whose vendor-side flows never write it). Run on every package
+ * in-place with getPackageBasePrice — see that util's own comment for why
+ * (packagePricing.price is never set for Decorator packages, whose vendor-
+ * side flow has no input for it at all — the real base price is the sum of
+ * step2_productsAndPricing.setups[].price instead). Run on every package
  * object returned by this controller's read endpoints so the frontend's
  * existing price-reading code (which reads exactly this path — e.g.
- * getPackageDetail.ts's priceOf()) picks up the real, effective price with
- * no frontend change needed, rather than every caller re-deriving it.
+ * getPackageDetail.ts's priceOf()) picks up the real base price with no
+ * frontend change needed, rather than every caller re-deriving it.
+ *
+ * DELIBERATELY base price only, NOT getEffectivePackagePrice (base +
+ * teamAndEquipment combined) — REAL BUG FIXED 2026-09-09, found via a
+ * customer-reported PDP-vs-cart price mismatch: PackageDetailPage.tsx
+ * already adds teamAndEquipmentCharge on top of priceOf(pkg) ITSELF
+ * (packageTotal = selectedVariant.price + teamAndEquipmentCharge +
+ * addonsTotal, its own explicit code comment: "Team & equipment is a real,
+ * separate flat charge on top of the package's base price"). Backfilling
+ * this field with the COMBINED total would double-count teamAndEquipment on
+ * every PDP/browse/popular/group-variants read — confirmed this was
+ * happening (with the two numbers coincidentally equal on the one package
+ * that surfaced the report, masking it). Cart/checkout/wishlist/booking/
+ * enquiry/compare are the opposite case — no separate frontend addition
+ * exists there, so those call sites correctly use the COMBINED
+ * getEffectivePackagePrice instead; see that util's own comment for the
+ * full split.
+ *
  * Mutates a lean object in place; safe since these are throwaway response
  * objects, never re-saved.
  */
 function normalizePackagePricing(pkg) {
   if (!pkg?.step3_policiesAndCharges) return pkg;
   if (!pkg.step3_policiesAndCharges.packagePricing) pkg.step3_policiesAndCharges.packagePricing = {};
-  pkg.step3_policiesAndCharges.packagePricing.price = getEffectivePackagePrice(pkg);
+  pkg.step3_policiesAndCharges.packagePricing.price = getPackageBasePrice(pkg);
   return pkg;
 }
 
@@ -72,7 +92,8 @@ function normalizePackagePricing(pkg) {
  */
 export const browsePackages = async (req, res) => {
   try {
-    const { q, eventCategory, vendorType, city, guests, date, minPrice, maxPrice, sort, page, limit } = req.query;
+    const { q, eventCategory, vendorType, vendorId, city, guests, date, minPrice, maxPrice, sort, page, limit } =
+      req.query;
 
     const query = { packageStatus: "Live" };
 
@@ -108,6 +129,26 @@ export const browsePackages = async (req, res) => {
     }
 
     if (vendorType) query.vendorType = vendorType;
+
+    // Every package belonging to one vendor — the vendor profile page's
+    // "Event Packages" section. Matched against BOTH forms because
+    // Package.vendorId is inconsistently stored (real Vendor._id on newer
+    // documents, the business-facing "VEN..." id string on seeded ones);
+    // see resolveVendor.js. Resolved to the vendor first so either form of
+    // the incoming :vendorId finds packages saved under the other.
+    if (vendorId) {
+      const vendor = await Vendor.findOne(
+        mongoose.Types.ObjectId.isValid(vendorId)
+          ? { $or: [{ _id: vendorId }, { id: vendorId }] }
+          : { id: vendorId }
+      )
+        .select("_id id")
+        .lean();
+
+      // An unknown vendor must match nothing rather than silently widening
+      // to every package on the platform.
+      query.vendorId = vendor ? { $in: [vendor._id, vendor.id].filter(Boolean) } : "__no_such_vendor__";
+    }
 
     if (eventCategory) {
       query["step1_eventAndCrew.eventCategories"] = {
@@ -172,8 +213,9 @@ export const browsePackages = async (req, res) => {
       "vendorId vendorType variantType packageGroupId packageStatus " +
       "step1_eventAndCrew.packageName step1_eventAndCrew.eventCategories " +
       "step1_eventAndCrew.capacity step1_eventAndCrew.duration " +
-      "step2_productsAndPricing.included " +
+      "step2_productsAndPricing.included step2_productsAndPricing.setups " +
       "step3_policiesAndCharges.packagePricing step3_policiesAndCharges.teamAndEquipment " +
+      "step3_policiesAndCharges.overallPriceOfPackage " +
       "step3_policiesAndCharges.gstInclusive step3_policiesAndCharges.gstRatePercent " +
       "step3_policiesAndCharges.guestTiers step4_sampleMedia.media createdAt";
 
@@ -225,7 +267,9 @@ export const browsePackages = async (req, res) => {
     // $unwind) and the plain find()'s un-populated raw vendorId.
     await Promise.all(
       packages.map(async (pkg) => {
-        const alreadyResolved = pkg.vendorId && typeof pkg.vendorId === "object" && pkg.vendorId.businessName;
+        // Sniffed via `.id`, not `.businessName` — see resolveVendorForPackage's
+        // own comment (2026-09-14): businessName no longer reaches this object.
+        const alreadyResolved = pkg.vendorId && typeof pkg.vendorId === "object" && pkg.vendorId.id;
         if (alreadyResolved) return;
         const raw = pkg._rawVendorId ?? pkg.vendorId;
         pkg.vendorId = await resolveVendorForPackage(raw);
@@ -298,8 +342,9 @@ export const getPopularPackages = async (req, res) => {
       "vendorId vendorType variantType packageGroupId packageStatus " +
       "step1_eventAndCrew.packageName step1_eventAndCrew.eventCategories " +
       "step1_eventAndCrew.capacity step1_eventAndCrew.duration " +
-      "step2_productsAndPricing.included " +
+      "step2_productsAndPricing.included step2_productsAndPricing.setups " +
       "step3_policiesAndCharges.packagePricing step3_policiesAndCharges.teamAndEquipment " +
+      "step3_policiesAndCharges.overallPriceOfPackage " +
       "step3_policiesAndCharges.gstInclusive step3_policiesAndCharges.gstRatePercent " +
       "step3_policiesAndCharges.guestTiers step4_sampleMedia.media createdAt";
 
@@ -388,6 +433,20 @@ export const getPackageDetail = async (req, res) => {
       Promise.resolve(computePricingPreview(pkg, { date, guests })),
       getPdpReviewsSection(pkg),
     ]);
+    // Convenience-fee preview — added 2026-09-10. Uses the same
+    // convenienceFeeService the cart/checkout quote uses, so the PDP shows
+    // a realistic number. Needs an event date (`?date=`), so before one is
+    // picked it comes back `configured:false` with a reason. linePrice here
+    // is the pre-GST package price (base + team & equipment), matching what
+    // the cart line subtotal will be for a plain add-to-cart. The resolved
+    // pkg.vendorId already carries teamSize/bookingsPerYear/experience
+    // (PUBLIC_VENDOR_FIELDS whitelist).
+    pricingPreview.convenienceFee = computeLineConvenienceFee({
+      vendorType: pkg.vendorType,
+      vendor: pkg.vendorId,
+      linePrice: getEffectivePackagePrice(pkg),
+      eventDate: date || null,
+    });
 
     return res.status(200).json({
       status: "SUCCESS",
@@ -398,6 +457,101 @@ export const getPackageDetail = async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to fetch package detail", error: error.message });
+  }
+};
+
+/**
+ * @desc Bookable time slots for one package on one date — feeds the PDP's
+ * "Event timing" picker after the customer picks a date. Public, Live
+ * packages only. See computeSlotsForDate (src/utils/packageAvailability.js)
+ * for what the vendor side stores and how each slot's `available` is decided.
+ */
+export const getPackageSlots = async (req, res) => {
+  try {
+    const { packageId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(packageId)) {
+      return res.status(400).json({ status: "FAILED", message: "Invalid packageId" });
+    }
+    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" })
+      // price fields feed the auto-slot length (getEffectivePackagePrice)
+      .select(
+        "vendorId vendorType availabilitySettings availabilityCalendar bookingCapacity " +
+          "step2_productsAndPricing.setups.price step3_policiesAndCharges.packagePricing " +
+          "step3_policiesAndCharges.teamAndEquipment step3_policiesAndCharges.overallPriceOfPackage"
+      )
+      .lean();
+    if (!pkg) {
+      return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
+    }
+    const slots = await computeSlotsForDate(pkg, req.query.date);
+    return res.status(200).json({ status: "SUCCESS", packageId, ...slots });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to fetch slots", error: error.message });
+  }
+};
+
+function pincodeFromQuery(query) {
+  return query.pincode || extractPincode(query.location);
+}
+
+/**
+ * @desc Platform-level serviceability for a location: is this pincode inside
+ * the Delhi NCR area Eventory operates in? No package/vendor involved — for
+ * the location-detect step before/independent of any PDP. Public.
+ */
+export const getLocationServiceability = async (req, res) => {
+  try {
+    const pincode = pincodeFromQuery(req.query);
+    if (!pincode) {
+      return res.status(400).json({ status: "FAILED", message: "A 6-digit pincode is required (send pincode, or a location string containing one)" });
+    }
+    const info = lookupPincode(pincode);
+    return res.status(200).json({
+      status: "SUCCESS",
+      pincode,
+      serviceable: Boolean(info),
+      reason: info ? null : "OUTSIDE_SERVICE_REGION",
+      location: info ? { pincode: info.pincode, city: info.city, district: info.district, state: info.state, areas: info.areas } : null,
+    });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to check serviceability", error: error.message });
+  }
+};
+
+/**
+ * @desc PDP: is THIS package's vendor available at the customer's location,
+ * and if not, where do they serve. See src/utils/serviceability.js for the
+ * two-layer rule (platform region, then the vendor's own service areas).
+ * Public, Live packages only. Always returns the vendor's service areas so
+ * the UI can show "available in: ..." on a miss.
+ */
+export const getPackageServiceability = async (req, res) => {
+  try {
+    const { packageId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(packageId)) {
+      return res.status(400).json({ status: "FAILED", message: "Invalid packageId" });
+    }
+    const pincode = pincodeFromQuery(req.query);
+    if (!pincode) {
+      return res.status(400).json({ status: "FAILED", message: "A 6-digit pincode is required (send pincode, or a location string containing one)" });
+    }
+    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" }).select("vendorId").lean();
+    if (!pkg) {
+      return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
+    }
+    const vendor = await resolveVendorForPackage(pkg.vendorId);
+    const areas = vendor?.serviceAreas || [];
+    const result = checkServiceability(pincode, areas);
+    return res.status(200).json({
+      status: "SUCCESS",
+      packageId,
+      pincode,
+      ...result,
+      vendorAreasDeclared: areas.length > 0,
+      vendorServiceAreas: describeVendorAreas(areas),
+    });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to check serviceability", error: error.message });
   }
 };
 
@@ -481,13 +635,19 @@ function computePricingPreview(pkg, { date, guests }) {
 
   const subtotal = amount != null ? round2(amount) : null;
   const gstInclusive = !!pricing.gstInclusive;
-  const gstRatePercent = pricing.gstRatePercent ?? null;
+  const rawGstRatePercent = pricing.gstRatePercent ?? null;
 
+  // GST rule (explicit, 2026-09-11): shown/added ONLY when the vendor marked
+  // the price NOT inclusive of GST and set a real rate. When gstInclusive is
+  // true, GST is already baked into the price — not a separate charge, so it
+  // must not be shown at all (gstRatePercent/gstAmount both null here, same
+  // as "no GST configured"), not just left out of `total`.
   let gstAmount = null;
   let total = subtotal;
-  if (subtotal != null && gstRatePercent != null) {
-    gstAmount = gstInclusive ? round2(subtotal - subtotal / (1 + gstRatePercent / 100)) : round2((subtotal * gstRatePercent) / 100);
-    total = gstInclusive ? subtotal : round2(subtotal + gstAmount);
+  const gstRatePercent = gstInclusive ? null : rawGstRatePercent;
+  if (!gstInclusive && subtotal != null && rawGstRatePercent != null) {
+    gstAmount = round2((subtotal * rawGstRatePercent) / 100);
+    total = round2(subtotal + gstAmount);
   }
 
   return {
@@ -610,8 +770,9 @@ export const getPackageGroupVariants = async (req, res) => {
       "step1_eventAndCrew.packageName step1_eventAndCrew.eventCategories " +
       "step1_eventAndCrew.capacity step1_eventAndCrew.duration " +
       "step2_productsAndPricing.setups step3_policiesAndCharges.packagePricing " +
-      "step3_policiesAndCharges.teamAndEquipment step3_policiesAndCharges.gstInclusive " +
-      "step3_policiesAndCharges.gstRatePercent step4_sampleMedia.media createdAt";
+      "step3_policiesAndCharges.teamAndEquipment step3_policiesAndCharges.overallPriceOfPackage " +
+      "step3_policiesAndCharges.gstInclusive step3_policiesAndCharges.gstRatePercent " +
+      "step4_sampleMedia.media createdAt";
 
     // buildGroupFilter (src/utils/packageGroupFilter.js) — NOT a plain
     // {packageGroupId} match: real Live package data (in both dev and prod,
@@ -938,8 +1099,30 @@ export const getPackageFilters = async (req, res) => {
     // filters endpoint for every customer. Reported by the frontend team
     // 2026-08-13, confirmed against the actual error/code, fixed by
     // validating shape before it ever reaches the query.
-    const vendorIds = facets.vendorIds.map((v) => v._id).filter((id) => mongoose.Types.ObjectId.isValid(id));
-    const cities = vendorIds.length ? await Vendor.distinct("city", { _id: { $in: vendorIds }, city: { $nin: [null, ""] } }) : [];
+    //
+    // ...but validating the shape is only half of it: keeping ONLY castable
+    // ObjectIds means that on today's real data the list comes out EMPTY,
+    // because per resolveVendor.js every currently-seeded Package.vendorId
+    // holds the business-facing id string rather than the Vendor._id. The
+    // endpoint stopped 500ing and started returning `cities: []` forever
+    // instead, which is why the "Service Localities" filter had nothing to
+    // offer. Matched both ways here, the same fallback resolveVendorForPackage
+    // already encodes.
+    //
+    // Every raw value is also tried against Vendor.id, not just the ones
+    // that failed the ObjectId cast: isValid() returns true for ANY 12-char
+    // string, so a short business id would otherwise be silently routed to
+    // the _id branch alone and match nothing. Overlap between the two
+    // branches is harmless for a distinct().
+    const rawVendorIds = facets.vendorIds.map((v) => v._id).filter(Boolean);
+    const castableIds = rawVendorIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
+    const vendorIdMatches = [];
+    if (castableIds.length) vendorIdMatches.push({ _id: { $in: castableIds } });
+    if (rawVendorIds.length) vendorIdMatches.push({ id: { $in: rawVendorIds.map(String) } });
+
+    const cities = vendorIdMatches.length
+      ? await Vendor.distinct("city", { $or: vendorIdMatches, city: { $nin: [null, ""] } })
+      : [];
 
     return res.status(200).json({
       status: "SUCCESS",
@@ -1006,23 +1189,52 @@ export const getVendorFilters = async (req, res) => {
  */
 export const browseVendors = async (req, res) => {
   try {
-    const { vendorType, eventCategory, city, sort, page, limit } = req.query;
+    const { q, vendorType, eventCategory, city, sort, page, limit } = req.query;
 
     // $ne: true (not a strict isDeactivated: false) — most existing Vendor
     // documents predate this field and simply don't have it set, and an
     // absent field must not be read as "deactivated".
     const query = { isDeactivated: { $ne: true } };
 
-    if (vendorType) query.vendorType = { $regex: `^${escapeRegex(vendorType)}$`, $options: "i" };
+    if (vendorType) query.vendorType = { $regex: vendorTypePattern(vendorType), $options: "i" };
     if (eventCategory) {
       query.eventCategories = { $elemMatch: { $regex: `^${escapeRegex(eventCategory)}$`, $options: "i" } };
     }
+
+    // `city` and `q` are each a set of alternatives, so neither can own the
+    // top-level $or — with both applied, the second would overwrite the
+    // first and silently widen the results. Collected into $and instead, so
+    // they intersect the way the two separate controls imply.
+    const and = [];
+
     if (city) {
-      query.$or = [
-        { city: { $regex: `^${escapeRegex(city)}$`, $options: "i" } },
-        { serviceAreas: { $regex: escapeRegex(city), $options: "i" } },
-      ];
+      and.push({
+        $or: [
+          { city: { $regex: `^${escapeRegex(city)}$`, $options: "i" } },
+          { serviceAreas: { $regex: escapeRegex(city), $options: "i" } },
+        ],
+      });
     }
+
+    // Free-text search over the fields a customer would actually type into
+    // the vendor listing's search box — who the vendor is, what they do and
+    // where they work. Substring (not anchored) so "deco" finds
+    // "Decorator", matching how the packages search behaves.
+    if (q) {
+      const rx = { $regex: escapeRegex(q), $options: "i" };
+      and.push({
+        $or: [
+          { pocName: rx },
+          { description: rx },
+          { vendorType: rx },
+          { city: rx },
+          { serviceAreas: rx },
+          { eventCategories: rx },
+        ],
+      });
+    }
+
+    if (and.length) query.$and = and;
 
     const sortMap = {
       rating: { rating: -1, reviewsCount: -1 },
@@ -1077,6 +1289,41 @@ function setDeep(obj, path, value) {
     obj[head] = typeof obj[head] === "object" ? obj[head] : {};
     setDeep(obj[head], rest, value);
   }
+}
+
+// Vendor.vendorType is NOT stored as the clean enum that Package.vendorType
+// uses. Real values include the spaced spelling ("DJ Artist"), the
+// human-readable trade name ("Photography and Videography" where the enum
+// says "PAV"), and comma-joined lists for vendors who do several things
+// ("Caterer, Decorator, DJ Artist, ..."). An anchored exact match returned
+// nothing for four of the six category tabs even though vendors of those
+// types exist.
+//
+// So the match is built as a tolerant, UNANCHORED pattern: word boundaries
+// may be spaced or not, known aliases are folded in, and because it is
+// unanchored it also finds the type inside a comma-joined list — which is
+// correct, a vendor listing "Caterer, Decorator" genuinely belongs under
+// both tabs.
+const VENDOR_TYPE_ALIASES = {
+  // The enum is an abbreviation; vendors type out the trade.
+  PAV: ["PAV", "Photography and Videography", "Photographer"],
+};
+
+function vendorTypePattern(vendorType) {
+  const aliases = VENDOR_TYPE_ALIASES[vendorType] || [vendorType];
+  return aliases
+    .map((alias) =>
+      alias
+        // "DJArtist" -> "DJ Artist", "MakeupArtist" -> "Makeup Artist"
+        .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+        .replace(/([a-z\d])([A-Z])/g, "$1 $2")
+        .split(/\s+/)
+        .filter(Boolean)
+        .map(escapeRegex)
+        // Whitespace between words is optional, so both spellings match.
+        .join("\\s*")
+    )
+    .join("|");
 }
 
 // Escapes regex metacharacters in user-supplied filter strings before they're

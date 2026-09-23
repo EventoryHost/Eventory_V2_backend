@@ -4,7 +4,7 @@ import Cart from "../models/Cart.js";
 import CartItem from "../models/CartItem.js";
 import Package from "../models/Package.js";
 import WishlistItem from "../models/WishlistItem.js";
-import { computeAvailability } from "../utils/packageAvailability.js";
+import { computeAvailability, validateTimeSlotSelection } from "../utils/packageAvailability.js";
 import { round2 } from "../utils/money.js";
 import { computeCartQuote } from "../services/cartPricingService.js";
 import { resolveVendorRefId } from "../utils/resolveVendor.js";
@@ -53,9 +53,16 @@ async function getOrCreateCart(req) {
 // fetched teamAndEquipment in the first place — the fallback had nothing to
 // fall back to. addCartItem's own package fetch (no restricted .select())
 // was never affected, only this narrower revalidation path.
+// step2_productsAndPricing.setups — added 2026-09-09: getEffectivePackagePrice
+// was rewritten to price a Decorator package correctly (setups[].price
+// SUMMED as the base price, teamAndEquipment.price ADDED on top as a real
+// separate charge — not a fallback substitute for one another, see
+// packagePrice.js's own comment for the full story/real bug this fixes).
+// Without this field the sum has nothing to sum.
 const PACKAGE_REVALIDATION_FIELDS =
-  "packageStatus vendorId step1_eventAndCrew.capacity step3_policiesAndCharges.packagePricing " +
-  "step3_policiesAndCharges.teamAndEquipment availabilityCalendar availabilitySettings bookingCapacity";
+  "packageStatus vendorId step1_eventAndCrew.capacity step2_productsAndPricing.setups " +
+  "step3_policiesAndCharges.packagePricing step3_policiesAndCharges.teamAndEquipment " +
+  "availabilityCalendar availabilitySettings bookingCapacity";
 
 // Builds the full cart payload: items grouped by vendor, per-item
 // revalidation (still-available / price-changed / live availability for the
@@ -89,6 +96,7 @@ async function buildCartPayload(cart) {
         availability = await computeAvailability(pkg, {
           date: item.eventDetails?.date || undefined,
           guests: item.eventDetails?.guestCount || undefined,
+          timeSlot: item.eventDetails?.timeSlot || undefined,
         });
       }
 
@@ -352,6 +360,21 @@ export const updateCartItem = async (req, res) => {
       selectedForCheckout,
     } = req.body;
     const { item, cart } = resolved;
+
+    // Re-validate the slot only when the date or slot actually changed, so
+    // resending an unchanged (possibly legacy-format) slot never blocks an
+    // unrelated edit like adding an add-on.
+    const nextDate = date !== undefined ? date : item.eventDetails.date;
+    const nextSlot = timeSlot !== undefined ? timeSlot : item.eventDetails.timeSlot;
+    const dateChanged = date !== undefined && String(new Date(date).toISOString().slice(0, 10)) !== String(item.eventDetails.date ? new Date(item.eventDetails.date).toISOString().slice(0, 10) : "");
+    const slotChanged = timeSlot !== undefined && timeSlot !== item.eventDetails.timeSlot;
+    if (nextSlot && nextDate && (dateChanged || slotChanged)) {
+      const livePkg = await Package.findOne({ _id: item.packageId, packageStatus: "Live" }).lean();
+      if (livePkg) {
+        const slotCheck = await validateTimeSlotSelection(livePkg, nextDate, nextSlot);
+        if (!slotCheck.ok) return res.status(400).json({ status: "FAILED", message: slotCheck.message });
+      }
+    }
 
     if (eventType !== undefined) item.eventDetails.eventType = eventType;
     if (guests !== undefined) item.eventDetails.guestCount = guests;

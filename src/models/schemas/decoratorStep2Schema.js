@@ -71,6 +71,11 @@ const decoratorStep2Schema = new mongoose.Schema({
   ],
   included: [{ type: String }],
   notIncluded: [{ type: String }],
+  // Setup time and crew breakdown. A decorator running as a venue's in-house
+  // service has no Step 1 of its own, so the service body carries them.
+  setupDurationMinutes: { type: Number },
+  supervisors: { type: Number },
+  workers: { type: Number },
 }, { _id: false });
 
 export default decoratorStep2Schema;

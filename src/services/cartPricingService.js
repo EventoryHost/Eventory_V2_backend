@@ -1,7 +1,9 @@
 import CartItem from "../models/CartItem.js";
 import Package from "../models/Package.js";
+import Vendor from "../models/Vendor.js";
 import { round2 } from "../utils/money.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
+import { computeLineConvenienceFee } from "./convenienceFeeService.js";
 
 /**
  * Cart pricing/due-now calculation — Phase 3 Step 14. This is the
@@ -26,18 +28,20 @@ import { getEffectivePackagePrice } from "../utils/packagePrice.js";
  * see info.txt.
  */
 
-// Convenience fee % is a genuine open product/finance decision (final BRD
-// §21 Q1/Q2 — token %, and which fee presentation ships, are both still
-// unresolved even by the client's own document) — NOT hardcoded here to
-// 3% (or any other number) as if it were settled. Read from an env var so
-// it's at least externally adjustable without a code change; if unset, the
-// fee is computed as 0 and explicitly flagged `convenienceFeeConfigured:
-// false` rather than silently charging a number nobody approved.
-function getConvenienceFeePercent() {
-  const raw = process.env.CONVENIENCE_FEE_PERCENT;
-  if (raw === undefined || raw === "") return null;
-  const parsed = Number(raw);
-  return isNaN(parsed) ? null : parsed;
+// Convenience fee — REPLACED 2026-09-10. The old version was a single flat
+// env-var percentage applied to the whole order subtotal, defaulting to 0
+// ("unconfigured") because the % was an open product decision. The user has
+// now supplied the real model (Eventory_S3_Data_*.pdf, 3 lookup tables) —
+// it's a PER-VENDOR-LINE fee computed from the vendor's score -> category,
+// the line's price slab, and days-to-event. See convenienceFeeService.js
+// for the tables, the resolvers, and the one arithmetic assumption the
+// tables don't cover (confirmed by the user: baseFee + price*pct%*weight).
+//
+// Master kill-switch: set CONVENIENCE_FEE_DISABLED=true to suppress the fee
+// everywhere (computed as 0, flagged) without a code change — a dark-launch
+// / rollback hatch, since this is real money on a freshly-built model.
+function convenienceFeeDisabled() {
+  return String(process.env.CONVENIENCE_FEE_DISABLED || "").toLowerCase() === "true";
 }
 
 // Milestone dueDays is a free-text field on the vendor's Package
@@ -54,15 +58,20 @@ function tryComputeMilestoneDueDate(eventDate, dueDaysRaw) {
   return due;
 }
 
+// GST rule (explicit, 2026-09-11): show/add GST ONLY when the vendor marked
+// the package price as NOT inclusive of GST (gstInclusive:false) and set a
+// real rate. When gstInclusive:true, GST is already baked into the price the
+// vendor entered — it is NOT a separate charge, so it must not be shown or
+// added at all: gstRatePercent/gstAmount both come back null, same as the
+// "vendor never configured GST" case, rather than surfacing the
+// tax-portion-of-an-inclusive-price figure this function used to compute.
 function computeGst(subtotal, pricing) {
   const gstInclusive = !!pricing?.gstInclusive;
   const gstRatePercent = pricing?.gstRatePercent ?? null;
-  if (subtotal == null || gstRatePercent == null) {
-    return { gstInclusive, gstRatePercent, gstAmount: null };
+  if (gstInclusive || subtotal == null || gstRatePercent == null) {
+    return { gstInclusive, gstRatePercent: gstInclusive ? null : gstRatePercent, gstAmount: null };
   }
-  const gstAmount = gstInclusive
-    ? round2(subtotal - subtotal / (1 + gstRatePercent / 100))
-    : round2((subtotal * gstRatePercent) / 100);
+  const gstAmount = round2((subtotal * gstRatePercent) / 100);
   return { gstInclusive, gstRatePercent, gstAmount };
 }
 
@@ -129,6 +138,20 @@ export async function computeQuoteForLines(lines, discount = 0) {
   const packages = await Package.find({ _id: { $in: packageIds } }).lean();
   const packageById = new Map(packages.map((p) => [String(p._id), p]));
 
+  // Vendors — needed for the convenience-fee score (bookingsPerYear /
+  // experience / teamSize). line.vendorId is the resolved real Vendor._id
+  // (see customerCheckoutController/customerCartController — always run
+  // through resolveVendorRefId before being stored on a line/item), so a
+  // direct _id lookup is safe here.
+  const vendorIds = [...new Set(lines.map((l) => String(l.vendorId)).filter(Boolean))];
+  const vendors = vendorIds.length
+    ? await Vendor.find({ _id: { $in: vendorIds } }).select("bookingsPerYear experience teamSize").lean()
+    : [];
+  const vendorById = new Map(vendors.map((v) => [String(v._id), v]));
+
+  const feeDisabled = convenienceFeeDisabled();
+  const now = new Date();
+
   const lineQuotes = lines.map((item) => {
     const pkg = packageById.get(String(item.packageId));
     if (!pkg || pkg.packageStatus !== "Live") {
@@ -142,11 +165,13 @@ export async function computeQuoteForLines(lines, discount = 0) {
     }
 
     // getEffectivePackagePrice (not a plain ?? 0) — see that util's own
-    // comment: packagePricing.price is never actually set for Caterer/
-    // Decorator packages (their vendor-side flows have no input for it),
-    // which was silently pricing every one of them at ₹0 in this quote
-    // before this fix. Found 2026-09-02 while fixing a PDP price-display
-    // report — this is the real, money-critical instance of the same bug.
+    // comment (rewritten 2026-09-09 after a real customer-reported PDP-vs-
+    // cart price mismatch): this is base price (packagePricing.price, or
+    // summed setups[].price for Decorator) PLUS teamAndEquipment.price as a
+    // real, separate, ALWAYS-additive charge — not a fallback substitute
+    // for one another. Was silently dropping teamAndEquipment.price
+    // whenever packagePricing.price was already set (most packages outside
+    // Decorator/Caterer), undercharging every quote with one configured.
     const currentPrice = getEffectivePackagePrice(pkg);
     const quantity = item.quantity || 1;
     const addonsTotal = (item.selectedAddOns || []).reduce((sum, a) => sum + a.price * a.quantity, 0);
@@ -155,7 +180,9 @@ export async function computeQuoteForLines(lines, discount = 0) {
     const lineSubtotal = round2(packagePriceTotal + addonsTotal + chargeableItemsTotal);
 
     const { gstInclusive, gstRatePercent, gstAmount } = computeGst(lineSubtotal, pkg.step3_policiesAndCharges);
-    const lineTotalInclGst = gstAmount == null ? lineSubtotal : gstInclusive ? lineSubtotal : round2(lineSubtotal + gstAmount);
+    // gstAmount is null both when GST isn't configured AND when it's
+    // inclusive (see computeGst) — either way, nothing to add on top.
+    const lineTotalInclGst = gstAmount == null ? lineSubtotal : round2(lineSubtotal + gstAmount);
 
     const token = computeLineToken(lineTotalInclGst, pkg);
     // Same base as token (lineTotalInclGst, tax-INCLUDED), not lineSubtotal
@@ -169,6 +196,21 @@ export async function computeQuoteForLines(lines, discount = 0) {
     // to 100% of the actual tax-inclusive amount owed, consistent with
     // what's actually charged.
     const milestones = computeLineMilestones(lineTotalInclGst, pkg, item.eventDetails?.date);
+
+    // Convenience fee — per vendor line. linePrice = the pre-GST subtotal
+    // (assumption #1 in convenienceFeeService.js). `configured:false` when
+    // the vendor type is unknown, the line has no event date yet, or the
+    // master kill-switch is on — in every such case fee is null and adds 0
+    // to the total, same honest pattern the old flat-% version used.
+    const convenience = feeDisabled
+      ? { configured: false, fee: null, reason: "Convenience fee is disabled (CONVENIENCE_FEE_DISABLED)", breakdown: null }
+      : computeLineConvenienceFee({
+          vendorType: pkg.vendorType,
+          vendor: vendorById.get(String(item.vendorId)),
+          linePrice: lineSubtotal,
+          eventDate: item.eventDetails?.date,
+          now,
+        });
 
     return {
       lineId: item.lineId,
@@ -188,6 +230,10 @@ export async function computeQuoteForLines(lines, discount = 0) {
       lineTotalInclGst,
       token,
       milestones,
+      convenienceFee: convenience.fee,
+      convenienceFeeConfigured: convenience.configured,
+      convenienceFeeReason: convenience.reason,
+      convenienceFeeBreakdown: convenience.breakdown,
     };
   });
 
@@ -196,9 +242,17 @@ export async function computeQuoteForLines(lines, discount = 0) {
   const subtotal = round2(availableLines.reduce((sum, l) => sum + l.lineSubtotal, 0));
   const gstTotal = round2(availableLines.reduce((sum, l) => sum + (l.gstAmount || 0), 0));
 
-  const convenienceFeePercent = getConvenienceFeePercent();
-  const convenienceFeeConfigured = convenienceFeePercent != null;
-  const convenienceFee = convenienceFeeConfigured ? round2((subtotal * convenienceFeePercent) / 100) : 0;
+  // Order-level convenience fee = sum of every available line's own fee.
+  // A line whose fee is null (no event date, unknown vendor type, kill-
+  // switch) contributes 0 — same "don't charge what can't be computed"
+  // stance as the old flat-% version. convenienceFeeComplete says whether
+  // EVERY available line produced a real fee, so the frontend can show
+  // "₹X (+ more once you add event dates)" rather than a falsely-final
+  // number.
+  const convenienceFee = round2(availableLines.reduce((sum, l) => sum + (l.convenienceFee || 0), 0));
+  const convenienceFeeComplete =
+    availableLines.length > 0 && availableLines.every((l) => l.convenienceFeeConfigured);
+  const convenienceFeeConfigured = convenienceFee > 0 || convenienceFeeComplete;
 
   const grandTotal = round2(Math.max(0, subtotal + gstTotal + convenienceFee - discount));
 
@@ -211,9 +265,9 @@ export async function computeQuoteForLines(lines, discount = 0) {
     lines: lineQuotes,
     subtotal,
     gstTotal,
-    convenienceFeePercent,
-    convenienceFeeConfigured,
     convenienceFee,
+    convenienceFeeConfigured,
+    convenienceFeeComplete,
     discount,
     grandTotal,
     tokenAmountTotal: allTokensConfigured ? tokenAmountTotal : null,
