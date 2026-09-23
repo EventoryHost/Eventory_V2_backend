@@ -81,8 +81,11 @@ function mapMilestonesToBookingSchema(quoteMilestones, tokenAmountPaid, paidAt, 
 // "Blocked" entry (a vendor's manual block takes precedence).
 async function reserveSlot(packageId, eventDate) {
   if (!eventDate) return;
-  const pkg = await Package.findById(packageId).select("availabilityCalendar");
+  const pkg = await Package.findById(packageId).select("availabilityCalendar availabilitySettings.workMode");
   if (!pkg) return;
+  // TIME_SLOTS packages are booked per slot (see computeSlotsForDate) — one
+  // booking must not mark the whole day Booked and shut out the other slots.
+  if (pkg.availabilitySettings?.workMode === "TIME_SLOTS") return;
 
   const { start, end } = utcDayRange(eventDate);
   const existing = (pkg.availabilityCalendar || []).find((e) => {
@@ -156,6 +159,13 @@ export async function createBookingsFromCheckoutSession(session, payment, option
       eventDate: line.eventDetails?.date,
       guestRange: { min: line.eventDetails?.guestCount || null, max: line.eventDetails?.guestCount || null },
       location: line.eventDetails?.location || null,
+      // Chosen slot ("HH:MM - HH:MM", the `value` from GET
+      // /customer/packages/:id/slots) — persisted so the slots endpoint can
+      // mark that slot taken for later customers (added 2026-09-19).
+      ...(() => {
+        const m = String(line.eventDetails?.timeSlot || "").match(/^\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\s*$/);
+        return m ? { startTime: m[1], endTime: m[2] } : {};
+      })(),
       packageSnapshot: {
         name: line.packageSnapshot?.name,
         price: line.packageSnapshot?.price,
@@ -181,9 +191,12 @@ export async function createBookingsFromCheckoutSession(session, payment, option
       // checkout line (which carried them from the cart item) — see
       // Booking.js's CustomizeRequestSchema comment for the full chain.
       customizeRequests: line.customizeRequests || [],
-      // The add-on lines themselves, not just their total (which goes into
-      // pricing.addonsAdded above) — the customer's booking detail screen
-      // lists each one, and the package they came from may be edited later.
+      // Same chain (Cart -> CheckoutSession line -> here) for the selected
+      // add-ons themselves — previously dropped entirely at this step (see
+      // Booking.js's SelectedAddOnSchema comment, added 2026-09-17). Not
+      // just their total (which goes into pricing.addonsAdded above): the
+      // customer's booking detail screen lists each one, and the package
+      // they came from may be edited later.
       selectedAddOns: line.selectedAddOns || [],
       notes: line.specialRequest || null,
       // "Notes for vendor" image attachments — see CartItem.js's own
@@ -196,6 +209,14 @@ export async function createBookingsFromCheckoutSession(session, payment, option
       // the quote couldn't compute one (no event date at checkout, etc.).
       convenienceFee: quoteLine.convenienceFee ?? null,
       convenienceFeeBreakdown: quoteLine.convenienceFeeBreakdown ?? null,
+      // The actual event timing from the Contact page — ONE value for the
+      // whole checkout session, carried onto every booking it produces (see
+      // Booking.js's own eventTiming comment for why this is separate from
+      // startTime/endTime above).
+      eventTiming: {
+        startTime: session.eventTiming?.startTime || null,
+        endTime: session.eventTiming?.endTime || null,
+      },
     });
     // Vendor's own utility (utils/pricingBreakdown.js) — runs first so the
     // "Pricing Breakdown" card's own fields (subtotal/tax/etc.) are
@@ -219,7 +240,9 @@ export async function createBookingsFromCheckoutSession(session, payment, option
     // Best-effort — a slot-reservation failure must not roll back a
     // successful Booking (the payment already went through).
     try {
-      await reserveSlot(line.packageId, line.eventDetails?.date);
+      // A booking with a chosen slot is tracked per slot (Booking.startTime/
+      // endTime), so it must not also mark the whole day Booked.
+      if (!booking.startTime) await reserveSlot(line.packageId, line.eventDetails?.date);
     } catch (err) {
       console.error(`[bookingCreationService] Failed to reserve slot for package ${line.packageId}:`, err.message);
     }

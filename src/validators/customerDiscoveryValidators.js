@@ -45,6 +45,18 @@ export const popularPackagesQuerySchema = z.object({
   limit: z.coerce.number().int().min(1).max(30).default(6),
 });
 
+// PDP "Event timing" picker — the date is required (slots are per date).
+export const packageSlotsQuerySchema = z.object({
+  date: z.coerce.date(),
+});
+
+// Location serviceability — either an explicit pincode or a free-text
+// location string (the PDP's fetched location) that contains one.
+export const serviceabilityQuerySchema = z.object({
+  pincode: z.string().trim().regex(/^\d{6}$/, "pincode must be 6 digits").optional(),
+  location: z.string().trim().min(1).max(500).optional(),
+});
+
 export const browseVendorsQuerySchema = z.object({
   // Free-text search over pocName/description/vendorType/city/serviceAreas/
   // eventCategories — the vendor listing's search box.

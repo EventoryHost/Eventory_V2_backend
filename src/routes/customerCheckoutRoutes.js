@@ -6,6 +6,7 @@ import {
   removeCheckoutLine,
   cancelCheckoutSession,
   updateContactDetails,
+  updateEventTiming,
 } from "../controllers/customerCheckoutController.js";
 import { protectCustomer } from "../middlewares/customerAuth.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
@@ -13,6 +14,7 @@ import {
   createCheckoutSessionSchema,
   updateCheckoutLineSchema,
   updateContactDetailsSchema,
+  updateEventTimingSchema,
 } from "../validators/customerCheckoutValidators.js";
 
 const router = express.Router();
@@ -139,6 +141,39 @@ router.delete("/session/:sessionId", cancelCheckoutSession);
  *       410: { description: Session is no longer Active }
  */
 router.patch("/session/:sessionId/contact", validateRequest(updateContactDetailsSchema), updateContactDetails);
+
+/**
+ * @swagger
+ * /api/customer/checkout/session/{sessionId}/event-timing:
+ *   patch:
+ *     summary: Capture/edit "When's the event?" — the actual event start/end time
+ *     description: |
+ *       One set for the whole order (not per line) — told to vendors so they
+ *       can plan arrival/setup. Deliberately separate from each line's booked
+ *       timeSlot. Only fields sent are touched; when both startTime and
+ *       endTime end up set, endTime must be after startTime.
+ *     tags: [Customer Checkout]
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               startTime: { type: string, description: "HH:MM 24h" }
+ *               endTime: { type: string, description: "HH:MM 24h" }
+ *     responses:
+ *       200: { description: Updated, full session + validation returned }
+ *       400: { description: Invalid shape, no field provided, or endTime not after startTime }
+ *       404: { description: Session not found }
+ *       410: { description: Session is no longer Active }
+ */
+router.patch("/session/:sessionId/event-timing", validateRequest(updateEventTimingSchema), updateEventTiming);
 
 /**
  * @swagger
