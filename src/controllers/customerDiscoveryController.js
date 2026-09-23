@@ -902,7 +902,27 @@ export const getVendorReviews = async (req, res) => {
     }
 
     const { minRating, sort, page, limit } = req.query;
-    const match = { vendorId: String(vendorId), status: "Published" };
+
+    // Review.vendorId is a loose String ref, so it may hold either the
+    // Vendor's Mongo _id or its business-facing "VEN..." id — the same
+    // ambiguity as WishlistItem.vendorId and Package.vendorId. Matching
+    // only the form the caller happened to pass would return an empty
+    // review list for a vendor who genuinely has reviews, which reads as
+    // "reviews are broken" rather than "no reviews yet". Resolved to the
+    // vendor first, then matched against both forms.
+    const vendor = await Vendor.findOne(
+      mongoose.Types.ObjectId.isValid(vendorId)
+        ? { $or: [{ _id: vendorId }, { id: vendorId }] }
+        : { id: vendorId }
+    )
+      .select("_id id")
+      .lean();
+
+    const vendorIdForms = vendor
+      ? [String(vendor._id), vendor.id].filter(Boolean)
+      : [String(vendorId)];
+
+    const match = { vendorId: { $in: vendorIdForms }, status: "Published" };
     if (minRating) match.rating = { $gte: minRating };
 
     const sortMap = {
