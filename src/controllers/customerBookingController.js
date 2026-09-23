@@ -44,9 +44,15 @@ const STATUS_BY_TAB = {
   cancelled: TERMINAL_STATUSES.filter((s) => s !== "Completed"),
 };
 
+// changeRequests/customizeRequests are included so the customer's booking
+// timeline can tell "the vendor said yes" from "the vendor said yes but
+// hasn't decided the changes I asked for" — the confirmation step must not
+// read as complete while either list still holds a Pending entry. Both are
+// the customer's own requests plus the vendor's decision on each, so
+// nothing vendor-private is exposed by carrying them here.
 const BOOKING_LIST_FIELDS =
   "bookingId vendorId packageId eventType eventDate location packageSnapshot paymentType status " +
-  "totalAmount totalReceived createdAt";
+  "totalAmount totalReceived createdAt changeRequests customizeRequests confirmedAt";
 
 function escapeRegex(str) {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
