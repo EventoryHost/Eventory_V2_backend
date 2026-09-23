@@ -8,7 +8,9 @@ import {
   getPackageDetail,
   getPackageGroupVariants,
   getPackageReviews,
+  getPackageSlots,
   getPopularPackages,
+  getServiceableCities,
   getVendorDetail,
   getVendorReviews,
 } from "../controllers/customerDiscoveryController.js";
@@ -19,6 +21,7 @@ import {
   browseVendorsQuerySchema,
   featuredReviewsQuerySchema,
   packageDetailQuerySchema,
+  packageSlotsQuerySchema,
   popularPackagesQuerySchema,
   reviewsQuerySchema,
 } from "../validators/customerDiscoveryValidators.js";
@@ -135,6 +138,22 @@ router.get("/reviews/featured", publicBrowseLimiter, validateRequest(featuredRev
 
 /**
  * @swagger
+ * /api/customer/location/cities:
+ *   get:
+ *     summary: Serviceable cities/districts (navbar location picker)
+ *     description: |
+ *       Public, read-only. Distinct city/district labels Eventory operates
+ *       in today, derived from the same serviceablePincodes.json dataset the
+ *       PDP's location-serviceability check reads — not a hardcoded list, so
+ *       it can never drift from what checkServiceability actually accepts.
+ *     tags: [Customer Discovery]
+ *     responses:
+ *       200: { description: Sorted list of city/district labels }
+ */
+router.get("/location/cities", publicBrowseLimiter, getServiceableCities);
+
+/**
+ * @swagger
  * /api/customer/packages/popular:
  *   get:
  *     summary: Landing page's "Packages Often Booked by our Customers" carousel
@@ -234,6 +253,34 @@ router.get(
   validateRequest(packageDetailQuerySchema, "query"),
   getPackageDetail
 );
+
+/**
+ * @swagger
+ * /api/customer/packages/{packageId}/slots:
+ *   get:
+ *     summary: Bookable time slots for a package on a given date
+ *     description: |
+ *       Public, read-only, Live packages only. Returns workMode (FULL_DAY or
+ *       TIME_SLOTS), whether the day is bookable at all (dayAvailable +
+ *       reason), and for TIME_SLOTS packages the vendor's declared slots
+ *       with a per-slot `available` flag. `value` ("HH:MM - HH:MM", 24h) is
+ *       the format to send back as the cart line's timeSlot.
+ *     tags: [Customer Discovery]
+ *     parameters:
+ *       - in: path
+ *         name: packageId
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: date
+ *         required: true
+ *         schema: { type: string, format: date }
+ *     responses:
+ *       200: { description: Slots for the date }
+ *       400: { description: Invalid packageId or missing/invalid date }
+ *       404: { description: Package not found or not Live }
+ */
+router.get("/packages/:packageId/slots", publicBrowseLimiter, validateRequest(packageSlotsQuerySchema, "query"), getPackageSlots);
 
 /**
  * @swagger

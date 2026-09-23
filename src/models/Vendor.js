@@ -147,6 +147,22 @@ const VendorSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  // How many customers have this vendor on a wishlist — the sum of direct
+  // "Vendor" saves AND "Package" saves of any package this vendor owns (a
+  // customer who saves three of this vendor's packages counts three times,
+  // which is what the "N+ Wishlisted" stat on the vendor card means).
+  //
+  // Denormalized on purpose, same pattern as rating/reviewsCount above: the
+  // vendor listing reads it through PUBLIC_VENDOR_FIELDS on the already-
+  // populated vendorId of every browse row, so the stat costs zero extra
+  // queries. Maintained by $inc in customerWishlistController.js — see
+  // src/utils/wishlistCount.js, and recomputeVendorWishlistCounts.mjs for
+  // the backfill/reconciliation pass that repairs the drift any $inc
+  // counter eventually accumulates.
+  wishlistCount: {
+    type: Number,
+    default: 0,
+  },
   assignedEmId: {
     type: String,
     default: null,

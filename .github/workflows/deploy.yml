@@ -58,17 +58,37 @@ jobs:
           chmod 600 ~/.ssh/ec2_key
           ssh-keyscan -H "${{ secrets.EC2_HOST }}" >> ~/.ssh/known_hosts
 
-      - name: Deploy
+      - name: Deploy & Auto-Sync .env
         shell: bash
+        env:
+          V2_DEV_ENV: ${{ secrets.V2_DEV_ENV }}
+          V2_PROD_ENV: ${{ secrets.V2_PROD_ENV }}
         run: |
-          ssh -i ~/.ssh/ec2_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" << 'EOF'
+          BRANCH="${{ steps.target.outputs.branch }}"
+          APP_NAME="${{ steps.target.outputs.app_name }}"
+          APP_DIR="${{ steps.target.outputs.app_dir }}"
+          PORT="${{ steps.target.outputs.port }}"
+          NODE_ENV="${{ steps.target.outputs.node_env }}"
+
+          # Pick the environment secret based on the deployment target
+          if [ "$BRANCH" = "prod" ]; then
+            RAW_ENV="$V2_PROD_ENV"
+          else
+            RAW_ENV="$V2_DEV_ENV"
+          fi
+
+          # Base64 encode to safely transmit special chars and RSA keys over SSH
+          B64_ENV=$(printf '%s' "$RAW_ENV" | base64 -w 0)
+
+          ssh -i ~/.ssh/ec2_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
+            "APP_NAME='$APP_NAME' \
+             APP_DIR='$APP_DIR' \
+             PORT='$PORT' \
+             NODE_ENV='$NODE_ENV' \
+             BRANCH='$BRANCH' \
+             B64_ENV='$B64_ENV'" bash -s << 'EOF'
             set -e
 
-            APP_NAME="${{ steps.target.outputs.app_name }}"
-            APP_DIR="${{ steps.target.outputs.app_dir }}"
-            PORT="${{ steps.target.outputs.port }}"
-            NODE_ENV="${{ steps.target.outputs.node_env }}"
-            BRANCH="${{ steps.target.outputs.branch }}"
             REPO_URL="https://github.com/EventoryHost/Eventory_V2_backend.git"
 
             if [ ! -d "$APP_DIR/.git" ]; then
@@ -80,22 +100,20 @@ jobs:
             git reset --hard "origin/$BRANCH"
             npm ci
 
-            if [ ! -f ".env" ]; then
-              echo "Missing $APP_DIR/.env"
+            # Write .env from GitHub Secret if provided
+            if [ -n "$B64_ENV" ]; then
+              echo "$B64_ENV" | base64 -d > .env
+              echo "Synced .env from GitHub Secrets."
+            elif [ ! -f ".env" ]; then
+              echo "Error: Missing $APP_DIR/.env on server and no GitHub Secret found"
               exit 1
             fi
 
-            if grep -q '^PORT=' .env; then
-              sed -i "s/^PORT=.*/PORT=$PORT/" .env
-            else
-              printf '\nPORT=%s\n' "$PORT" >> .env
-            fi
-
-            if grep -q '^NODE_ENV=' .env; then
-              sed -i "s/^NODE_ENV=.*/NODE_ENV=$NODE_ENV/" .env
-            else
-              printf 'NODE_ENV=%s\n' "$NODE_ENV" >> .env
-            fi
+            # Guarantee PORT and NODE_ENV match deployment target
+            sed -i "/^PORT=/d" .env 2>/dev/null || true
+            printf '\nPORT=%s\n' "$PORT" >> .env
+            sed -i "/^NODE_ENV=/d" .env 2>/dev/null || true
+            printf 'NODE_ENV=%s\n' "$NODE_ENV" >> .env
 
             pm2 delete "$APP_NAME" >/dev/null 2>&1 || true
             pm2 start server.js --name "$APP_NAME" --update-env

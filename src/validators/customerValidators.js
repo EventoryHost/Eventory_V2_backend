@@ -77,10 +77,13 @@ const noDataUri = (val) => typeof val !== "string" || !val.startsWith("data:");
 
 const addressSchema = z.object({
   label: z.string().trim().max(50).optional(),
+  fullName: z.string().trim().max(120).optional(),
+  phone: z.string().trim().max(20).optional(),
   line1: z.string().trim().max(200).optional(),
   line2: z.string().trim().max(200).optional(),
   city: z.string().trim().max(100).optional(),
   state: z.string().trim().max(100).optional(),
+  landmark: z.string().trim().max(200).optional(),
   pincode: z.string().trim().max(12).optional(),
   country: z.string().trim().max(100).optional(),
   mapLink: z.string().trim().url("mapLink must be a valid URL").optional(),
@@ -123,3 +126,8 @@ export const updateCustomerSchema = z
     preferences: preferencesSchema.optional(),
   })
   .strict("Unrecognized field in profile update"); // extra hardening on top of the controller's own field whitelist
+
+// POST /api/customer/viewed — records that the customer opened a package.
+export const recordViewedItemSchema = z.object({
+  packageId: z.string().trim().min(1, "packageId is required"),
+});

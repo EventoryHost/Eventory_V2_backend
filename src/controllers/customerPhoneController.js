@@ -105,7 +105,7 @@ export const sendPhoneOtp = async (req, res, next) => {
 
 // POST /api/customer/phone/verify-otp
 export const verifyPhoneOtp = async (req, res, next) => {
-  const { mobile, code, session } = req.body;
+  const { mobile, code, session, name } = req.body;
 
   if (!mobile || !MOBILE_REGEX.test(mobile) || !code || !session) {
     return res.status(400).json({ success: false, message: "mobile, code, and session are required" });
@@ -150,7 +150,10 @@ export const verifyPhoneOtp = async (req, res, next) => {
       }
       // Already had this exact phone verified before — OTP re-confirms
       // identity, doesn't need to flip anything that isn't already true,
-      // but recomputed defensively in case it was somehow false.
+      // but recomputed defensively in case it was somehow false. A `name`
+      // sent on a login (rather than signup) call is never applied here —
+      // only used to name a BRAND NEW account below — so a returning
+      // customer's own edited name is never silently overwritten.
       customer.isPhoneVerified = true;
       customer.verificationStatus = customer.isEmailVerified ? "FullyVerified" : "PhoneVerified";
       customer.lastLogin = new Date();
@@ -159,14 +162,17 @@ export const verifyPhoneOtp = async (req, res, next) => {
       return issueSession(customer, req, res, 200, "Login successful");
     }
 
-    // No account for this phone yet — create one. No name/email/password
-    // at this point (per the handoff: password is optional, set AFTER via
-    // POST /set-password) — Customer.js has none of those as required
-    // fields, so a phone-only account is a genuinely valid state, not a
-    // placeholder.
+    // No account for this phone yet — create one. No email/password at this
+    // point (per the handoff: password is optional, set AFTER via POST
+    // /set-password) — Customer.js has none of those as required fields, so
+    // a phone-only account is a genuinely valid state, not a placeholder.
+    // `name` IS accepted here — the register flow's "What's your name?"
+    // field was previously silently dropped since this destructure never
+    // read it off the request body.
     customer = await Customer.create({
       id: generateISTId("CUS"),
       phone: normalizedPhone,
+      ...(name && name.trim() ? { name: name.trim() } : {}),
       isPhoneVerified: true,
       verificationStatus: "PhoneVerified",
       authProviders: [],

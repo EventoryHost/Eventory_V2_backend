@@ -6,6 +6,8 @@
   "scripts": {
     "start": "node server.js",
     "dev": "nodemon server.js",
+    "sync-env:dev": "gh secret set V2_DEV_ENV < .env",
+    "sync-env:prod": "gh secret set V2_PROD_ENV < .env.prod",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
@@ -15,6 +17,7 @@
   "dependencies": {
     "@aws-sdk/client-cognito-identity-provider": "^3.1040.0",
     "@aws-sdk/client-s3": "^3.1129.0",
+    "@aws-sdk/client-sts": "^3.1137.0",
     "@aws-sdk/s3-request-presigner": "^3.1129.0",
     "axios": "^1.15.2",
     "bcryptjs": "^3.0.3",
