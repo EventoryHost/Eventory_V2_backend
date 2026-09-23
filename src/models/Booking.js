@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { generateISTId } from "../utils/idGenerator.js";
 import {
+  CHANGE_REQUEST_STATUSES,
   ChangeRequestSchema,
   PackageSnapshotSchema,
   PaymentMilestoneSchema,
@@ -56,8 +57,25 @@ const CustomizeRequestSchema = new mongoose.Schema(
     type: { type: String, default: null, trim: true },
     colours: { type: [String], default: [] },
     volume: { type: String, default: null, trim: true },
+    // Added 2026-09-22 with `_id: true` below, so the vendor can decide each
+    // request individually from the booking details screen. Reuses
+    // CHANGE_REQUEST_STATUSES rather than minting a parallel enum — the
+    // decision a vendor makes here is the same` Pending/Accepted/Rejected
+    // decision changeRequests already carries, even though the two request
+    // shapes stay separate (see this schema's own comment above).
+    status: {
+      type: String,
+      enum: CHANGE_REQUEST_STATUSES,
+      default: "Pending",
+    },
   },
-  { _id: false }
+  // `_id: true` — was false until 2026-09-22. The vendor's accept/decline
+  // addresses one request by id, so ids must be STABLE: Mongoose mints a
+  // fresh _id every time it hydrates a subdocument that has none stored, so
+  // an id read in a GET would not match the one a later PUT resolves
+  // against. scripts/backfill-customize-request-ids.mjs persists ids on
+  // every already-stored booking; run it before relying on this.
+  { _id: true }
 );
 
 // Added 2026-09-17 — Booking previously had NO field for the selected
@@ -250,6 +268,18 @@ const BookingSchema = new mongoose.Schema(
     },
 
     notes: {
+      type: String,
+      default: null,
+    },
+
+    // The customer's note about the EVENT itself, distinct from `notes`
+    // (their note to this vendor, carried from the cart's specialRequest).
+    // Added 2026-09-22 because the vendor's booking details screen shows the
+    // two in different places — "Event Note" on the event details card,
+    // "Customer Note" inside the package card. Nothing writes it yet: no
+    // cart/checkout field maps to it, so it stays null until a customer-side
+    // flow produces one, and the vendor's screen hides the box while it is.
+    eventNote: {
       type: String,
       default: null,
     },

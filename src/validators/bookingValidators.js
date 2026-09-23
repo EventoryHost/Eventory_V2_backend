@@ -45,6 +45,29 @@ const checkChangeRequestDecisions = (changeRequests, errors) => {
   });
 };
 
+// Customization requests carry only a decision here — the request itself was
+// authored customer-side (PDP "Customize items") and is never edited by the
+// vendor, so unlike checkChangeRequestDecisions there is no qty to validate.
+const checkCustomizeRequestDecisions = (customizeRequests, errors) => {
+  if (!Array.isArray(customizeRequests)) {
+    errors.push("customizeRequests must be an array");
+    return;
+  }
+  customizeRequests.forEach((decision, i) => {
+    if (!decision?.id) {
+      errors.push(`customizeRequests[${i}].id is required`);
+    }
+    if (
+      decision?.status !== undefined &&
+      !CHANGE_REQUEST_STATUSES.includes(decision.status)
+    ) {
+      errors.push(
+        `customizeRequests[${i}].status must be one of: ${CHANGE_REQUEST_STATUSES.join(", ")}`
+      );
+    }
+  });
+};
+
 const checkPricing = (pricing, errors) => {
   if (typeof pricing !== "object" || pricing === null) {
     errors.push("pricing must be an object");
@@ -227,10 +250,17 @@ export const validateChangeRequests = (body) => {
 
 export const validateBookingUpdate = (body) => {
   const errors = [];
-  const { changeRequests, pricing, paymentMilestones, calendarNote } = body;
+  const {
+    changeRequests,
+    customizeRequests,
+    pricing,
+    paymentMilestones,
+    calendarNote,
+  } = body;
 
   if (
     changeRequests === undefined &&
+    customizeRequests === undefined &&
     pricing === undefined &&
     paymentMilestones === undefined &&
     calendarNote === undefined
@@ -238,13 +268,16 @@ export const validateBookingUpdate = (body) => {
     return {
       valid: false,
       errors: [
-        "nothing to update — send changeRequests, pricing, paymentMilestones or calendarNote",
+        "nothing to update — send changeRequests, customizeRequests, pricing, paymentMilestones or calendarNote",
       ],
     };
   }
 
   if (changeRequests !== undefined) {
     checkChangeRequestDecisions(changeRequests, errors);
+  }
+  if (customizeRequests !== undefined) {
+    checkCustomizeRequestDecisions(customizeRequests, errors);
   }
   if (pricing !== undefined) checkPricing(pricing, errors);
   if (paymentMilestones !== undefined) {
