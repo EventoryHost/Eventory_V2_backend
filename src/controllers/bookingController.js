@@ -493,7 +493,7 @@ const PRICING_FIELDS = [
 /**
  * @desc    Apply the vendor's edits to a booking
  * @route   PUT /api/bookings/:bookingId
- * @body    { changeRequests?: [{ id, status?, qty? }], pricing?, paymentMilestones?, calendarNote? }
+ * @body    { changeRequests?: [{ id, status?, qty? }], customizeRequests?: [{ id, status? }], pricing?, paymentMilestones?, calendarNote? }
  *
  * Everything the vendor changes on the details screen is saved in one call, so
  * a half-applied edit is not reachable: decisions and the price they were
@@ -514,7 +514,13 @@ export const updateBooking = async (req, res) => {
       });
     }
 
-    const { changeRequests, pricing, paymentMilestones, calendarNote } = req.body;
+    const {
+      changeRequests,
+      customizeRequests,
+      pricing,
+      paymentMilestones,
+      calendarNote,
+    } = req.body;
 
     if (Array.isArray(changeRequests)) {
       for (const decision of changeRequests) {
@@ -527,6 +533,20 @@ export const updateBooking = async (req, res) => {
           request.status = decision.status;
           request.respondedAt = new Date();
         }
+      }
+    }
+
+    // The vendor's decision on each PDP "Customize items" request. Only the
+    // status moves — the request body itself is the customer's and stays as
+    // sent. Like changeRequests, deciding one does not reprice anything on
+    // its own; the vendor carries the money on the pricing rows below.
+    if (Array.isArray(customizeRequests)) {
+      for (const decision of customizeRequests) {
+        const request = booking.customizeRequests.id(decision.id);
+        if (!request) {
+          return notFound(res, `Customize request "${decision.id}" not found`);
+        }
+        if (decision.status !== undefined) request.status = decision.status;
       }
     }
 
