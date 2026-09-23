@@ -10,6 +10,7 @@ import {
   getPackageReviews,
   getPackageSlots,
   getPopularPackages,
+  getServiceableCities,
   getVendorDetail,
   getVendorReviews,
 } from "../controllers/customerDiscoveryController.js";
@@ -134,6 +135,22 @@ router.get("/packages/filters", publicBrowseLimiter, getPackageFilters);
  *       400: { description: Invalid query parameters }
  */
 router.get("/reviews/featured", publicBrowseLimiter, validateRequest(featuredReviewsQuerySchema, "query"), getFeaturedReviews);
+
+/**
+ * @swagger
+ * /api/customer/location/cities:
+ *   get:
+ *     summary: Serviceable cities/districts (navbar location picker)
+ *     description: |
+ *       Public, read-only. Distinct city/district labels Eventory operates
+ *       in today, derived from the same serviceablePincodes.json dataset the
+ *       PDP's location-serviceability check reads — not a hardcoded list, so
+ *       it can never drift from what checkServiceability actually accepts.
+ *     tags: [Customer Discovery]
+ *     responses:
+ *       200: { description: Sorted list of city/district labels }
+ */
+router.get("/location/cities", publicBrowseLimiter, getServiceableCities);
 
 /**
  * @swagger

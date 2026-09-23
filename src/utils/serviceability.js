@@ -53,6 +53,20 @@ export function extractPincode(text) {
   return m ? m[1] : null;
 }
 
+/**
+ * Distinct, alphabetically sorted RAW district names across the whole
+ * serviceable dataset — e.g. "CENTRAL", "SOUTH WEST", "GAUTAM BUDDHA NAGAR",
+ * exactly as they appear on indelhincr.com/PinCode.aspx (the dataset's
+ * source) and in serviceablePincodes.json's own `district` field. This is
+ * the raw admin-district level, NOT the 5 collapsed city labels cityOf()
+ * derives for the vendor-serviceability match — the navbar's district
+ * picker wants every real district, not the coarser city grouping.
+ */
+export function listServiceableCities() {
+  const districts = new Set(Object.values(PINCODES).map((info) => info.district));
+  return [...districts].sort();
+}
+
 export function lookupPincode(pincode) {
   const info = PINCODES[String(pincode || "").trim()];
   if (!info) return null;

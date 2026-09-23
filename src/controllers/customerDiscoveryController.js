@@ -6,7 +6,7 @@ import Booking from "../models/Booking.js";
 import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
 import { utcDayRange } from "../utils/dateRange.js";
 import { computeAvailability, computeSlotsForDate } from "../utils/packageAvailability.js";
-import { checkServiceability, describeVendorAreas, extractPincode, lookupPincode } from "../utils/serviceability.js";
+import { checkServiceability, describeVendorAreas, extractPincode, listServiceableCities, lookupPincode } from "../utils/serviceability.js";
 import { round2 } from "../utils/money.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { buildGroupFilter } from "../utils/packageGroupFilter.js";
@@ -1144,6 +1144,16 @@ export const getPackageFilters = async (req, res) => {
  * @desc Facet/taxonomy endpoint for the vendor listing page's filter UI —
  * same "derive from real data" reasoning as getPackageFilters.
  */
+/**
+ * GET /api/customer/location/cities — the distinct city/district labels
+ * Eventory operates in, derived from the same serviceablePincodes.json the
+ * PDP's location-serviceability check reads (see utils/serviceability.js).
+ * Feeds the navbar location modal's district picker.
+ */
+export const getServiceableCities = async (req, res) => {
+  res.status(200).json({ success: true, data: listServiceableCities() });
+};
+
 export const getVendorFilters = async (req, res) => {
   try {
     const [facets] = await Vendor.aggregate([
