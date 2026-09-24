@@ -267,16 +267,11 @@ export const addCartItem = async (req, res) => {
       }
     }
 
-    // REAL BUG FOUND during end-to-end testing (2026-08-13, testsuite.pdf):
-    // pkg.vendorId is stored as the Vendor's business-id string (e.g.
-    // "VEN20260511163553528") rather than its Mongo _id for every
-    // currently-seeded package — copying it forward verbatim into
-    // CartItem.vendorId (a required ObjectId field) previously failed
-    // validation entirely (add-to-cart 500'd for every real package), and
-    // even if it hadn't, it would have saved a vendorId that never matches
-    // what the vendor's OWN dashboard queries by — meaning a real booking
-    // could exist that its vendor could never see. Resolved to the real
-    // Vendor._id here instead of trusting Package.vendorId's stored shape.
+    // Never copy pkg.vendorId forward verbatim: it holds the public
+    // "VEN..." id on most packages and a legacy Mongo _id on the rest, and
+    // a cart item saved with the wrong one propagates through checkout into
+    // a Booking its own vendor can never see. resolveVendorRefId normalises
+    // both to the public id — the shape every vendor-side query filters on.
     // See src/utils/resolveVendor.js for the full write-up.
     const resolvedVendorId = await resolveVendorRefId(pkg.vendorId);
     if (!resolvedVendorId) {
