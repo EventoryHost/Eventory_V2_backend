@@ -199,6 +199,15 @@ export async function createBookingsFromCheckoutSession(session, payment, option
       // they came from may be edited later.
       selectedAddOns: line.selectedAddOns || [],
       notes: line.specialRequest || null,
+      // The cart-wide "Booking Notes" (Checkout Contact page's
+      // BookingNotesSection.tsx) — ONE note the customer wrote for the whole
+      // order, meant to reach every vendor on it (session.bookingNote was
+      // already being captured on CheckoutSession, just never carried onto
+      // the Booking itself — see Booking.js's own eventNote comment: the
+      // vendor's booking details screen already has a box for exactly this,
+      // it was just always empty). Not the same as `notes` above, which is
+      // this ONE vendor's specific line.specialRequest.
+      eventNote: session.bookingNote || null,
       // "Notes for vendor" image attachments — see CartItem.js's own
       // comment on noteAttachments for the full context/chain.
       noteAttachments: line.noteAttachments || [],

@@ -1,4 +1,3 @@
-import mongoose from "mongoose";
 import Booking from "../models/Booking.js";
 import { utcDayRange } from "./dateRange.js";
 import { resolveVendorRefId } from "./resolveVendor.js";
@@ -48,25 +47,22 @@ export async function computeAvailability(pkg, { date, guests, time, timeSlot })
 
     const dailyCapacity = pkg.bookingCapacity?.dailyCapacity ?? null;
 
-    // REAL BUG FOUND 2026-08-21 (frontend-reported "Cast to ObjectId
-    // failed ... at path vendorId for model Booking" on add-to-cart): this
-    // used to pass pkg.vendorId straight through — fine when the caller
-    // had already resolved it (PDP's getPackageDetail does), but a hard
-    // 500 whenever it hadn't, since Package.vendorId is stored as the
-    // Vendor's business-id string for almost every real package (see
-    // src/utils/resolveVendor.js's own write-up) and Booking.vendorId is a
-    // strict ObjectId field. Resolved with the SAME fallback here instead
-    // of trusting every call site to pre-resolve it — this function is
-    // shared by the PDP and Cart's add/get/revalidation paths, so fixing
-    // it once here is the actually-robust fix, not a per-caller patch.
-    let vendorObjectId = pkg.vendorId?._id || pkg.vendorId;
-    if (!mongoose.Types.ObjectId.isValid(vendorObjectId)) {
-      vendorObjectId = await resolveVendorRefId(vendorObjectId);
-    }
+    // Package.vendorId is stored in both shapes across real data (the
+    // public "VEN..." id for most, a Mongo _id for older rows), so it is
+    // normalised here rather than trusting every call site to pre-resolve
+    // it — this function is shared by the PDP and Cart's add/get/
+    // revalidation paths.
+    //
+    // Resolved UNCONDITIONALLY as of 2026-09-24. It used to resolve only
+    // when the value failed ObjectId casting, which inverted once
+    // Booking.vendorId became the public id: a package still holding a
+    // legacy ObjectId passed `isValid`, was used as-is, and then matched
+    // none of that vendor's bookings — silently reporting the date as free.
+    const vendorRefId = await resolveVendorRefId(pkg.vendorId?.id || pkg.vendorId?._id || pkg.vendorId);
 
-    const activeBookingsOnDate = vendorObjectId
+    const activeBookingsOnDate = vendorRefId
       ? await Booking.countDocuments({
-          vendorId: vendorObjectId,
+          vendorId: vendorRefId,
           eventDate: { $gte: start, $lt: end },
           status: { $nin: ["Cancelled", "Declined"] },
         })
@@ -80,9 +76,9 @@ export async function computeAvailability(pkg, { date, guests, time, timeSlot })
     // not "is the whole day under dailyCapacity" — otherwise the first
     // booking of a day would block every other slot at cart/checkout.
     const slotRange = parseSlotValue(timeSlot);
-    if (slotRange && vendorObjectId) {
+    if (slotRange && vendorRefId) {
       const sameDay = await Booking.find({
-        vendorId: vendorObjectId,
+        vendorId: vendorRefId,
         eventDate: { $gte: start, $lt: end },
         status: { $nin: ["Cancelled", "Declined"] },
       })
@@ -263,13 +259,11 @@ export async function computeSlotsForDate(pkg, date) {
     }
   }
 
-  let vendorObjectId = pkg.vendorId?._id || pkg.vendorId;
-  if (!mongoose.Types.ObjectId.isValid(vendorObjectId)) {
-    vendorObjectId = await resolveVendorRefId(vendorObjectId);
-  }
-  const bookings = vendorObjectId
+  // Normalised unconditionally — see the sibling call's comment above.
+  const vendorRefId = await resolveVendorRefId(pkg.vendorId?.id || pkg.vendorId?._id || pkg.vendorId);
+  const bookings = vendorRefId
     ? await Booking.find({
-        vendorId: vendorObjectId,
+        vendorId: vendorRefId,
         eventDate: { $gte: start, $lt: end },
         status: { $nin: ["Cancelled", "Declined"] },
       })
