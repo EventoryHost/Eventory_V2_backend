@@ -51,7 +51,7 @@ const failed = (res, message, error) => {
  * Check if a date has conflicts for the vendor (other bookings or calendar blocks).
  * Returns true if conflicting.
  */
-const detectConflict = async (vendorId, eventDate, excludeBookingId = null) => {
+export const detectConflict = async (vendorId, eventDate, excludeBookingId = null) => {
   const dateStart = new Date(eventDate);
   dateStart.setUTCHours(0, 0, 0, 0);
   const dateEnd = new Date(eventDate);
@@ -80,7 +80,7 @@ const detectConflict = async (vendorId, eventDate, excludeBookingId = null) => {
 /**
  * Sync package availability to "Booked" for the event date.
  */
-const syncPackageBooked = async (packageId, eventDate) => {
+export const syncPackageBooked = async (packageId, eventDate) => {
   const pkg = await Package.findById(packageId);
   if (!pkg) return;
 
@@ -100,7 +100,7 @@ const syncPackageBooked = async (packageId, eventDate) => {
 /**
  * Revert package availability to "Available" for the event date.
  */
-const revertPackageAvailability = async (packageId, eventDate) => {
+export const revertPackageAvailability = async (packageId, eventDate) => {
   const pkg = await Package.findById(packageId);
   if (!pkg) return;
 
