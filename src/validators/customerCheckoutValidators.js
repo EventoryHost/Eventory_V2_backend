@@ -138,3 +138,38 @@ export const updateEventTimingSchema = z
     message: "endTime must be after startTime",
     path: ["endTime"],
   });
+
+// "Booking Notes" (BookingNotesSection.tsx) — one note for the whole order,
+// session-scoped (not the cart's own bookingNote — see updateBookingNote's
+// doc comment for why those must stay separate).
+export const updateBookingNoteSchema = z.object({
+  bookingNote: z.string().trim().max(1000),
+});
+
+// "Add Alternate Coordinator" (AlternateCoordinatorSection.tsx) — both
+// optional individually (a customer might only have a name typed so far),
+// but at least one of the two must be provided or there's nothing to save.
+export const updateAlternateCoordinatorSchema = z
+  .object({
+    name: z.string().trim().max(100).optional(),
+    phone: z.string().trim().regex(MOBILE_REGEX, "phone must be a valid 10-digit Indian mobile number").optional(),
+  })
+  .refine((data) => data.name !== undefined || data.phone !== undefined, {
+    message: "Provide at least one of name or phone",
+  });
+
+// "Add GSTIN details for tax invoice" (GstinToggleSection.tsx). Real GSTIN
+// format (15 chars: 2-digit state code, 10-char PAN, 1 entity code, 'Z',
+// 1 checksum) — validated here since the frontend's own input handling
+// already uppercases/truncates to 15 chars but never actually checked the
+// shape, and an invoice with a malformed GSTIN is a real downstream problem
+// (whoever generates the tax invoice, not just cosmetic).
+const GSTIN_REGEX = /^\d{2}[A-Z]{5}\d{4}[A-Z]{1}[A-Z\d]{1}Z[A-Z\d]{1}$/;
+export const updateGstinSchema = z
+  .object({
+    businessName: z.string().trim().max(200).optional(),
+    number: z.string().trim().toUpperCase().regex(GSTIN_REGEX, "must be a valid 15-character GSTIN").optional(),
+  })
+  .refine((data) => data.businessName !== undefined || data.number !== undefined, {
+    message: "Provide at least one of businessName or number",
+  });

@@ -199,6 +199,19 @@ const BookingSchema = new mongoose.Schema(
       endTime: { type: String, default: null },
     },
 
+    // Carried over from CheckoutSession.alternateCoordinator/gstin at
+    // booking-creation time — see that model's own comment for the full
+    // context (added 2026-09-24, both were previously local-state-only on
+    // the frontend and never reached the backend at all).
+    alternateCoordinator: {
+      name: { type: String, default: null },
+      phone: { type: String, default: null },
+    },
+    gstin: {
+      businessName: { type: String, default: null },
+      number: { type: String, default: null },
+    },
+
     packageSnapshot: {
       type: PackageSnapshotSchema,
       default: null,

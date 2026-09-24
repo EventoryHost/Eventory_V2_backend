@@ -556,3 +556,84 @@ export const updateEventTiming = async (req, res) => {
     return res.status(500).json({ status: "ERROR", message: "Failed to update event timing", error: error.message });
   }
 };
+
+/**
+ * @desc Capture/edit "Add Alternate Coordinator" — an optional day-of
+ * backup contact (AlternateCoordinatorSection.tsx). Same partial-update
+ * convention as updateContactDetails/updateEventTiming above.
+ */
+export const updateAlternateCoordinator = async (req, res) => {
+  try {
+    const resolved = await resolveSession(req, { requireActive: true });
+    if (resolved.error) return res.status(resolved.error.status).json({ status: "FAILED", message: resolved.error.message });
+    const { session } = resolved;
+
+    const { name, phone } = req.body;
+    if (name !== undefined) session.alternateCoordinator.name = name;
+    if (phone !== undefined) session.alternateCoordinator.phone = phone;
+    await session.save();
+
+    const availabilityResult = await computeLinesAvailability(session);
+    return respondWithSession(res, 200, session, availabilityResult, req.customer);
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to update alternate coordinator", error: error.message });
+  }
+};
+
+/**
+ * @desc Capture/edit "Booking Notes" (Contact page's BookingNotesSection.tsx)
+ * — one note for the whole order, shared by every vendor. Session-scoped,
+ * same partial-update convention as the other Contact-page fields above.
+ *
+ * REAL BUG FIXED here (2026-09-25): the frontend was previously calling the
+ * CART's own PUT /customer/cart/note for this field (the only bookingNote
+ * write path that existed), because a Contact-page section building on top
+ * of an already-created, price-LOCKED checkout session has no business
+ * touching the cart at all — and every cart-mutating endpoint on purpose
+ * invalidates/cancels the customer's current checkout session afterward
+ * (see customerCartApi.ts's invalidateCheckoutSession on the frontend),
+ * since a cart edit can no longer be reflected in an already-locked quote.
+ * The practical effect: saving a Booking Note while on the Contact page
+ * cancelled the very checkout session that page was working inside of,
+ * so the next action on that page (Continue, or any other field's save)
+ * 410'd with "This checkout session is cancelled — start a new one." This
+ * endpoint lets the frontend update the note directly on the session
+ * instead, with no cart involvement and no session invalidation.
+ */
+export const updateBookingNote = async (req, res) => {
+  try {
+    const resolved = await resolveSession(req, { requireActive: true });
+    if (resolved.error) return res.status(resolved.error.status).json({ status: "FAILED", message: resolved.error.message });
+    const { session } = resolved;
+
+    session.bookingNote = req.body.bookingNote;
+    await session.save();
+
+    const availabilityResult = await computeLinesAvailability(session);
+    return respondWithSession(res, 200, session, availabilityResult, req.customer);
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to update booking note", error: error.message });
+  }
+};
+
+/**
+ * @desc Capture/edit "Add GSTIN details for tax invoice" (GstinToggleSection.tsx).
+ * Same partial-update convention as the other Contact-page fields above.
+ */
+export const updateGstin = async (req, res) => {
+  try {
+    const resolved = await resolveSession(req, { requireActive: true });
+    if (resolved.error) return res.status(resolved.error.status).json({ status: "FAILED", message: resolved.error.message });
+    const { session } = resolved;
+
+    const { businessName, number } = req.body;
+    if (businessName !== undefined) session.gstin.businessName = businessName;
+    if (number !== undefined) session.gstin.number = number;
+    await session.save();
+
+    const availabilityResult = await computeLinesAvailability(session);
+    return respondWithSession(res, 200, session, availabilityResult, req.customer);
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to update GSTIN details", error: error.message });
+  }
+};

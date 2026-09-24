@@ -131,6 +131,28 @@ const CheckoutSessionSchema = new mongoose.Schema(
       endTime: { type: String, trim: true, default: null },
     },
 
+    // "Add Alternate Coordinator" (Contact page's AlternateCoordinatorSection.tsx,
+    // added 2026-09-24) — an optional day-of backup contact, in case the
+    // primary contact doesn't pick up. Was local-state-only on the frontend
+    // (never sent anywhere) — see customerCheckoutController.js's
+    // updateAlternateCoordinator for the write path. One set for the whole
+    // order, same reasoning as contactDetails/eventTiming above.
+    alternateCoordinator: {
+      name: { type: String, trim: true, default: null },
+      phone: { type: String, trim: true, default: null },
+    },
+
+    // "Add GSTIN details for tax invoice" (Contact page's GstinToggleSection.tsx,
+    // added 2026-09-24) — optional, for a business tax invoice instead of a
+    // consumer one. Same "was local-state-only" story as alternateCoordinator
+    // above. gstin is stored uppercase (matches the frontend's own
+    // `.toUpperCase()` input handling) but NOT format-validated here beyond
+    // shape — see updateGstinSchema for why.
+    gstin: {
+      businessName: { type: String, trim: true, default: null },
+      number: { type: String, trim: true, uppercase: true, default: null },
+    },
+
     // The frozen quote from computeQuoteForLines at (re)lock time — Mixed,
     // same reasoning as elsewhere in this codebase for a computed,
     // shape-varying payload (e.g. Package's festivals.details): this is a

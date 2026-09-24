@@ -226,6 +226,17 @@ export async function createBookingsFromCheckoutSession(session, payment, option
         startTime: session.eventTiming?.startTime || null,
         endTime: session.eventTiming?.endTime || null,
       },
+      // Same "one value for the whole session, carried onto every booking it
+      // produces" pattern as eventTiming above — see CheckoutSession.js's
+      // own comment on alternateCoordinator/gstin.
+      alternateCoordinator: {
+        name: session.alternateCoordinator?.name || null,
+        phone: session.alternateCoordinator?.phone || null,
+      },
+      gstin: {
+        businessName: session.gstin?.businessName || null,
+        number: session.gstin?.number || null,
+      },
     });
     // Vendor's own utility (utils/pricingBreakdown.js) — runs first so the
     // "Pricing Breakdown" card's own fields (subtotal/tax/etc.) are
