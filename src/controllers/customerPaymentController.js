@@ -57,6 +57,33 @@ function buildPaymentReturnUrl(paymentId) {
   return `${frontendUrl}/payment/return?paymentId=${paymentId}`;
 }
 
+// Real bug found 2026-09-25: the idempotency reuse below (both /token and
+// /milestone) used to hand back a PENDING payment's cfPaymentSessionId
+// unconditionally. Cashfree payment sessions EXPIRE well before the Payment
+// row's own status changes — nothing here ever re-checked with Cashfree, so
+// a customer who opened "Continue to Payment" once, didn't finish, and came
+// back later (or double-clicked after the session went stale) got handed a
+// dead session_id straight into cashfree.checkout(), which is exactly
+// Cashfree's own "payment_session_id is not present or is invalid" —
+// looking identically to a sandbox/production mismatch even when both sides
+// of that were already correct. Fixed by asking Cashfree directly whether
+// the order is still ACTIVE before reusing its session_id; anything else
+// (EXPIRED/TERMINATED/PAID/not found) falls through to minting a fresh
+// order instead of resurfacing a session that can never actually open.
+async function reusableExistingPayment(existing) {
+  if (existing.status === "PAID") return existing;
+  try {
+    const orderResponse = await cashfree.PGFetchOrder(existing.cfOrderId);
+    if (orderResponse?.data?.order_status === "ACTIVE") return existing;
+  } catch (err) {
+    console.warn(`[customerPaymentController] Live re-check failed for order ${existing.cfOrderId}, minting a fresh order instead:`, err.message);
+  }
+  existing.status = "FAILED";
+  existing.failureReason = "Payment session expired before the customer completed checkout";
+  await existing.save();
+  return null;
+}
+
 function isValidWebhookSignature(rawBody, timestamp, signature) {
   if (!rawBody || !timestamp || !signature) return false;
   const secret = process.env.CASHFREE_CLIENT_SECRET_PG;
@@ -119,11 +146,12 @@ export const createTokenPayment = async (req, res) => {
     // Cashfree order, so a frontend retry/double-click/network-retry can
     // never create a duplicate charge attempt. A FAILED/EXPIRED/CANCELLED
     // prior attempt does NOT block a fresh one.
-    const existing = await Payment.findOne({
+    const existingRaw = await Payment.findOne({
       checkoutSessionId: session._id,
       paymentType: "Token",
       status: { $in: ["PENDING", "PAID"] },
     }).sort({ createdAt: -1 });
+    const existing = existingRaw ? await reusableExistingPayment(existingRaw) : null;
     if (existing) {
       return res.status(200).json({
         status: "SUCCESS",
@@ -234,11 +262,12 @@ export const createMilestonePayment = async (req, res) => {
     // Idempotency: same pattern as /token — a PENDING or PAID payment
     // already exists for this exact (booking, milestone), return it rather
     // than minting a second Cashfree order.
-    const existing = await Payment.findOne({
+    const existingRaw = await Payment.findOne({
       bookingId: booking._id,
       milestoneId: milestone._id,
       status: { $in: ["PENDING", "PAID"] },
     }).sort({ createdAt: -1 });
+    const existing = existingRaw ? await reusableExistingPayment(existingRaw) : null;
     if (existing) {
       return res.status(200).json({
         status: "SUCCESS",
