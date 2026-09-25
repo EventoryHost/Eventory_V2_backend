@@ -497,11 +497,16 @@ const applyRequestChanges = (vendor, group, { by, finalNote }) => {
   vendor.isVerified = false;
 };
 
-/** Reject one group: every step in it is Not correct, and the vendor redoes it from step 1. */
+/**
+ * Reject one group: every counted step in it is Not correct, and the vendor
+ * redoes it from step 1. Optional steps (businessDocuments) are left as they
+ * are — the app's redo flow doesn't pass through them, so flagging one would
+ * leave the group unable to resubmit.
+ */
 const applyReject = (vendor, group, { by, finalNote }) => {
   const decision = moveGroup(vendor, group, "reject", { by, finalNote });
   const now = new Date();
-  for (const key of STEPS_BY_GROUP[group]) {
+  for (const key of STEPS_BY_GROUP[group].filter((k) => STEP_BY_KEY[k].counted)) {
     const step = stepOf(vendor, key);
     step.status = "Rejected";
     step.note = finalNote;

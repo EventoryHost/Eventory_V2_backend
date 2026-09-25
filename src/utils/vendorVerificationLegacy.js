@@ -17,23 +17,30 @@ import { STEP_STATUSES } from "../models/schemas/vendorVerificationSchema.js";
  *   otherwise    -> Pending  (isDeactivated is not a review outcome and is
  *                             left alone)
  *
- * Each legacy adminReview section fans out to its child steps.
+ * Each legacy adminReview section fans out to its child steps (legacySteps).
  */
 
 export const hasVerificationStatus = (v) => Boolean(v?.verification?.status);
 
 export const deriveLegacyStatus = (v) => (v?.isVerified ? "Verified" : "Pending");
 
-export const legacySteps = (adminReview) => {
+/**
+ * Each adminReview section fans out to its steps. A verified vendor's steps
+ * are all Approved, as the old verify endpoint set every section — a stale
+ * Rejected section on a verified vendor must not read as an approved group
+ * with flagged steps.
+ */
+export const legacySteps = (adminReview, { verified = false } = {}) => {
+  const fallback = verified ? "Approved" : "Pending";
   const steps = Object.fromEntries(
-    VENDOR_STEPS.map((s) => [s.key, { status: "Pending", reviewedAt: null, vendorEditedAt: null }])
+    VENDOR_STEPS.map((s) => [s.key, { status: fallback, reviewedAt: null, vendorEditedAt: null }])
   );
   for (const [section, keys] of Object.entries(LEGACY_SECTION_STEPS)) {
     const review = adminReview?.[section];
     if (!review || !STEP_STATUSES.includes(review.status)) continue;
     for (const key of keys) {
       steps[key] = {
-        status: review.status,
+        status: verified ? "Approved" : review.status,
         ...(review.notes ? { note: String(review.notes).trim() } : {}),
         reviewedAt: review.reviewedAt || null,
         vendorEditedAt: null,
@@ -48,7 +55,7 @@ export const legacyVerification = (v) => {
   const groupStatus = status === "Verified" ? "Approved" : "Pending";
   return {
     status,
-    steps: legacySteps(v?.adminReview),
+    steps: legacySteps(v?.adminReview, { verified: status === "Verified" }),
     groups: Object.fromEntries(
       VENDOR_GROUPS.map((g) => [g, { status: groupStatus, decidedAt: null }])
     ),
