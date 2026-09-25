@@ -2,7 +2,8 @@ import mongoose from "mongoose";
 import Vendor from "../models/Vendor.js";
 import Booking, { PRE_ACCEPTANCE_STATUSES, TERMINAL_STATUSES } from "../models/Booking.js";
 import Package from "../models/Package.js";
-import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
+import { resolveVendorForPackage } from "../utils/resolveVendor.js";
+import { releaseSlotIfUnused } from "../utils/releaseSlot.js";
 import { getOrCreateInvoiceForBooking, renderInvoicePdf } from "../services/invoiceService.js";
 import { withPricingBreakdown } from "../utils/pricingBreakdown.js";
 import { round2 } from "../utils/money.js";
@@ -98,14 +99,25 @@ function bookingLookupQuery(bookingIdParam, customerId) {
 export const getBookings = async (req, res) => {
   try {
     const { tab, q, sort, page, limit } = req.query;
-    const customerId = req.customer._id;
+    const customerId = String(req.customer._id);
 
     const query = { customerId, status: { $in: STATUS_BY_TAB[tab] } };
 
     if (q) {
       const rx = { $regex: escapeRegex(q), $options: "i" };
-      const matchingVendorIds = await Vendor.find({ businessName: rx }).select("_id");
-      query.$or = [{ bookingId: rx }, { eventType: rx }, { vendorId: { $in: matchingVendorIds.map((v) => v._id) } }];
+      // Matches on pocName, not businessName: businessName must never reach
+      // the customer side (see publicFields.js), and pocName is the vendor
+      // name these cards actually display, so searching it is what a
+      // customer typing a vendor's name here expects to hit.
+      //
+      // Both `id` and `_id` are collected because Booking.vendorId is a
+      // String field that in practice holds EITHER the business-id string
+      // ("VEN...") or a stringified _id depending on when the row was
+      // written — matching only one of them silently returns no results
+      // rather than erroring, which is how this went unnoticed.
+      const matchingVendors = await Vendor.find({ pocName: rx }).select("_id id").lean();
+      const matchingVendorKeys = matchingVendors.flatMap((v) => [v.id, String(v._id)]).filter(Boolean);
+      query.$or = [{ bookingId: rx }, { eventType: rx }, { vendorId: { $in: matchingVendorKeys } }];
     }
 
     const sortMap = {
@@ -118,7 +130,6 @@ export const getBookings = async (req, res) => {
     const [bookings, total, counts] = await Promise.all([
       Booking.find(query)
         .select(BOOKING_LIST_FIELDS)
-        .populate({ path: "vendorId", select: PUBLIC_VENDOR_FIELDS })
         .sort(sortMap[sort] || sortMap.newest)
         .skip((page - 1) * limit)
         .limit(limit)
@@ -137,8 +148,28 @@ export const getBookings = async (req, res) => {
       Object.entries(STATUS_BY_TAB).map(([tabName, statuses]) => [tabName, statuses.reduce((sum, s) => sum + (countByStatus[s] || 0), 0)])
     );
 
+    // Vendors are resolved here rather than via .populate() — Booking.vendorId
+    // is `type: String, ref: "Vendor"` but holds the Vendor's business-id
+    // string ("VEN...") for real data, not their Mongo _id, so populating it
+    // throws a CastError under .lean() and 500s this whole endpoint as soon
+    // as the customer has any booking at all. resolveVendorForPackage is the
+    // codebase's existing fallback for exactly this mismatch (see its own
+    // write-up) and is what every other customer-facing vendor read already
+    // goes through. Resolved once per DISTINCT vendor, not once per row, so
+    // a page of bookings from one vendor costs one query.
+    const uniqueVendorIds = [...new Set(bookings.map((b) => b.vendorId).filter(Boolean).map(String))];
+    const vendorsById = new Map(
+      (await Promise.all(uniqueVendorIds.map((id) => resolveVendorForPackage(id))))
+        .map((vendor, i) => [uniqueVendorIds[i], vendor])
+        .filter(([, vendor]) => vendor)
+    );
+
     const enriched = bookings.map((b) => ({
       ...b,
+      // Same shape .populate() produced — the resolved vendor object in
+      // place of the raw id, or null when no vendor can be found (a
+      // missing vendor must not 500 the list).
+      vendorId: vendorsById.get(String(b.vendorId)) || null,
       amountDue: Math.max(0, (b.totalAmount || 0) - (b.totalReceived || 0)),
     }));
 
@@ -171,8 +202,14 @@ export const getBookingDetail = async (req, res) => {
     const query = bookingLookupQuery(bookingId, req.customer._id);
     if (!query) return res.status(400).json({ status: "FAILED", message: "Invalid bookingId" });
 
-    const booking = await Booking.findOne(query).populate({ path: "vendorId", select: PUBLIC_VENDOR_FIELDS }).lean();
+    const booking = await Booking.findOne(query).lean();
     if (!booking) return res.status(404).json({ status: "FAILED", message: "Booking not found" });
+
+    // Same vendorId String/ObjectId mismatch as getBookings above — .populate()
+    // here 500s every booking detail page whose vendorId holds a "VEN..."
+    // business-id string. Resolved through the shared fallback instead,
+    // assigned back onto the same field so the response shape is unchanged.
+    booking.vendorId = (await resolveVendorForPackage(booking.vendorId)) || null;
 
     // Price breakdown — REWRITTEN 2026-08-27: Booking.js's ChargeSchema/
     // charges[] is gone vendor-side (prod merge), replaced by a `pricing`
@@ -320,6 +357,20 @@ export const cancelBooking = async (req, res) => {
     booking.cancelledAt = new Date();
     booking.cancelledBy = "Customer";
     await booking.save();
+
+    // Release the package's "Booked" date if this booking was holding it
+    // (added 2026-09-25). The customer cancel path previously freed
+    // nothing, so a customer-cancelled booking left its date marked
+    // "Booked" forever — the vendor's calendar kept showing the day
+    // blocked and every later customer was refused that date. Shares the
+    // vendor path's exact logic (utils/releaseSlot.js) rather than a
+    // second copy. Best-effort: a cancellation that already succeeded must
+    // not 500 because the calendar write failed.
+    try {
+      await releaseSlotIfUnused(booking.packageId, booking.eventDate, { excludeBookingId: booking._id });
+    } catch (err) {
+      console.error(`[cancelBooking] Failed to release slot for package ${booking.packageId}:`, err.message);
+    }
 
     // No notification system exists in this codebase yet (no email/SMS,
     // no EM/Admin portal) — logged so it's visible, not silently dropped.

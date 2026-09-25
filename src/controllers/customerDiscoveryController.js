@@ -672,14 +672,19 @@ function computePricingPreview(pkg, { date, guests }) {
 // paginated/filterable/sortable "see all reviews" endpoint with the full
 // rating-distribution + category breakdown this one doesn't compute.
 async function getPdpReviewsSection(pkg) {
+  // Review.packageId is a String ref, so this must be the string form:
+  // find() would cast an ObjectId against the schema for us, but an
+  // aggregate $match is never cast by Mongoose and would silently match
+  // nothing (making a package with reviews look like it had none).
+  const packageId = String(pkg._id);
   const [items, aggregate] = await Promise.all([
-    Review.find({ packageId: pkg._id, status: "Published" })
+    Review.find({ packageId, status: "Published" })
       .sort({ createdAt: -1 })
       .limit(10)
       .populate({ path: "customerId", select: "name profilePicture" })
       .lean(),
     Review.aggregate([
-      { $match: { packageId: pkg._id, status: "Published" } },
+      { $match: { packageId, status: "Published" } },
       { $group: { _id: null, avgRating: { $avg: "$rating" }, count: { $sum: 1 } } },
     ]),
   ]);

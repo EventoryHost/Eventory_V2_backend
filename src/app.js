@@ -76,6 +76,19 @@ app.use("/api-docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
 // --------------- Error Handling ---------------
 
+// JSON 404 for unmatched API routes. Without this, Express's built-in
+// final handler answers with an HTML error page ("<!DOCTYPE html>...
+// Cannot GET /api/..."), which every client that does `await res.json()`
+// reports as an opaque JSON parse error rather than "that endpoint does
+// not exist" — the real cause then looks like a backend crash. Scoped to
+// /api so Swagger UI and any future static assets keep their own handling.
+app.use("/api", (req, res) => {
+  res.status(404).json({
+    success: false,
+    message: `Route not found: ${req.method} ${req.originalUrl}`,
+  });
+});
+
 app.use(errorHandler);
 
 export default app;

@@ -8,6 +8,7 @@ import CalendarBlock from "../models/CalendarBlock.js";
 import { generateISTId } from "../utils/idGenerator.js";
 import { snapshotDeliverables } from "../utils/packageDeliverables.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
+import { releaseSlotIfUnused } from "../utils/releaseSlot.js";
 import {
   applyPricingBreakdown,
   withPricingBreakdown,
@@ -99,21 +100,21 @@ export const syncPackageBooked = async (packageId, eventDate) => {
 
 /**
  * Revert package availability to "Available" for the event date.
+ *
+ * MERGE RESOLUTION 2026-09-25: this used to hold its own copy of the
+ * release logic. That copy was extracted into utils/releaseSlot.js so the
+ * customer cancel path could share it rather than drift; adminBooking-
+ * Controller.js (added on dev in parallel) still imports this name, so the
+ * export is kept and now simply delegates. One implementation, two callers
+ * — re-inlining the old body would restore exactly the duplication the
+ * extraction removed.
+ *
+ * Note this is strictly safer than the body it replaces: releaseSlotIfUnused
+ * refuses to downgrade a vendor's manual "Blocked" entry, and won't free a
+ * date some other live booking still occupies. The old version did neither.
  */
-export const revertPackageAvailability = async (packageId, eventDate) => {
-  const pkg = await Package.findById(packageId);
-  if (!pkg) return;
-
-  const dateStr = new Date(eventDate).toISOString().split("T")[0];
-  const existing = pkg.availabilityCalendar.find((entry) => {
-    return new Date(entry.date).toISOString().split("T")[0] === dateStr;
-  });
-
-  if (existing) {
-    existing.status = "Available";
-    await pkg.save();
-  }
-};
+export const revertPackageAvailability = async (packageId, eventDate) =>
+  releaseSlotIfUnused(packageId, eventDate);
 
 /**
  * `totalReceived` is the sum of the milestones marked Received. Keeping the
@@ -408,7 +409,6 @@ export const cancelBooking = async (req, res) => {
       });
     }
 
-    const previousStatus = booking.status;
     booking.status = "Cancelled";
     booking.cancelledAt = new Date();
     booking.cancelledBy =
@@ -416,9 +416,14 @@ export const cancelBooking = async (req, res) => {
     booking.cancellationReason = req.body?.reason?.trim() || null;
     await booking.save();
 
-    if (previousStatus === "Confirmed") {
-      await revertPackageAvailability(booking.packageId, booking.eventDate);
-    }
+    // Unconditional as of 2026-09-25 — this used to be gated on
+    // `previousStatus === "Confirmed"`, on the assumption that only an
+    // accepted booking could ever hold a calendar entry. Releasing is
+    // idempotent and now self-guards (it only downgrades an actual
+    // "Booked" entry, and only once no other live booking still needs the
+    // date), so gating it bought nothing and risked stranding a date as
+    // permanently "Booked" whenever an entry existed for any other reason.
+    await releaseSlotIfUnused(booking.packageId, booking.eventDate, { excludeBookingId: booking._id });
 
     return res.status(200).json({
       status: "SUCCESS",
