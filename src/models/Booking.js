@@ -33,6 +33,29 @@ export const PRE_ACCEPTANCE_STATUSES = ["NewBooking", "Viewed", "InDiscussion"];
 // Statuses after which nothing about the booking can change
 export const TERMINAL_STATUSES = ["Declined", "Cancelled", "Completed"];
 
+// Statuses that actually OCCUPY the vendor's slot for their event date.
+//
+// Changed 2026-09-25: a slot is reserved ONLY once the vendor has accepted.
+// This list used to be "everything except Cancelled/Declined", which meant a
+// booking held its date from the instant checkout created it — before the
+// vendor had agreed to anything, and regardless of whether the payment then
+// failed or the customer walked away. Those pre-acceptance rows are never
+// cleaned up (nothing cancels a booking when its payment fails), so the date
+// stayed occupied indefinitely and later customers were refused it.
+//
+// "Confirmed" alone is the answer to "has the vendor committed to this
+// date": acceptBooking is the single transition into it, and the same
+// moment writes the "Booked" availabilityCalendar entry. Deliberately
+// EXCLUDED:
+//   - NewBooking/Viewed/InDiscussion — a request the vendor hasn't accepted.
+//     The customer may have paid a token, but the vendor can still decline;
+//     holding the date against other customers in the meantime is what
+//     caused the stuck slots.
+//   - Completed — the event already happened. It cannot occupy a date in any
+//     forward-looking availability sense.
+//   - Cancelled/Declined — as before.
+export const SLOT_OCCUPYING_STATUSES = ["Confirmed"];
+
 // PDP "Customize items" workshop requests — added 2026-08-27 per the
 // frontend team's exact request (their suggested shape, used verbatim).
 // DELIBERATELY SEPARATE from ChangeRequestSchema/changeRequests above,

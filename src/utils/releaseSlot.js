@@ -1,5 +1,5 @@
 import Package from "../models/Package.js";
-import Booking from "../models/Booking.js";
+import Booking, { SLOT_OCCUPYING_STATUSES } from "../models/Booking.js";
 import { utcDayRange } from "./dateRange.js";
 
 /**
@@ -32,11 +32,16 @@ export async function releaseSlotIfUnused(packageId, eventDate, { excludeBooking
 
   const { start, end } = utcDayRange(eventDate);
 
-  // Any OTHER non-cancelled booking still occupying this package/date?
+  // Any OTHER booking still genuinely occupying this package/date? Uses the
+  // same SLOT_OCCUPYING_STATUSES definition as computeAvailability, so the
+  // two can never disagree about whether a date is taken. In particular a
+  // pending, not-yet-accepted request must NOT keep the entry alive here:
+  // it isn't holding the slot in the first place (2026-09-25), and treating
+  // it as a holder would strand the "Booked" entry forever.
   const stillOccupied = await Booking.countDocuments({
     packageId: String(packageId),
     eventDate: { $gte: start, $lt: end },
-    status: { $nin: ["Cancelled", "Declined"] },
+    status: { $in: SLOT_OCCUPYING_STATUSES },
     ...(excludeBookingId ? { _id: { $ne: excludeBookingId } } : {}),
   });
   if (stillOccupied > 0) return;

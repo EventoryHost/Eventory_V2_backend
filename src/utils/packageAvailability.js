@@ -1,4 +1,4 @@
-import Booking from "../models/Booking.js";
+import Booking, { SLOT_OCCUPYING_STATUSES } from "../models/Booking.js";
 import { utcDayRange } from "./dateRange.js";
 import { resolveVendorRefId } from "./resolveVendor.js";
 import { getEffectivePackagePrice } from "./packagePrice.js";
@@ -6,8 +6,10 @@ import { getEffectivePackagePrice } from "./packagePrice.js";
 /**
  * Availability is best-effort, built from three independent signals: the
  * vendor's own availabilityCalendar entries, the package's declared weekly
- * working days/time slots, and a live cross-check against actual (non-
- * cancelled) Bookings for that vendor/date — none of these alone is
+ * working days/time slots, and a live cross-check against actual
+ * slot-occupying (i.e. vendor-ACCEPTED) Bookings for that vendor/date — see
+ * SLOT_OCCUPYING_STATUSES in Booking.js for why a pending, not-yet-accepted
+ * request deliberately does not count — none of these alone is
  * authoritative, so the result exposes each signal rather than collapsing
  * them into a single misleadingly-certain yes/no. Final availability is
  * still only confirmed at actual booking time (Phase 4).
@@ -64,7 +66,7 @@ export async function computeAvailability(pkg, { date, guests, time, timeSlot })
       ? await Booking.countDocuments({
           vendorId: vendorRefId,
           eventDate: { $gte: start, $lt: end },
-          status: { $nin: ["Cancelled", "Declined"] },
+          status: { $in: SLOT_OCCUPYING_STATUSES },
         })
       : 0;
     availability.activeBookingsOnDate = activeBookingsOnDate;
@@ -80,7 +82,7 @@ export async function computeAvailability(pkg, { date, guests, time, timeSlot })
       const sameDay = await Booking.find({
         vendorId: vendorRefId,
         eventDate: { $gte: start, $lt: end },
-        status: { $nin: ["Cancelled", "Declined"] },
+        status: { $in: SLOT_OCCUPYING_STATUSES },
       })
         .select("startTime endTime")
         .lean();
@@ -265,7 +267,7 @@ export async function computeSlotsForDate(pkg, date) {
     ? await Booking.find({
         vendorId: vendorRefId,
         eventDate: { $gte: start, $lt: end },
-        status: { $nin: ["Cancelled", "Declined"] },
+        status: { $in: SLOT_OCCUPYING_STATUSES },
       })
         .select("startTime endTime")
         .lean()
