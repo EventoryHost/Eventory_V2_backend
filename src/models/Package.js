@@ -122,8 +122,52 @@ const PackageSchema = new mongoose.Schema(
             min: 0,
             max: 100,
           },
+          // FREE TEXT, kept as-is for backward compatibility: every
+          // existing package stores its timing here as a phrase ("2 days
+          // before the event", "On the event day"), and vendor UIs still
+          // post it. Parsed at quote time by utils/milestoneDueDate.js.
           dueDays: {
             type: String,
+          },
+
+          // STRUCTURED timing (added 2026-09-25) — the unambiguous form of
+          // the same thing. dueDays is unvalidated free text, so a vendor
+          // writing a phrasing the parser doesn't recognise silently gets
+          // no due date at all; these two fields remove the guesswork
+          // whenever the UI sends them.
+          //
+          // dueOffsetDays is a magnitude in days, always >= 0; the
+          // direction lives in dueOffsetFrom:
+          //   { dueOffsetFrom: "BeforeEvent", dueOffsetDays: 2 }  -> event - 2
+          //   { dueOffsetFrom: "AfterEvent",  dueOffsetDays: 1 }  -> event + 1
+          //   { dueOffsetFrom: "OnEvent" }                        -> event date
+          //   { dueOffsetFrom: "OnBooking" }                      -> booking date
+          // OnEvent/OnBooking ignore dueOffsetDays entirely.
+          //
+          // When present these WIN over dueDays; when absent the free-text
+          // parser runs exactly as before, so nothing already saved changes
+          // behaviour. See computeMilestoneDueDate for that precedence.
+          dueOffsetFrom: {
+            type: String,
+            enum: ["BeforeEvent", "AfterEvent", "OnEvent", "OnBooking"],
+            default: null,
+          },
+          dueOffsetDays: {
+            type: Number,
+            min: 0,
+            default: null,
+            // BeforeEvent/AfterEvent are meaningless without a magnitude,
+            // and silently resolving them to "0 days" would quietly make a
+            // milestone due on the event date the vendor did not choose.
+            // OnEvent/OnBooking ignore this field, so they never require it.
+            validate: {
+              validator: function requiresDaysForOffsetDirections(value) {
+                const from = this.dueOffsetFrom;
+                if (from !== "BeforeEvent" && from !== "AfterEvent") return true;
+                return value != null && Number.isFinite(Number(value));
+              },
+              message: "dueOffsetDays is required when dueOffsetFrom is BeforeEvent or AfterEvent",
+            },
           },
         },
       ],

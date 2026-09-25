@@ -1,5 +1,14 @@
 /**
- * Turns a vendor's free-text milestone `dueDays` into a real due date.
+ * Works out a payment milestone's real due date.
+ *
+ * TWO SOURCES, in precedence order:
+ *   1. The STRUCTURED fields dueOffsetFrom/dueOffsetDays (Package.js). These
+ *      are unambiguous, so when present they win and no text is parsed.
+ *   2. The legacy free-text `dueDays`, parsed heuristically below.
+ *
+ * The structured fields were added 2026-09-25 to remove the guesswork; the
+ * text parser stays because every package saved before then — and any vendor
+ * UI not yet updated — carries only `dueDays`.
  *
  * Package.paymentMilestones.milestones[].dueDays is `type: String` with no
  * validation and no UI constraint anywhere in this codebase, so vendors type
@@ -60,14 +69,53 @@ function addDays(date, n) {
 }
 
 /**
+ * Resolves the STRUCTURED timing fields (Package.js's dueOffsetFrom /
+ * dueOffsetDays). These are unambiguous, so when a milestone carries them
+ * they win outright and no text parsing happens.
+ *
+ * Returns undefined (not null) when the milestone has no structured timing,
+ * to distinguish "not specified this way" from "specified, but unresolvable"
+ * — only the former should fall back to the free-text parser.
+ */
+function fromStructured(eventDate, milestone, bookingDate) {
+  const from = milestone?.dueOffsetFrom;
+  if (!from) return undefined;
+
+  if (from === "OnBooking") return bookingDate ? new Date(bookingDate) : null;
+  if (!eventDate) return null;
+  if (from === "OnEvent") return new Date(eventDate);
+
+  const days = Number(milestone.dueOffsetDays);
+  if (!Number.isFinite(days)) return null;
+  if (from === "BeforeEvent") return addDays(eventDate, -Math.abs(days));
+  if (from === "AfterEvent") return addDays(eventDate, Math.abs(days));
+
+  return null;
+}
+
+/**
  * @param {Date|string} eventDate  the booking's event date
- * @param {string} dueDaysRaw      the vendor's free-text dueDays
- * @param {Date|string} [bookingDate]  used only by the "at booking" shape;
+ * @param {string|object} dueDaysRawOrMilestone  either the vendor's
+ *   free-text dueDays, or the whole milestone object (preferred — that is
+ *   what lets the structured dueOffsetFrom/dueOffsetDays fields be used).
+ * @param {Date|string} [bookingDate]  used by the "at booking" shape;
  *   defaults to now, which is correct at booking-creation time (the only
  *   place this runs) and harmless for a re-quote.
- * @returns {Date|null} null when the text specifies no resolvable timing
+ * @returns {Date|null} null when nothing resolvable was specified
  */
-export function computeMilestoneDueDate(eventDate, dueDaysRaw, bookingDate = new Date()) {
+export function computeMilestoneDueDate(eventDate, dueDaysRawOrMilestone, bookingDate = new Date()) {
+  // Accepts either shape so existing callers passing a bare dueDays string
+  // keep working unchanged.
+  const isMilestoneObject =
+    dueDaysRawOrMilestone !== null &&
+    typeof dueDaysRawOrMilestone === "object";
+
+  if (isMilestoneObject) {
+    const structured = fromStructured(eventDate, dueDaysRawOrMilestone, bookingDate);
+    if (structured !== undefined) return structured;
+  }
+
+  const dueDaysRaw = isMilestoneObject ? dueDaysRawOrMilestone.dueDays : dueDaysRawOrMilestone;
   if (!dueDaysRaw) return null;
 
   const text = String(dueDaysRaw).trim();
