@@ -1,6 +1,7 @@
 import Package from "../models/Package.js";
 import { validatePackageSubmission } from "../validators/packageValidators.js";
 import { buildGroupFilter } from "../utils/packageGroup.js";
+import { ReviewTransitionError } from "../utils/reviewTransitionError.js";
 
 /**
  * The package approval state machine.
@@ -29,14 +30,8 @@ const TRANSITIONS = {
   WentLive: { from: ["Approved"], to: "Live" },
 };
 
-export class ReviewTransitionError extends Error {
-  constructor(message, statusCode = 409, details = undefined) {
-    super(message);
-    this.name = "ReviewTransitionError";
-    this.statusCode = statusCode;
-    this.details = details;
-  }
-}
+// Shared with the vendor review service; re-exported so existing imports keep working.
+export { ReviewTransitionError };
 
 /**
  * @desc Run one transition across a package group.

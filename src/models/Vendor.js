@@ -1,5 +1,16 @@
 import mongoose from "mongoose";
 import { generateISTId } from "../utils/idGenerator.js";
+import {
+  VendorVerificationSchema,
+  VendorVerificationEventSchema,
+} from "./schemas/vendorVerificationSchema.js";
+import { VENDOR_STEPS } from "../constants/vendorSteps.js";
+import {
+  hasVerificationStatus,
+  legacyVerification,
+} from "../utils/vendorVerificationLegacy.js";
+import { computeCompletion } from "../utils/profileCompletion.js";
+import { deriveStatus } from "../utils/vendorVerificationStatus.js";
 
 const VendorSchema = new mongoose.Schema({
   id: {
@@ -57,6 +68,12 @@ const VendorSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  // The vendor chose to skip GST (not registered). Counts the GST step as
+  // done; it used to live only in the app's device storage.
+  isGstSkipped: {
+    type: Boolean,
+    default: false,
+  },
   
   isFaceMatchVerified: {
     type: Boolean,
@@ -97,6 +114,10 @@ const VendorSchema = new mongoose.Schema({
     branchName: String,
   }],
 
+  // Customer-visible "verified" badge (utils/publicFields.js reads it). Set
+  // when both review groups are approved, cleared when the admin sends a group
+  // back or rejects it; a verified vendor's own edit leaves it on ("Needs
+  // Action"). Only the verification service writes it.
   isVerified: {
     type: Boolean,
     default: false,
@@ -114,6 +135,19 @@ const VendorSchema = new mongoose.Schema({
     default: false,
   },
 
+  // Step-by-step admin review; see schemas/vendorVerificationSchema.js and
+  // services/vendorVerificationService.js.
+  verification: {
+    type: VendorVerificationSchema,
+    default: () => ({}),
+  },
+  verificationHistory: {
+    type: [VendorVerificationEventSchema],
+    default: [],
+  },
+
+  // DEPRECATED — superseded by `verification.steps`. Still read (for vendors
+  // not yet migrated), no longer written.
   adminReview: {
     businessProfile:  { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
     contactAndLocation: { status: { type: String, enum: ["Approved", "Rejected", "Pending"] }, notes: String, reviewedAt: Date },
@@ -176,6 +210,48 @@ const VendorSchema = new mongoose.Schema({
     type: Date,
     default: Date.now,
   },
+});
+
+VendorSchema.index({ "verification.status": 1, createdAt: -1 });
+
+// A vendor saved before step verification has no `verification`. Fill it in
+// from the legacy fields as it loads, so the rest of the code never has to ask
+// (the lean-query equivalent is effectiveVerification()). Only a document
+// loaded with every field it needs is backfilled — a projected read can't
+// derive the status correctly.
+VendorSchema.pre("init", function (raw) {
+  if (!raw || hasVerificationStatus(raw)) return;
+  if (!("isVerified" in raw)) return;
+  raw.verification = { ...(raw.verification || {}), ...legacyVerification(raw) };
+  this.$locals.verificationBackfilled = true;
+});
+
+// Every path computeCompletion and deriveStatus read.
+const COMPLETION_PATHS = [
+  "verification",
+  "isVerified",
+  "adminReview",
+  ...new Set(VENDOR_STEPS.flatMap((s) => s.fields)),
+];
+
+// Keep the derived fields (completionPercent, status) in sync on every
+// document save: the verification service, the KYC verification controller,
+// signup. Skipped for a projected document, which can't compute them.
+VendorSchema.pre("save", function syncVerificationMirror() {
+  if (!COMPLETION_PATHS.every((p) => this.isSelected(p))) return;
+  // Persist a backfilled legacy verification whole, not as a few sub-paths.
+  if (this.$locals.verificationBackfilled) {
+    this.markModified("verification");
+    this.$locals.verificationBackfilled = false;
+  }
+  const percent = computeCompletion(this).percent;
+  if (this.verification.completionPercent !== percent) {
+    this.verification.completionPercent = percent;
+  }
+  // A new vendor is never verified, whatever the create body said.
+  if (this.isNew && this.isVerified) this.isVerified = false;
+  const status = deriveStatus(this.verification, this.isVerified);
+  if (this.verification.status !== status) this.verification.status = status;
 });
 
 export default mongoose.model("Vendor", VendorSchema);

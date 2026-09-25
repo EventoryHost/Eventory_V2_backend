@@ -19,6 +19,7 @@ import {
   goLiveGroup,
   ReviewTransitionError,
 } from "../services/packageReviewService.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
 
 /**
  * The EM review surface.
@@ -126,11 +127,12 @@ export const getReviewQueue = async (req, res) => {
 
     const matchStage = { packageStatus: "Under Review" };
     if (search) {
-      const vendors = await Vendor.find({ businessName: { $regex: search, $options: "i" } }).select("id").lean();
+      const rx = { $regex: escapeRegex(String(search).slice(0, 100)), $options: "i" };
+      const vendors = await Vendor.find({ businessName: rx }).select("id").lean();
       const matchingVendorIds = vendors.map(v => v.id);
 
       matchStage.$or = [
-        { "step1_eventAndCrew.packageName": { $regex: search, $options: "i" } },
+        { "step1_eventAndCrew.packageName": rx },
         { vendorId: { $in: matchingVendorIds } }
       ];
     }

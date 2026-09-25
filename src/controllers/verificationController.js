@@ -10,6 +10,7 @@ import {
 } from "../utils/ifscDataset.js";
 import Vendor from "../models/Vendor.js";
 import { generateISTId } from "../utils/idGenerator.js";
+import { saveVendorEdit } from "../services/vendorVerificationService.js";
 
 dotenv.config();
 
@@ -36,7 +37,7 @@ const verifyGSTIN = async (req, res) => {
         if (vendor) {
           vendor.gstNumber = gstIn;
           vendor.isGstVerified = true;
-          await vendor.save();
+          await saveVendorEdit(vendor);
           console.log(`Updated Vendor ${vendor_id} with Dummy GSTIN`);
         }
       } catch (err) {
@@ -108,7 +109,7 @@ const verifyGSTIN = async (req, res) => {
           if (vendor) {
             vendor.gstNumber = gstIn;
             vendor.isGstVerified = true;
-            await vendor.save();
+            await saveVendorEdit(vendor);
           }
         } catch (vErr) { console.error("DB Update Error:", vErr); }
       }
@@ -125,7 +126,7 @@ const verifyGSTIN = async (req, res) => {
           if (vendor) {
             vendor.gstNumber = gstIn;
             vendor.isGstVerified = true;
-            await vendor.save();
+            await saveVendorEdit(vendor);
           }
         } catch (vErr) { console.error("DB Update Error:", vErr); }
       }
@@ -189,7 +190,7 @@ const verifyPAN = async (req, res) => {
         if (vendor) {
           vendor.panNumber = panNo;
           vendor.isPanVerified = true;
-          await vendor.save();
+          await saveVendorEdit(vendor);
           console.log(`Updated Vendor ${vendor_id} with Dummy PAN`);
         }
       } catch (err) {
@@ -288,7 +289,7 @@ const verifyPAN = async (req, res) => {
               }
 
               // Save the changes
-              await vendor.save();
+              await saveVendorEdit(vendor);
               console.log(
                 `Updated Vendor ${vendor_id} with PAN and GSTIN from verification`
               );
@@ -579,7 +580,7 @@ export const verifyBankDetails = async (req, res) => {
           } else {
             vendor.bankDetails.push(newBankAccount);
           }
-          await vendor.save();
+          await saveVendorEdit(vendor);
           console.log(`Updated Vendor ${vendor_id} with Dummy Bank Details`);
         }
       } catch (err) {
@@ -663,7 +664,7 @@ export const verifyBankDetails = async (req, res) => {
             } else {
               vendor.bankDetails.push(newBankAccount);
             }
-            await vendor.save();
+            await saveVendorEdit(vendor);
           }
         } catch (vErr) { console.error("DB Update Error:", vErr); }
       }
@@ -786,7 +787,7 @@ export const getDigilockerDocument = async (req, res) => {
         if (vendor) {
           if (originalAadhar) vendor.aadharNumber = originalAadhar;
           vendor.isAadharVerified = true;
-          await vendor.save();
+          await saveVendorEdit(vendor);
           console.log(`Updated Vendor ${vendor_id} with Dummy Aadhaar`);
         }
       } catch (err) {
@@ -834,7 +835,7 @@ export const getDigilockerDocument = async (req, res) => {
             vendor.aadharNumber = originalAadhar;
           }
           vendor.isAadharVerified = true;
-          await vendor.save();
+          await saveVendorEdit(vendor);
           console.log(
             `Updated Vendor ${vendor_id} with Aadhaar status from DigiLocker`
           );
@@ -922,7 +923,7 @@ export const faceMatch = async (req, res) => {
           if (vendor) {
             vendor.isFaceMatchVerified = true;
             vendor.faceMatchScore = data.face_match_score;
-            await vendor.save();
+            await saveVendorEdit(vendor);
           }
         } catch (vErr) { console.error("DB Update Error:", vErr); }
       }

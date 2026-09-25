@@ -13,6 +13,7 @@ import {
   syncPackageBooked,
   revertPackageAvailability,
 } from "./bookingController.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
 
 const SLA_HOURS = 4;
 const getSlaThreshold = () => new Date(Date.now() - SLA_HOURS * 60 * 60 * 1000);
@@ -50,7 +51,6 @@ const bookingNotFound = (res) =>
 const queryString = (value) =>
   typeof value === "string" && value.trim() ? value.trim() : undefined;
 
-const escapeRegex = (str) => String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /**
  * Resolves many Booking.vendorId values to their Vendor documents in two

@@ -69,7 +69,6 @@ router.route("/").get(getAllVendors).post(createVendor);
  *         description: Vendor not found
  *   patch:
  *     summary: Update a vendor
- *     description: Update specific fields of a vendor by ID.
  *     tags:
  *       - Vendors
  *     parameters:
@@ -104,9 +103,17 @@ router.route("/").get(getAllVendors).post(createVendor);
  *                     phone:
  *                       type: string
  *                       example: "+918888888888"
- *               isVerified:
+ *               isGstSkipped:
  *                 type: boolean
  *                 example: true
+ *     description: >
+ *       Update specific fields of a vendor by ID. Server-owned fields
+ *       (isVerified, verification, verificationHistory, adminReview,
+ *       isDeactivated, deletionRequestedAt, assignedEm*, rating, counters)
+ *       are ignored. While a review group is sent back for changes, fields of
+ *       that group's steps not marked Not correct are ignored too and listed
+ *       in `ignoredFields`. Each changed step that had been reviewed goes back
+ *       to Pending. The response carries `profileCompletion`.
  *     responses:
  *       200:
  *         description: Vendor updated successfully
