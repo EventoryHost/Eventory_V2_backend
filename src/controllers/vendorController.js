@@ -54,6 +54,10 @@ function stripServerOwnedFields(payload, { keep = [] } = {}) {
   return cleaned;
 }
 
+/** The stored value at a top-level or dotted ("bankDetails.0.ifscCode") path. */
+const valueAt = (doc, path) =>
+  path.split(".").reduce((node, part) => (node == null ? undefined : node[part]), doc);
+
 /** The vendor plus its completion, the way the app reads it. */
 const withCompletion = (vendor) => {
   const data = typeof vendor.toObject === "function" ? vendor.toObject() : { ...vendor };
@@ -181,7 +185,7 @@ export const updateVendor = async (req, res, next) => {
     const ignoredFields = [
       ...new Set(
         sentFields
-          .filter((k) => locked.has(rootOf(k)) && !sameValue(before[rootOf(k)], cleanBody[k]))
+          .filter((k) => locked.has(rootOf(k)) && !sameValue(valueAt(before, k), cleanBody[k]))
           .map(rootOf)
       ),
     ];

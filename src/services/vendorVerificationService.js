@@ -364,7 +364,10 @@ const applyAdminFields = (vendor, stepKey, patch) => {
         throw new ReviewTransitionError("email is not a valid address", 400);
       }
       updates.email = email;
-    } else if (typeof value === "string" && value.startsWith("data:")) {
+    } else if (
+      (typeof value === "string" && value.startsWith("data:")) ||
+      (Array.isArray(value) && value.some((v) => typeof v === "string" && v.startsWith("data:")))
+    ) {
       throw new ReviewTransitionError(`${field} must be an uploaded file URL, not inline data`, 400);
     } else {
       updates[field] = value;

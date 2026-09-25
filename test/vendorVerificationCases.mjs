@@ -332,5 +332,61 @@ export async function runVendorVerificationCases({ call, section, suffix }) {
     expect: (s, b) => s === 200 && b.data?.profileCompletion?.percent === 100,
   });
 
-  return [stepVendorId, skipVendorId];
+  // A step the app saves one screen at a time (Team & Experience: teamSize,
+  // then bookingsPerYear, then experience) stays open for its later screens
+  // while another step in the same sent-back group is still flagged.
+  const multiVendorId = `VENE2EMULTI${suffix}`;
+  await call({
+    method: "post", path: "/vendors",
+    body: { ...stepVendorBody, id: multiVendorId, phone: `+9192${String(suffix).slice(-8)}`, email: `e2e.multi.${suffix}@example.com` },
+    description: "Create a test vendor for multi-screen step fixes",
+    expect: (s) => s === 201,
+  });
+  for (const stepKey of ["businessScale", "aboutBrand"]) {
+    await call({
+      method: "put", path: `/admin/vendors/${multiVendorId}/review-step`,
+      body: { stepKey, status: "Rejected", note: "Please fix", reviewedBy: "E2E Admin" },
+      description: `review-step: flag ${stepKey}`,
+      expect: (s) => s === 200,
+    });
+  }
+  await call({
+    method: "put", path: `/admin/vendors/${multiVendorId}/groups/businessProfile/request-changes`,
+    body: { finalNote: "Two fixes", reviewedBy: "E2E Admin" },
+    description: "request-changes on Business Profile with two flagged steps",
+    expect: (s) => s === 200,
+  });
+  await call({
+    method: "patch", path: `/vendors/${multiVendorId}`,
+    body: { teamSize: "10" },
+    description: "First screen of a flagged multi-screen step: the step resets, the group stays sent back",
+    expect: (s, b) =>
+      s === 200 && b.ignoredFields?.length === 0 &&
+      b.data?.verification?.steps?.businessScale?.status === "Pending" &&
+      b.data.verification.groups?.businessProfile?.status === "Changes Requested",
+  });
+  await call({
+    method: "patch", path: `/vendors/${multiVendorId}`,
+    body: { bookingsPerYear: "50" },
+    description: "Next screen of the same step is still written (not locked)",
+    expect: (s, b) =>
+      s === 200 && b.ignoredFields?.length === 0 && b.data?.bookingsPerYear === "50" &&
+      b.profileCompletion?.steps?.find((st) => st.key === "businessScale")?.editable === true,
+  });
+  await call({
+    method: "patch", path: `/vendors/${multiVendorId}`,
+    body: { "eventCategories.0": "Wedding", businessName: "Changed" },
+    description: "Steps never flagged stay locked; an unchanged dotted path is not reported",
+    expect: (s, b) =>
+      s === 200 && JSON.stringify(b.ignoredFields) === JSON.stringify(["businessName"]) &&
+      b.data?.businessName === stepVendorBody.businessName,
+  });
+  await call({
+    method: "put", path: `/admin/vendors/${multiVendorId}/edit-step/businessPhotos`,
+    body: { fields: { businessPhotos: ["data:image/png;base64,AAAA"] }, reviewedBy: "E2E Admin" },
+    description: "edit-step: inline data inside a list -> 400",
+    expect: (s) => s === 400,
+  });
+
+  return [stepVendorId, skipVendorId, multiVendorId];
 }

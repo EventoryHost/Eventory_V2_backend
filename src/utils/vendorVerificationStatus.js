@@ -29,9 +29,22 @@ export const deriveStatus = (verification, isVerified) => {
  * Whether the vendor may change a step's fields right now. While its group is
  * Changes Requested, only the steps marked Not correct are open; a Rejected
  * group is redone in full, and anything else is freely editable.
+ *
+ * A Not correct step the vendor has started fixing since the group was sent
+ * back stays open until the group resubmits: the app saves several steps one
+ * screen at a time (Team & Experience is three PATCHes, Services & Event Types
+ * two), and the first save already resets the step to Pending.
  */
 export const isStepEditable = (verification, stepKey) => {
   const group = STEP_BY_KEY[stepKey]?.group;
-  if (verification?.groups?.[group]?.status !== "Changes Requested") return true;
-  return verification?.steps?.[stepKey]?.status === "Rejected";
+  const decision = verification?.groups?.[group];
+  if (decision?.status !== "Changes Requested") return true;
+  const step = verification?.steps?.[stepKey];
+  if (step?.status === "Rejected") return true;
+  return (
+    (step?.status || "Pending") === "Pending" &&
+    Boolean(step?.vendorEditedAt) &&
+    Boolean(decision.decidedAt) &&
+    new Date(step.vendorEditedAt) >= new Date(decision.decidedAt)
+  );
 };
