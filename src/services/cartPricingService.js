@@ -5,6 +5,7 @@ import Vendor from "../models/Vendor.js";
 import { round2 } from "../utils/money.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 import { computeLineConvenienceFee } from "./convenienceFeeService.js";
+import { computeMilestoneDueDate } from "../utils/milestoneDueDate.js";
 
 /**
  * Cart pricing/due-now calculation — Phase 3 Step 14. This is the
@@ -45,19 +46,12 @@ function convenienceFeeDisabled() {
   return String(process.env.CONVENIENCE_FEE_DISABLED || "").toLowerCase() === "true";
 }
 
-// Milestone dueDays is a free-text field on the vendor's Package
-// (Package.js: `dueDays: { type: String }`), not a number — some vendors
-// may have entered a real integer ("7"), others a description ("On event
-// day"). Only compute a real due date when it parses cleanly; otherwise
-// return the raw label and say so, rather than guessing.
-function tryComputeMilestoneDueDate(eventDate, dueDaysRaw) {
-  if (!eventDate || !dueDaysRaw) return null;
-  const days = parseInt(dueDaysRaw, 10);
-  if (isNaN(days) || String(days) !== String(dueDaysRaw).trim()) return null;
-  const due = new Date(eventDate);
-  due.setUTCDate(due.getUTCDate() - days);
-  return due;
-}
+// Milestone dueDays is free text on the vendor's Package (Package.js:
+// `dueDays: { type: String }`) with no validation anywhere, so vendors write
+// a phrase ("2 days before the event"), not a number. Parsing moved to
+// utils/milestoneDueDate.js — see that file for why the old integer-only
+// parser returned null for literally every value in the database, leaving
+// Booking.paymentMilestones[].dueDate empty on every booking.
 
 // GST rule (explicit, 2026-09-11): show/add GST ONLY when the vendor marked
 // the package price as NOT inclusive of GST (gstInclusive:false) and set a
@@ -111,7 +105,7 @@ function computeLineMilestones(lineTotal, pkg, eventDate) {
   const milestones = pkg.paymentMilestones?.milestones || [];
   return milestones.map((m) => {
     const amount = m.percentage != null ? round2((lineTotal * m.percentage) / 100) : null;
-    const dueDate = tryComputeMilestoneDueDate(eventDate, m.dueDays);
+    const dueDate = computeMilestoneDueDate(eventDate, m.dueDays);
     return {
       title: m.title,
       percentage: m.percentage ?? null,
