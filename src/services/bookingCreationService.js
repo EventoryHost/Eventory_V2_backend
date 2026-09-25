@@ -174,6 +174,13 @@ export async function createBookingsFromCheckoutSession(session, payment, option
       // customer's booking detail screen lists each one, and the package
       // they came from may be edited later.
       selectedAddOns: line.selectedAddOns || [],
+      // Same chain, for the choose-N item picks — previously dropped
+      // entirely too (see Booking.js's SelectedItemSchema comment). Not
+      // just their total (which goes into pricing.itemsAdded above): which
+      // specific items were chosen, from which group, is otherwise
+      // unrecoverable once the cart item/checkout session it came from is
+      // gone.
+      selectedItems: line.selectedItems || [],
       notes: line.specialRequest || null,
       // The cart-wide "Booking Notes" (Checkout Contact page's
       // BookingNotesSection.tsx) — ONE note the customer wrote for the whole

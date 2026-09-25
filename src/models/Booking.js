@@ -130,6 +130,25 @@ const SelectedAddOnSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// Same gap/fix as SelectedAddOnSchema above, for choose-N picks instead of
+// add-ons: pricing.itemsAdded only ever kept the rolled-up total, and this
+// schema had no field to carry the actual selections (which items, from
+// which group) forward from the checkout line at all — mirrors CartItem.js's
+// SelectedItemSchema exactly (groupKey/itemId/itemName/price/isChargeable).
+// itemId is a String for the same reason addOnId above is: vendor step2 item
+// subdocuments frequently have no real _id, and the frontend falls back to a
+// synthetic one.
+const SelectedItemSchema = new mongoose.Schema(
+  {
+    groupKey: { type: String, required: true },
+    itemId: { type: String, default: null },
+    itemName: { type: String, required: true },
+    price: { type: Number, default: 0 },
+    isChargeable: { type: Boolean, default: false },
+  },
+  { _id: false }
+);
+
 const BookingSchema = new mongoose.Schema(
   {
     bookingId: {
@@ -284,6 +303,13 @@ const BookingSchema = new mongoose.Schema(
     // SelectedAddOnSchema's own comment above for why this was missing
     // entirely until now.
     selectedAddOns: { type: [SelectedAddOnSchema], default: [] },
+
+    // The choose-N picks actually selected on this booking's line at
+    // checkout, carried through cart -> checkout line -> here — see
+    // SelectedItemSchema's own comment above for why this was missing
+    // entirely until now (only the rolled-up pricing.itemsAdded total
+    // survived).
+    selectedItems: { type: [SelectedItemSchema], default: [] },
 
     pricing: {
       type: PricingSchema,
