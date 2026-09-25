@@ -105,13 +105,19 @@ function computeLineMilestones(lineTotal, pkg, eventDate) {
   const milestones = pkg.paymentMilestones?.milestones || [];
   return milestones.map((m) => {
     const amount = m.percentage != null ? round2((lineTotal * m.percentage) / 100) : null;
-    const dueDate = computeMilestoneDueDate(eventDate, m.dueDays);
+    // Whole milestone, not just m.dueDays — lets the structured
+    // dueOffsetFrom/dueOffsetDays fields take precedence when set.
+    const dueDate = computeMilestoneDueDate(eventDate, m);
     return {
       title: m.title,
       percentage: m.percentage ?? null,
       amount,
       dueDaysRaw: m.dueDays ?? null,
-      dueDate, // null if dueDays wasn't a clean integer or there's no event date yet
+      // Echoed so a client can render/re-edit the vendor's structured timing
+      // rather than having to re-derive it from the free-text label.
+      dueOffsetFrom: m.dueOffsetFrom ?? null,
+      dueOffsetDays: m.dueOffsetDays ?? null,
+      dueDate, // null when no resolvable timing was specified, or there's no event date yet
     };
   });
 }
