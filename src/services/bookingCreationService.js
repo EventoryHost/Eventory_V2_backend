@@ -1,7 +1,5 @@
 import Booking from "../models/Booking.js";
-import Package from "../models/Package.js";
 import { generateISTId } from "../utils/idGenerator.js";
-import { utcDayRange } from "../utils/dateRange.js";
 import { round2 } from "../utils/money.js";
 import { applyPricingBreakdown } from "../utils/pricingBreakdown.js";
 
@@ -67,38 +65,6 @@ function mapMilestonesToBookingSchema(quoteMilestones, tokenAmountPaid, paidAt, 
     status: i === tokenIndex ? "Received" : "Pending",
     receivedDate: i === tokenIndex ? paidAt : null,
   }));
-}
-
-// "Reserve slots" (this step's own wording) — adds/updates a "Booked"
-// entry on the package's OWN availabilityCalendar array. This is NOT a
-// vendor-code change: availabilityCalendar already exists on Package.js
-// specifically to hold both vendor-entered Blocked entries AND
-// system-written Booked entries side by side (see Package.js's own status
-// enum: ["Available","Blocked","Booked"] — "Booked" has no other writer
-// anywhere in this codebase until now, since nothing created real Bookings
-// before this step). Best-effort: updates an existing same-day entry if
-// one exists, otherwise pushes a new one; never downgrades an existing
-// "Blocked" entry (a vendor's manual block takes precedence).
-async function reserveSlot(packageId, eventDate) {
-  if (!eventDate) return;
-  const pkg = await Package.findById(packageId).select("availabilityCalendar availabilitySettings.workMode");
-  if (!pkg) return;
-  // TIME_SLOTS packages are booked per slot (see computeSlotsForDate) — one
-  // booking must not mark the whole day Booked and shut out the other slots.
-  if (pkg.availabilitySettings?.workMode === "TIME_SLOTS") return;
-
-  const { start, end } = utcDayRange(eventDate);
-  const existing = (pkg.availabilityCalendar || []).find((e) => {
-    const d = new Date(e.date);
-    return d >= start && d < end;
-  });
-
-  if (existing) {
-    if (existing.status !== "Blocked") existing.status = "Booked";
-  } else {
-    pkg.availabilityCalendar.push({ date: start, status: "Booked" });
-  }
-  await pkg.save();
 }
 
 /**
@@ -257,15 +223,22 @@ export async function createBookingsFromCheckoutSession(session, payment, option
 
     createdBookingIds.push(booking._id);
 
-    // Best-effort — a slot-reservation failure must not roll back a
-    // successful Booking (the payment already went through).
-    try {
-      // A booking with a chosen slot is tracked per slot (Booking.startTime/
-      // endTime), so it must not also mark the whole day Booked.
-      if (!booking.startTime) await reserveSlot(line.packageId, line.eventDetails?.date);
-    } catch (err) {
-      console.error(`[bookingCreationService] Failed to reserve slot for package ${line.packageId}:`, err.message);
-    }
+    // NO slot reservation here (removed 2026-09-25). This used to call
+    // reserveSlot() the instant payment landed, which marked the package's
+    // availabilityCalendar "Booked" BEFORE the vendor had accepted
+    // anything — and the only release path (bookingController.js's cancel)
+    // is gated on `previousStatus === "Confirmed"`, so a booking cancelled
+    // while still NewBooking/Viewed/InDiscussion never freed its date. The
+    // entry then sat there permanently: the vendor's calendar showed the
+    // day blocked and every later customer was refused that date.
+    //
+    // The pre-acceptance window is already covered WITHOUT a calendar
+    // entry: computeAvailability counts live non-cancelled Bookings for
+    // the vendor/date against dailyCapacity (packageAvailability.js), and
+    // that signal self-heals on cancellation because the row simply stops
+    // matching. Hard-reserving the calendar is now what ACCEPTING a
+    // booking does (bookingController.js's syncPackageBooked), which is
+    // the one point where the vendor has actually committed to the date.
   }
 
   payment.bookingCreated = true;
