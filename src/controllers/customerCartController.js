@@ -4,7 +4,7 @@ import Cart from "../models/Cart.js";
 import CartItem from "../models/CartItem.js";
 import Package from "../models/Package.js";
 import WishlistItem from "../models/WishlistItem.js";
-import { computeAvailability } from "../utils/packageAvailability.js";
+import { computeAvailability, validateTimeSlotSelection } from "../utils/packageAvailability.js";
 import { round2 } from "../utils/money.js";
 import { computeCartQuote } from "../services/cartPricingService.js";
 import { resolveVendorRefId } from "../utils/resolveVendor.js";
@@ -96,6 +96,7 @@ async function buildCartPayload(cart) {
         availability = await computeAvailability(pkg, {
           date: item.eventDetails?.date || undefined,
           guests: item.eventDetails?.guestCount || undefined,
+          timeSlot: item.eventDetails?.timeSlot || undefined,
         });
       }
 
@@ -266,16 +267,11 @@ export const addCartItem = async (req, res) => {
       }
     }
 
-    // REAL BUG FOUND during end-to-end testing (2026-08-13, testsuite.pdf):
-    // pkg.vendorId is stored as the Vendor's business-id string (e.g.
-    // "VEN20260511163553528") rather than its Mongo _id for every
-    // currently-seeded package — copying it forward verbatim into
-    // CartItem.vendorId (a required ObjectId field) previously failed
-    // validation entirely (add-to-cart 500'd for every real package), and
-    // even if it hadn't, it would have saved a vendorId that never matches
-    // what the vendor's OWN dashboard queries by — meaning a real booking
-    // could exist that its vendor could never see. Resolved to the real
-    // Vendor._id here instead of trusting Package.vendorId's stored shape.
+    // Never copy pkg.vendorId forward verbatim: it holds the public
+    // "VEN..." id on most packages and a legacy Mongo _id on the rest, and
+    // a cart item saved with the wrong one propagates through checkout into
+    // a Booking its own vendor can never see. resolveVendorRefId normalises
+    // both to the public id — the shape every vendor-side query filters on.
     // See src/utils/resolveVendor.js for the full write-up.
     const resolvedVendorId = await resolveVendorRefId(pkg.vendorId);
     if (!resolvedVendorId) {
@@ -359,6 +355,21 @@ export const updateCartItem = async (req, res) => {
       selectedForCheckout,
     } = req.body;
     const { item, cart } = resolved;
+
+    // Re-validate the slot only when the date or slot actually changed, so
+    // resending an unchanged (possibly legacy-format) slot never blocks an
+    // unrelated edit like adding an add-on.
+    const nextDate = date !== undefined ? date : item.eventDetails.date;
+    const nextSlot = timeSlot !== undefined ? timeSlot : item.eventDetails.timeSlot;
+    const dateChanged = date !== undefined && String(new Date(date).toISOString().slice(0, 10)) !== String(item.eventDetails.date ? new Date(item.eventDetails.date).toISOString().slice(0, 10) : "");
+    const slotChanged = timeSlot !== undefined && timeSlot !== item.eventDetails.timeSlot;
+    if (nextSlot && nextDate && (dateChanged || slotChanged)) {
+      const livePkg = await Package.findOne({ _id: item.packageId, packageStatus: "Live" }).lean();
+      if (livePkg) {
+        const slotCheck = await validateTimeSlotSelection(livePkg, nextDate, nextSlot);
+        if (!slotCheck.ok) return res.status(400).json({ status: "FAILED", message: slotCheck.message });
+      }
+    }
 
     if (eventType !== undefined) item.eventDetails.eventType = eventType;
     if (guests !== undefined) item.eventDetails.guestCount = guests;

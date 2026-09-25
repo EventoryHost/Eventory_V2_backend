@@ -6,6 +6,10 @@ import {
   removeCheckoutLine,
   cancelCheckoutSession,
   updateContactDetails,
+  updateEventTiming,
+  updateAlternateCoordinator,
+  updateGstin,
+  updateBookingNote,
 } from "../controllers/customerCheckoutController.js";
 import { protectCustomer } from "../middlewares/customerAuth.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
@@ -13,6 +17,10 @@ import {
   createCheckoutSessionSchema,
   updateCheckoutLineSchema,
   updateContactDetailsSchema,
+  updateEventTimingSchema,
+  updateAlternateCoordinatorSchema,
+  updateGstinSchema,
+  updateBookingNoteSchema,
 } from "../validators/customerCheckoutValidators.js";
 
 const router = express.Router();
@@ -139,6 +147,138 @@ router.delete("/session/:sessionId", cancelCheckoutSession);
  *       410: { description: Session is no longer Active }
  */
 router.patch("/session/:sessionId/contact", validateRequest(updateContactDetailsSchema), updateContactDetails);
+
+/**
+ * @swagger
+ * /api/customer/checkout/session/{sessionId}/event-timing:
+ *   patch:
+ *     summary: Capture/edit "When's the event?" — the actual event start/end time
+ *     description: |
+ *       One set for the whole order (not per line) — told to vendors so they
+ *       can plan arrival/setup. Deliberately separate from each line's booked
+ *       timeSlot. Only fields sent are touched; when both startTime and
+ *       endTime end up set, endTime must be after startTime.
+ *     tags: [Customer Checkout]
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               startTime: { type: string, description: "HH:MM 24h" }
+ *               endTime: { type: string, description: "HH:MM 24h" }
+ *     responses:
+ *       200: { description: Updated, full session + validation returned }
+ *       400: { description: Invalid shape, no field provided, or endTime not after startTime }
+ *       404: { description: Session not found }
+ *       410: { description: Session is no longer Active }
+ */
+router.patch("/session/:sessionId/event-timing", validateRequest(updateEventTimingSchema), updateEventTiming);
+
+/**
+ * @swagger
+ * /api/customer/checkout/session/{sessionId}/alternate-coordinator:
+ *   patch:
+ *     summary: Capture/edit "Add Alternate Coordinator" — an optional day-of backup contact
+ *     description: One set for the whole order. Only fields sent are touched.
+ *     tags: [Customer Checkout]
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name: { type: string, maxLength: 100 }
+ *               phone: { type: string, description: "10-digit Indian mobile" }
+ *     responses:
+ *       200: { description: Updated, full session + validation returned }
+ *       400: { description: Invalid shape, or no field provided }
+ *       404: { description: Session not found }
+ *       410: { description: Session is no longer Active }
+ */
+router.patch(
+  "/session/:sessionId/alternate-coordinator",
+  validateRequest(updateAlternateCoordinatorSchema),
+  updateAlternateCoordinator
+);
+
+/**
+ * @swagger
+ * /api/customer/checkout/session/{sessionId}/gstin:
+ *   patch:
+ *     summary: Capture/edit "Add GSTIN details for tax invoice" (optional)
+ *     description: One set for the whole order. Only fields sent are touched. `number` must be a valid 15-character GSTIN.
+ *     tags: [Customer Checkout]
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               businessName: { type: string, maxLength: 200 }
+ *               number: { type: string, description: "15-character GSTIN" }
+ *     responses:
+ *       200: { description: Updated, full session + validation returned }
+ *       400: { description: Invalid shape, invalid GSTIN format, or no field provided }
+ *       404: { description: Session not found }
+ *       410: { description: Session is no longer Active }
+ */
+router.patch("/session/:sessionId/gstin", validateRequest(updateGstinSchema), updateGstin);
+
+/**
+ * @swagger
+ * /api/customer/checkout/session/{sessionId}/booking-note:
+ *   patch:
+ *     summary: Capture/edit "Booking Notes" — one note for the whole order
+ *     description: |
+ *       Session-scoped write — does NOT touch the customer's Cart, unlike
+ *       the cart's own PUT /customer/cart/note. Added 2026-09-25 to fix a
+ *       real bug: the frontend was previously (mis)using that cart endpoint
+ *       from this Contact-page section, which cancels the customer's
+ *       current checkout session as a side effect (every cart-mutating
+ *       endpoint does, since a cart edit can invalidate an already-locked
+ *       quote) — so saving a note here was cancelling the very session the
+ *       customer was checking out with.
+ *     tags: [Customer Checkout]
+ *     parameters:
+ *       - in: path
+ *         name: sessionId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [bookingNote]
+ *             properties:
+ *               bookingNote: { type: string, maxLength: 1000 }
+ *     responses:
+ *       200: { description: Updated, full session + validation returned }
+ *       400: { description: Invalid shape }
+ *       404: { description: Session not found }
+ *       410: { description: Session is no longer Active }
+ */
+router.patch("/session/:sessionId/booking-note", validateRequest(updateBookingNoteSchema), updateBookingNote);
 
 /**
  * @swagger

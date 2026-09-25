@@ -52,7 +52,7 @@ const failed = (res, message, error) => {
  * Check if a date has conflicts for the vendor (other bookings or calendar blocks).
  * Returns true if conflicting.
  */
-const detectConflict = async (vendorId, eventDate, excludeBookingId = null) => {
+export const detectConflict = async (vendorId, eventDate, excludeBookingId = null) => {
   const dateStart = new Date(eventDate);
   dateStart.setUTCHours(0, 0, 0, 0);
   const dateEnd = new Date(eventDate);
@@ -81,7 +81,7 @@ const detectConflict = async (vendorId, eventDate, excludeBookingId = null) => {
 /**
  * Sync package availability to "Booked" for the event date.
  */
-const syncPackageBooked = async (packageId, eventDate) => {
+export const syncPackageBooked = async (packageId, eventDate) => {
   const pkg = await Package.findById(packageId);
   if (!pkg) return;
 
@@ -97,6 +97,24 @@ const syncPackageBooked = async (packageId, eventDate) => {
   }
   await pkg.save();
 };
+
+/**
+ * Revert package availability to "Available" for the event date.
+ *
+ * MERGE RESOLUTION 2026-09-25: this used to hold its own copy of the
+ * release logic. That copy was extracted into utils/releaseSlot.js so the
+ * customer cancel path could share it rather than drift; adminBooking-
+ * Controller.js (added on dev in parallel) still imports this name, so the
+ * export is kept and now simply delegates. One implementation, two callers
+ * — re-inlining the old body would restore exactly the duplication the
+ * extraction removed.
+ *
+ * Note this is strictly safer than the body it replaces: releaseSlotIfUnused
+ * refuses to downgrade a vendor's manual "Blocked" entry, and won't free a
+ * date some other live booking still occupies. The old version did neither.
+ */
+export const revertPackageAvailability = async (packageId, eventDate) =>
+  releaseSlotIfUnused(packageId, eventDate);
 
 /**
  * `totalReceived` is the sum of the milestones marked Received. Keeping the
@@ -480,7 +498,7 @@ const PRICING_FIELDS = [
 /**
  * @desc    Apply the vendor's edits to a booking
  * @route   PUT /api/bookings/:bookingId
- * @body    { changeRequests?: [{ id, status?, qty? }], pricing?, paymentMilestones?, calendarNote? }
+ * @body    { changeRequests?: [{ id, status?, qty? }], customizeRequests?: [{ id, status? }], pricing?, paymentMilestones?, calendarNote? }
  *
  * Everything the vendor changes on the details screen is saved in one call, so
  * a half-applied edit is not reachable: decisions and the price they were
@@ -501,7 +519,13 @@ export const updateBooking = async (req, res) => {
       });
     }
 
-    const { changeRequests, pricing, paymentMilestones, calendarNote } = req.body;
+    const {
+      changeRequests,
+      customizeRequests,
+      pricing,
+      paymentMilestones,
+      calendarNote,
+    } = req.body;
 
     if (Array.isArray(changeRequests)) {
       for (const decision of changeRequests) {
@@ -514,6 +538,20 @@ export const updateBooking = async (req, res) => {
           request.status = decision.status;
           request.respondedAt = new Date();
         }
+      }
+    }
+
+    // The vendor's decision on each PDP "Customize items" request. Only the
+    // status moves — the request body itself is the customer's and stays as
+    // sent. Like changeRequests, deciding one does not reprice anything on
+    // its own; the vendor carries the money on the pricing rows below.
+    if (Array.isArray(customizeRequests)) {
+      for (const decision of customizeRequests) {
+        const request = booking.customizeRequests.id(decision.id);
+        if (!request) {
+          return notFound(res, `Customize request "${decision.id}" not found`);
+        }
+        if (decision.status !== undefined) request.status = decision.status;
       }
     }
 

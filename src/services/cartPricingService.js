@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import CartItem from "../models/CartItem.js";
 import Package from "../models/Package.js";
 import Vendor from "../models/Vendor.js";
@@ -139,15 +140,23 @@ export async function computeQuoteForLines(lines, discount = 0) {
   const packageById = new Map(packages.map((p) => [String(p._id), p]));
 
   // Vendors — needed for the convenience-fee score (bookingsPerYear /
-  // experience / teamSize). line.vendorId is the resolved real Vendor._id
-  // (see customerCheckoutController/customerCartController — always run
-  // through resolveVendorRefId before being stored on a line/item), so a
-  // direct _id lookup is safe here.
+  // experience / teamSize). line.vendorId is whatever resolveVendorRefId
+  // (utils/resolveVendor.js) wrote onto the line/item — that helper's return
+  // convention flipped 2026-09-24 from the Vendor's Mongo _id to its public
+  // "VEN..." id (to fix vendor bookings/enquiries lookups), which made a
+  // plain `_id` match here throw a CastError for every checkout (real bug,
+  // found live: "Cast to ObjectId failed for value \"VEN...\"). Matching on
+  // EITHER shape — a valid ObjectId via `_id`, or the public id via `id` —
+  // is correct both for lines written under the old convention and the new
+  // one, so this doesn't silently break again on the next such flip.
   const vendorIds = [...new Set(lines.map((l) => String(l.vendorId)).filter(Boolean))];
+  const validObjectIds = vendorIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
   const vendors = vendorIds.length
-    ? await Vendor.find({ _id: { $in: vendorIds } }).select("bookingsPerYear experience teamSize").lean()
+    ? await Vendor.find({ $or: [{ _id: { $in: validObjectIds } }, { id: { $in: vendorIds } }] })
+        .select("bookingsPerYear experience teamSize")
+        .lean()
     : [];
-  const vendorById = new Map(vendors.map((v) => [String(v._id), v]));
+  const vendorById = new Map(vendors.flatMap((v) => [[String(v._id), v], [v.id, v]]));
 
   const feeDisabled = convenienceFeeDisabled();
   const now = new Date();

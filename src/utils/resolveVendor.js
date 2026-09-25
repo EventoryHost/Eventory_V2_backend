@@ -50,18 +50,32 @@ export async function resolveVendorForPackage(vendorIdRaw, fields = PUBLIC_VENDO
 }
 
 /**
- * @desc Resolves a raw Package.vendorId value to the real Vendor's Mongo
- * _id (an ObjectId), for use when WRITING a new document's own vendorId
- * field (CartItem, Booking, Enquiry, ...) — never copy Package.vendorId
- * forward verbatim, since today's real data needs this fallback to end up
- * with a value that actually matches what the vendor's own dashboard
- * queries by (Vendor._id). Returns null if no real vendor can be found —
- * callers must decide how to handle that (reject the write rather than
- * silently saving an unresolvable reference).
+ * @desc Resolves a raw Package.vendorId value to the vendor's PUBLIC id
+ * ("VEN..."), for use when WRITING a new document's own vendorId field
+ * (CartItem, CheckoutSession line, Booking, Enquiry, ...) — never copy
+ * Package.vendorId forward verbatim, since it is stored in both shapes
+ * across real data and only one of them matches what the vendor's own
+ * dashboard queries by.
+ *
+ * Returned the Vendor's Mongo `_id` until 2026-09-24. That was correct when
+ * written, but the convention has since flipped: scripts/migrate-vendor-id-
+ * to-public.mjs moved every stored vendorId to the public id, and the vendor
+ * controllers now filter on it directly (getVendorBookings / getVendorEnquiries
+ * pass `req.params.vendorId` — the "VEN..." id the app holds — straight into
+ * the query). Every consumer schema declares `vendorId: { type: String }`, so
+ * the public id stores cleanly; it was this helper alone that kept minting
+ * ObjectIds, which is why a vendor's bookings and enquiries stopped listing.
+ *
+ * Falls back to the Mongo `_id` only for a vendor that genuinely has no public
+ * id, so an odd legacy document still gets a resolvable reference rather than
+ * null. Returns null if no real vendor can be found — callers must decide how
+ * to handle that (reject the write rather than silently saving an unresolvable
+ * reference).
  */
 export async function resolveVendorRefId(vendorIdRaw) {
-  const vendor = await resolveVendorForPackage(vendorIdRaw, "_id");
-  return vendor?._id || null;
+  const vendor = await resolveVendorForPackage(vendorIdRaw, "_id id");
+  if (!vendor) return null;
+  return vendor.id || vendor._id || null;
 }
 
 export default { resolveVendorForPackage, resolveVendorRefId };

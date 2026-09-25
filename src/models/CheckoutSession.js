@@ -115,6 +115,44 @@ const CheckoutSessionSchema = new mongoose.Schema(
       email: { type: String, trim: true, lowercase: true, default: null },
     },
 
+    // "When's the event?" (Contact page, added 2026-09-22) — the ACTUAL
+    // start/end of the event itself, e.g. "the wedding runs 6 PM to 11 PM",
+    // told to vendors so they can plan arrival/setup. Deliberately separate
+    // from each line's eventDetails.timeSlot (the slot the vendor was
+    // BOOKED for — see CheckoutLineSchema above / Package availability
+    // slots) — the two can legitimately differ (a decorator's booked slot
+    // is when THEY work, not when the event itself runs). One set for the
+    // whole order, same "ONE for the whole order, not per line" pattern as
+    // contactDetails right above (this section renders once on the page,
+    // not per vendor). "HH:MM" 24h strings, matching TIME_OPTIONS on the
+    // frontend's EventTimingSection.tsx.
+    eventTiming: {
+      startTime: { type: String, trim: true, default: null },
+      endTime: { type: String, trim: true, default: null },
+    },
+
+    // "Add Alternate Coordinator" (Contact page's AlternateCoordinatorSection.tsx,
+    // added 2026-09-24) — an optional day-of backup contact, in case the
+    // primary contact doesn't pick up. Was local-state-only on the frontend
+    // (never sent anywhere) — see customerCheckoutController.js's
+    // updateAlternateCoordinator for the write path. One set for the whole
+    // order, same reasoning as contactDetails/eventTiming above.
+    alternateCoordinator: {
+      name: { type: String, trim: true, default: null },
+      phone: { type: String, trim: true, default: null },
+    },
+
+    // "Add GSTIN details for tax invoice" (Contact page's GstinToggleSection.tsx,
+    // added 2026-09-24) — optional, for a business tax invoice instead of a
+    // consumer one. Same "was local-state-only" story as alternateCoordinator
+    // above. gstin is stored uppercase (matches the frontend's own
+    // `.toUpperCase()` input handling) but NOT format-validated here beyond
+    // shape — see updateGstinSchema for why.
+    gstin: {
+      businessName: { type: String, trim: true, default: null },
+      number: { type: String, trim: true, uppercase: true, default: null },
+    },
+
     // The frozen quote from computeQuoteForLines at (re)lock time — Mixed,
     // same reasoning as elsewhere in this codebase for a computed,
     // shape-varying payload (e.g. Package's festivals.details): this is a

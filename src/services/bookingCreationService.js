@@ -125,6 +125,13 @@ export async function createBookingsFromCheckoutSession(session, payment, option
       eventDate: line.eventDetails?.date,
       guestRange: { min: line.eventDetails?.guestCount || null, max: line.eventDetails?.guestCount || null },
       location: line.eventDetails?.location || null,
+      // Chosen slot ("HH:MM - HH:MM", the `value` from GET
+      // /customer/packages/:id/slots) — persisted so the slots endpoint can
+      // mark that slot taken for later customers (added 2026-09-19).
+      ...(() => {
+        const m = String(line.eventDetails?.timeSlot || "").match(/^\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\s*$/);
+        return m ? { startTime: m[1], endTime: m[2] } : {};
+      })(),
       packageSnapshot: {
         name: line.packageSnapshot?.name,
         price: line.packageSnapshot?.price,
@@ -150,11 +157,23 @@ export async function createBookingsFromCheckoutSession(session, payment, option
       // checkout line (which carried them from the cart item) — see
       // Booking.js's CustomizeRequestSchema comment for the full chain.
       customizeRequests: line.customizeRequests || [],
-      // The add-on lines themselves, not just their total (which goes into
-      // pricing.addonsAdded above) — the customer's booking detail screen
-      // lists each one, and the package they came from may be edited later.
+      // Same chain (Cart -> CheckoutSession line -> here) for the selected
+      // add-ons themselves — previously dropped entirely at this step (see
+      // Booking.js's SelectedAddOnSchema comment, added 2026-09-17). Not
+      // just their total (which goes into pricing.addonsAdded above): the
+      // customer's booking detail screen lists each one, and the package
+      // they came from may be edited later.
       selectedAddOns: line.selectedAddOns || [],
       notes: line.specialRequest || null,
+      // The cart-wide "Booking Notes" (Checkout Contact page's
+      // BookingNotesSection.tsx) — ONE note the customer wrote for the whole
+      // order, meant to reach every vendor on it (session.bookingNote was
+      // already being captured on CheckoutSession, just never carried onto
+      // the Booking itself — see Booking.js's own eventNote comment: the
+      // vendor's booking details screen already has a box for exactly this,
+      // it was just always empty). Not the same as `notes` above, which is
+      // this ONE vendor's specific line.specialRequest.
+      eventNote: session.bookingNote || null,
       // "Notes for vendor" image attachments — see CartItem.js's own
       // comment on noteAttachments for the full context/chain.
       noteAttachments: line.noteAttachments || [],
@@ -165,6 +184,25 @@ export async function createBookingsFromCheckoutSession(session, payment, option
       // the quote couldn't compute one (no event date at checkout, etc.).
       convenienceFee: quoteLine.convenienceFee ?? null,
       convenienceFeeBreakdown: quoteLine.convenienceFeeBreakdown ?? null,
+      // The actual event timing from the Contact page — ONE value for the
+      // whole checkout session, carried onto every booking it produces (see
+      // Booking.js's own eventTiming comment for why this is separate from
+      // startTime/endTime above).
+      eventTiming: {
+        startTime: session.eventTiming?.startTime || null,
+        endTime: session.eventTiming?.endTime || null,
+      },
+      // Same "one value for the whole session, carried onto every booking it
+      // produces" pattern as eventTiming above — see CheckoutSession.js's
+      // own comment on alternateCoordinator/gstin.
+      alternateCoordinator: {
+        name: session.alternateCoordinator?.name || null,
+        phone: session.alternateCoordinator?.phone || null,
+      },
+      gstin: {
+        businessName: session.gstin?.businessName || null,
+        number: session.gstin?.number || null,
+      },
     });
     // Vendor's own utility (utils/pricingBreakdown.js) — runs first so the
     // "Pricing Breakdown" card's own fields (subtotal/tax/etc.) are

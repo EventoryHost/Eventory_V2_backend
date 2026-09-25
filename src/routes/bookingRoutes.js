@@ -55,6 +55,38 @@ import {
  *         respondedAt:
  *           type: string
  *           format: date-time
+ *     CustomizeRequest:
+ *       type: object
+ *       properties:
+ *         _id:
+ *           type: string
+ *         setupId:
+ *           type: string
+ *         itemId:
+ *           type: string
+ *           description: Locates the item inside packageSnapshot.deliverables.
+ *         requestType:
+ *           type: string
+ *           enum: [change, add, remove]
+ *         label:
+ *           type: string
+ *           example: "Fairy Lights"
+ *         quantity:
+ *           type: number
+ *           nullable: true
+ *         type:
+ *           type: string
+ *           nullable: true
+ *         colours:
+ *           type: array
+ *           items:
+ *             type: string
+ *         volume:
+ *           type: string
+ *           nullable: true
+ *         status:
+ *           type: string
+ *           enum: [Pending, Accepted, Rejected]
  *     PricingBreakdown:
  *       type: object
  *       description: |
@@ -197,6 +229,17 @@ import {
  *           type: array
  *           items:
  *             $ref: '#/components/schemas/ChangeRequest'
+ *         customizeRequests:
+ *           type: array
+ *           description: |
+ *             The customer's per-item customization requests from the PDP
+ *             "Customize items" flow, carried through cart -> checkout
+ *             unchanged. Separate from `changeRequests`: these name an item
+ *             INSIDE a setup and can ask to change it, not only add or
+ *             remove it. The vendor decides each one via `PUT /api/bookings/
+ *             {bookingId}`; deciding one does not reprice anything by itself.
+ *           items:
+ *             $ref: '#/components/schemas/CustomizeRequest'
  *         pricing:
  *           type: object
  *           description: |
@@ -253,6 +296,15 @@ import {
  *           type: number
  *         notes:
  *           type: string
+ *           description: The customer's note to this vendor ("Customer Note").
+ *         eventNote:
+ *           type: string
+ *           nullable: true
+ *           description: |
+ *             The customer's note about the event itself, shown separately
+ *             from `notes` on the vendor's details screen. Nothing writes it
+ *             yet — no cart/checkout field maps to it — so it is null on
+ *             every booking until a customer-side flow produces one.
  *         calendarNote:
  *           type: string
  *         createdAt:
@@ -678,6 +730,21 @@ router.post("/:bookingId/change-requests", requestPackageChanges);
  *                       enum: [Pending, Accepted, Rejected]
  *                     qty:
  *                       type: number
+ *               customizeRequests:
+ *                 type: array
+ *                 description: |
+ *                   The vendor's decision on each per-item customization
+ *                   request, by id. Only the status moves — the request body
+ *                   is the customer's and is never edited here.
+ *                 items:
+ *                   type: object
+ *                   required: [id]
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     status:
+ *                       type: string
+ *                       enum: [Pending, Accepted, Rejected]
  *               pricing:
  *                 type: object
  *                 properties:

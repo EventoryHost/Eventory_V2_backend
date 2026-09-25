@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { generateISTId } from "../utils/idGenerator.js";
 import {
+  CHANGE_REQUEST_STATUSES,
   ChangeRequestSchema,
   PackageSnapshotSchema,
   PaymentMilestoneSchema,
@@ -56,29 +57,52 @@ const CustomizeRequestSchema = new mongoose.Schema(
     type: { type: String, default: null, trim: true },
     colours: { type: [String], default: [] },
     volume: { type: String, default: null, trim: true },
+    // Added 2026-09-22 with `_id: true` below, so the vendor can decide each
+    // request individually from the booking details screen. Reuses
+    // CHANGE_REQUEST_STATUSES rather than minting a parallel enum — the
+    // decision a vendor makes here is the same` Pending/Accepted/Rejected
+    // decision changeRequests already carries, even though the two request
+    // shapes stay separate (see this schema's own comment above).
+    status: {
+      type: String,
+      enum: CHANGE_REQUEST_STATUSES,
+      default: "Pending",
+    },
   },
-  { _id: false }
+  // `_id: true` — was false until 2026-09-22. The vendor's accept/decline
+  // addresses one request by id, so ids must be STABLE: Mongoose mints a
+  // fresh _id every time it hydrates a subdocument that has none stored, so
+  // an id read in a GET would not match the one a later PUT resolves
+  // against. scripts/backfill-customize-request-ids.mjs persists ids on
+  // every already-stored booking; run it before relying on this.
+  { _id: true }
 );
 
-// Snapshot of the add-ons this booking was placed with — the same
-// name/price/quantity shape CartItem.js's SelectedAddOnSchema carries, kept
-// here for the same reason packageSnapshot is: what the customer bought must
-// survive the vendor later editing their package. Defined locally rather than
-// imported, matching CustomizeRequestSchema's precedent above.
-//
-// Added 2026-09-18: `pricing.addonsAdded` already carried the MONEY
-// (bookingCreationService.js sums line.selectedAddOns into it), but the lines
-// themselves were dropped at that hop, so nothing downstream could say WHICH
-// add-ons were bought — the customer's booking detail screen lists them.
-// addOnId is a String for the same reason it is in CartItem.js: vendor step2
-// add-on subdocuments frequently have no _id at all, and the frontend falls
-// back to a synthetic id ("addon-0").
+// Added 2026-09-17 — Booking previously had NO field for the selected
+// add-ons at all: pricing.addonsAdded only ever kept a rolled-up total
+// (see bookingCreationService.js), and this schema itself never carried the
+// per-addon list forward from the checkout line. That's a bigger gap than
+// just missing color/category — the "Added Add-ons" list on the booking
+// summary page had nothing real to read AT ALL, for any field, not just the
+// ones the frontend flagged. Mirrors CartItem.js's SelectedAddOnSchema
+// exactly (same category/subCategory/color/image fields, same reasoning:
+// snapshot what the customer actually picked, not re-derivable catalog
+// data) — kept as its own copy rather than a shared import since Booking.js
+// and CartItem.js don't otherwise share schema modules. addOnId is a String
+// for the same reason it is in CartItem.js: vendor step2 add-on
+// subdocuments frequently have no _id at all, and the frontend falls back
+// to a synthetic id ("addon-0"). Empty on vendor-created bookings (walk-ins
+// etc.), which never go through a cart.
 const SelectedAddOnSchema = new mongoose.Schema(
   {
     addOnId: { type: String, default: null },
     name: { type: String, required: true },
     price: { type: Number, required: true, default: 0 },
     quantity: { type: Number, default: 1, min: 1 },
+    category: { type: String, default: null, trim: true },
+    subCategory: { type: String, default: null, trim: true },
+    color: { type: String, default: null, trim: true },
+    image: { type: String, default: null },
   },
   { _id: false }
 );
@@ -152,6 +176,9 @@ const BookingSchema = new mongoose.Schema(
       type: String,
       default: null,
     },
+    // The vendor's BOOKED slot — "HH:MM" 24h, from the chosen time slot
+    // (getPackageSlots/timeSlot), not the event's own actual timing. See
+    // eventTiming below for that.
     startTime: {
       type: String,
       default: null,
@@ -159,6 +186,30 @@ const BookingSchema = new mongoose.Schema(
     endTime: {
       type: String,
       default: null,
+    },
+    // "When's the event?" (Contact page's EventTimingSection.tsx, added
+    // 2026-09-22) — the ACTUAL start/end of the event itself, told to the
+    // vendor so they can plan arrival/setup. Deliberately separate from
+    // startTime/endTime above (the slot the vendor was BOOKED for) — see
+    // CheckoutSession.js's own comment on why these can legitimately
+    // differ. Carried over from CheckoutSession.eventTiming (one set for
+    // the whole order) at booking-creation time — see bookingCreationService.js.
+    eventTiming: {
+      startTime: { type: String, default: null },
+      endTime: { type: String, default: null },
+    },
+
+    // Carried over from CheckoutSession.alternateCoordinator/gstin at
+    // booking-creation time — see that model's own comment for the full
+    // context (added 2026-09-24, both were previously local-state-only on
+    // the frontend and never reached the backend at all).
+    alternateCoordinator: {
+      name: { type: String, default: null },
+      phone: { type: String, default: null },
+    },
+    gstin: {
+      businessName: { type: String, default: null },
+      number: { type: String, default: null },
     },
 
     packageSnapshot: {
@@ -205,10 +256,11 @@ const BookingSchema = new mongoose.Schema(
     // own comment above for why this is separate from changeRequests.
     customizeRequests: [CustomizeRequestSchema],
 
-    // The add-ons chosen at checkout, carried through cart -> checkout line
-    // -> here. Empty on vendor-created bookings (walk-ins etc.), which never
-    // go through a cart.
-    selectedAddOns: [SelectedAddOnSchema],
+    // The add-ons actually selected on this booking's line at checkout,
+    // carried through cart -> checkout line -> here — see
+    // SelectedAddOnSchema's own comment above for why this was missing
+    // entirely until now.
+    selectedAddOns: { type: [SelectedAddOnSchema], default: [] },
 
     pricing: {
       type: PricingSchema,
@@ -229,6 +281,18 @@ const BookingSchema = new mongoose.Schema(
     },
 
     notes: {
+      type: String,
+      default: null,
+    },
+
+    // The customer's note about the EVENT itself, distinct from `notes`
+    // (their note to this vendor, carried from the cart's specialRequest).
+    // Added 2026-09-22 because the vendor's booking details screen shows the
+    // two in different places — "Event Note" on the event details card,
+    // "Customer Note" inside the package card. Nothing writes it yet: no
+    // cart/checkout field maps to it, so it stays null until a customer-side
+    // flow produces one, and the vendor's screen hides the box while it is.
+    eventNote: {
       type: String,
       default: null,
     },
