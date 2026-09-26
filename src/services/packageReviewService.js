@@ -2,6 +2,8 @@ import Package from "../models/Package.js";
 import { validatePackageSubmission } from "../validators/packageValidators.js";
 import { buildGroupFilter } from "../utils/packageGroup.js";
 import { ReviewTransitionError } from "../utils/reviewTransitionError.js";
+import { resolveVendorForPackage } from "../utils/resolveVendor.js";
+import { profileGaps, READINESS_FIELDS } from "./vendorReadinessService.js";
 
 /**
  * The package approval state machine.
@@ -89,6 +91,14 @@ export const submitGroup = async (groupFilter, { by } = {}) => {
     packageStatus: { $in: TRANSITIONS.Submitted.from },
   }).lean();
 
+  // A package is reviewed as the vendor's listing, so the vendor has to be
+  // fully onboarded first. Checked before the package itself: an account-level
+  // gap is the one the vendor must fix no matter what the package holds. With
+  // no candidates there is nothing to submit, and transition() reports why.
+  if (candidates.length > 0) {
+    await assertVendorReady(candidates[0].vendorId);
+  }
+
   const failures = candidates
     .map((pkg) => ({
       packageId: pkg._id,
@@ -106,6 +116,25 @@ export const submitGroup = async (groupFilter, { by } = {}) => {
     set: { emAction: null, "submission.submittedAt": new Date() },
     inc: { "submission.count": 1 },
   });
+};
+
+/**
+ * @desc Refuse a submission while the vendor's Business Profile Setup or
+ * Personal Documents step is incomplete. Every variant of a group belongs to
+ * one vendor, so one lookup covers the group.
+ */
+const assertVendorReady = async (vendorIdRaw) => {
+  const vendor = await resolveVendorForPackage(vendorIdRaw, READINESS_FIELDS);
+  if (!vendor) throw new ReviewTransitionError("Vendor profile not found", 404);
+
+  const gaps = profileGaps(vendor);
+  if (gaps.businessProfile.length || gaps.personalDocuments.length) {
+    throw new ReviewTransitionError(
+      "Complete your business profile setup and personal document verification before submitting a package for review.",
+      403,
+      { profileIncomplete: gaps }
+    );
+  }
 };
 
 /** @desc EM clears the package for sale. The vendor still has to publish it. */

@@ -68,8 +68,10 @@ const VendorSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
-  // The vendor chose to skip GST (not registered). Counts the GST step as
-  // done; it used to live only in the app's device storage.
+  // GST is optional: the vendor may Skip it on the GSTIN screen. Recorded so a
+  // deliberate skip is told apart from a step not yet reached — package
+  // submission requires GST verified or skipped. Cleared when a GSTIN is
+  // verified.
   isGstSkipped: {
     type: Boolean,
     default: false,

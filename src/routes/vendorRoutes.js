@@ -1,5 +1,14 @@
 import express from "express";
+import {
+  requireVendor,
+  ownerFromParam,
+  ownerFromBody,
+  nobody,
+} from "../middlewares/vendorAuth.js";
 const router = express.Router();
+
+// The caller must be the vendor named in the URL.
+const ownsVendor = requireVendor(ownerFromParam("id"));
 import {
   getAllVendors,
   createVendor,
@@ -45,7 +54,12 @@ import {
  *       201:
  *         description: Vendor created successfully
  */
-router.route("/").get(getAllVendors).post(createVendor);
+// Listing every vendor exposes all of their documents and bank details;
+// no vendor needs it (the admin panel has /api/admin/vendors/all).
+router
+  .route("/")
+  .get(requireVendor(nobody), getAllVendors)
+  .post(requireVendor(ownerFromBody("id")), createVendor);
 
 /**
  * @swagger
@@ -137,9 +151,13 @@ router.route("/").get(getAllVendors).post(createVendor);
  *       404:
  *         description: Vendor not found
  */
-router.route("/:id").get(getVendorById).patch(updateVendor).delete(deleteVendor);
-router.patch("/:id/deactivate", deactivateVendor);
-router.patch("/:id/reactivate", reactivateVendor);
+router
+  .route("/:id")
+  .get(ownsVendor, getVendorById)
+  .patch(ownsVendor, updateVendor)
+  .delete(ownsVendor, deleteVendor);
+router.patch("/:id/deactivate", ownsVendor, deactivateVendor);
+router.patch("/:id/reactivate", ownsVendor, reactivateVendor);
 
 /**
  * @swagger
@@ -164,7 +182,7 @@ router.patch("/:id/reactivate", reactivateVendor);
  *       404:
  *         description: Vendor not found
  */
-router.patch("/:id/request-deletion", requestVendorDeletion);
+router.patch("/:id/request-deletion", ownsVendor, requestVendorDeletion);
 
 /**
  * @swagger
@@ -187,6 +205,6 @@ router.patch("/:id/request-deletion", requestVendorDeletion);
  *       404:
  *         description: Vendor not found
  */
-router.patch("/:id/cancel-deletion", cancelVendorDeletion);
+router.patch("/:id/cancel-deletion", ownsVendor, cancelVendorDeletion);
 
 export default router;

@@ -37,6 +37,7 @@ const verifyGSTIN = async (req, res) => {
         if (vendor) {
           vendor.gstNumber = gstIn;
           vendor.isGstVerified = true;
+          vendor.isGstSkipped = false;
           await saveVendorEdit(vendor);
           console.log(`Updated Vendor ${vendor_id} with Dummy GSTIN`);
         }
@@ -109,6 +110,7 @@ const verifyGSTIN = async (req, res) => {
           if (vendor) {
             vendor.gstNumber = gstIn;
             vendor.isGstVerified = true;
+            vendor.isGstSkipped = false;
             await saveVendorEdit(vendor);
           }
         } catch (vErr) { console.error("DB Update Error:", vErr); }
@@ -126,6 +128,7 @@ const verifyGSTIN = async (req, res) => {
           if (vendor) {
             vendor.gstNumber = gstIn;
             vendor.isGstVerified = true;
+            vendor.isGstSkipped = false;
             await saveVendorEdit(vendor);
           }
         } catch (vErr) { console.error("DB Update Error:", vErr); }

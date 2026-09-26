@@ -17,6 +17,7 @@ import {
   validateCreateBooking,
   validateChangeRequests,
   validateBookingUpdate,
+  validatePaymentMilestonesUpdate,
 } from "../validators/bookingValidators.js";
 
 // ─── Constants ──────────────────────────────────────────────
@@ -601,5 +602,108 @@ export const updateBooking = async (req, res) => {
     });
   } catch (error) {
     return failed(res, "Failed to update booking", error);
+  }
+};
+
+const PERCENT_TOLERANCE = 0.5;
+
+/**
+ * @desc    Re-plan the instalments still owed on a booking
+ * @route   PUT /api/bookings/:bookingId/payment-milestones
+ * @body    { milestones: [{ id?, title, percentage, dueDate }] }
+ *
+ * Received milestones are money already in hand, so they are kept exactly as
+ * stored whatever the request says. The rest are replaced by the request, and
+ * their amounts are resolved here rather than trusted from the client: the
+ * outstanding balance is split across them in proportion to their shares, so
+ * the plan always adds up to the booking total to the rupee.
+ */
+export const updatePaymentMilestones = async (req, res) => {
+  try {
+    const validation = validatePaymentMilestonesUpdate(req.body);
+    if (!validation.valid) return invalid(res, validation.errors);
+
+    const booking = await findBooking(req.params.bookingId);
+    if (!booking) return notFound(res, "Booking not found");
+
+    if (TERMINAL_STATUSES.includes(booking.status)) {
+      return res.status(400).json({
+        status: "FAILED",
+        message: `Cannot change a booking with status "${booking.status}".`,
+      });
+    }
+
+    const received = booking.paymentMilestones.filter(
+      (m) => m.status === "Received"
+    );
+    const receivedIds = new Set(received.map((m) => String(m._id)));
+    const receivedTitles = new Set(received.map((m) => m.title.toLowerCase()));
+
+    const pending = req.body.milestones.filter(
+      (m) =>
+        !receivedIds.has(String(m.id)) &&
+        !receivedTitles.has(m.title.trim().toLowerCase())
+    );
+    if (!pending.length) {
+      return invalid(res, [
+        "milestones must include at least one milestone that is not yet received",
+      ]);
+    }
+
+    const pendingShare = pending.reduce((sum, m) => sum + m.percentage, 0);
+    if (pendingShare <= 0) {
+      return invalid(res, [
+        "the outstanding milestones must carry a share of the total",
+      ]);
+    }
+    if (received.every((m) => typeof m.percentage === "number")) {
+      const receivedShare = received.reduce((sum, m) => sum + m.percentage, 0);
+      const totalShare = receivedShare + pendingShare;
+      if (Math.abs(totalShare - 100) > PERCENT_TOLERANCE) {
+        return invalid(res, [
+          `milestone percentages must add up to 100 (got ${Math.round(totalShare * 100) / 100})`,
+        ]);
+      }
+    }
+
+    const receivedAmount = received.reduce((sum, m) => sum + (m.amount || 0), 0);
+    const outstanding = Math.max(
+      0,
+      Math.round((booking.totalAmount || 0) - receivedAmount)
+    );
+    const amounts = pending.map((m) =>
+      Math.round((outstanding * m.percentage) / pendingShare)
+    );
+    amounts[amounts.length - 1] +=
+      outstanding - amounts.reduce((sum, a) => sum + a, 0);
+
+    const existing = new Map(
+      booking.paymentMilestones.map((m) => [String(m._id), m])
+    );
+    booking.paymentMilestones = [
+      ...received.map((m) => m.toObject()),
+      ...pending.map((m, i) => {
+        const previous = existing.get(String(m.id));
+        return {
+          ...(previous ? { _id: previous._id } : {}),
+          title: m.title.trim(),
+          percentage: m.percentage,
+          amount: amounts[i],
+          dueDate: new Date(m.dueDate),
+          status: "Pending",
+        };
+      }),
+    ];
+
+    syncTotalReceived(booking);
+    await booking.save();
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Payment milestones updated",
+      booking: withPricingBreakdown(booking),
+    });
+  } catch (error) {
+    return failed(res, "Failed to update payment milestones", error);
   }
 };
