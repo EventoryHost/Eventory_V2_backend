@@ -2,6 +2,7 @@ import "dotenv/config";
 import axios from "axios";
 import mongoose from "mongoose";
 import fs from "fs";
+import { runVendorVerificationCases } from "./vendorVerificationCases.mjs";
 
 /**
  * End-to-end test suite for Phase 0-5 (customer-side) — run against a LIVE
@@ -642,6 +643,12 @@ async function main() {
   });
 
   // ============================================================
+  // VENDOR STEP VERIFICATION (admin review of a vendor profile)
+  // Also runnable on its own: node test/e2e-vendor-verification.mjs
+  // ============================================================
+  const vendorVerificationIds = await runVendorVerificationCases({ call, section, suffix });
+
+  // ============================================================
   // CLEANUP — remove every piece of test data created above
   // ============================================================
   console.log("\n=== Cleaning up all test data ===");
@@ -668,6 +675,7 @@ async function main() {
   await db.collection("customer_wishlist_items").deleteMany({ customerId: mongoIdA });
   await db.collection("customer_compare_sessions").deleteMany({ customerId: mongoIdA });
   await CustomerModel.deleteMany({ email: { $in: [custA.email, custB.email, newEmail] } });
+  await db.collection("vendors").deleteMany({ id: { $in: vendorVerificationIds } });
   console.log("Cleanup complete.");
 
   await mongoose.disconnect();
