@@ -9,6 +9,7 @@ import {
   cancelBooking,
   requestPackageChanges,
   updateBooking,
+  updatePaymentMilestones,
 } from "../controllers/bookingController.js";
 
 /**
@@ -795,5 +796,58 @@ router.post("/:bookingId/change-requests", requestPackageChanges);
  *         description: Server error
  */
 router.put("/:bookingId", updateBooking);
+
+/**
+ * @swagger
+ * /api/bookings/{bookingId}/payment-milestones:
+ *   put:
+ *     summary: Re-plan the payment milestones still owed on a booking
+ *     description: >
+ *       Replaces every milestone that is not yet Received. Received milestones
+ *       are kept as stored. Amounts are resolved server-side by splitting the
+ *       outstanding balance across the pending milestones by their percentage,
+ *       so the plan always sums to the booking total. Due dates are required
+ *       and may not be in the past.
+ *     tags: [Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [milestones]
+ *             properties:
+ *               milestones:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   required: [title, percentage, dueDate]
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     title:
+ *                       type: string
+ *                     percentage:
+ *                       type: number
+ *                     dueDate:
+ *                       type: string
+ *                       format: date-time
+ *     responses:
+ *       200:
+ *         description: Payment milestones updated
+ *       400:
+ *         description: Validation failed, or booking already resolved
+ *       404:
+ *         description: Booking not found
+ *       500:
+ *         description: Server error
+ */
+router.put("/:bookingId/payment-milestones", updatePaymentMilestones);
 
 export default router;

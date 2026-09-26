@@ -65,9 +65,10 @@ const djArtistStep2Schema = new mongoose.Schema({
   // Set length, crew breakdown and experience. A DJ running as a venue's
   // in-house service has no Step 1 of its own, so the service body carries
   // them. `performingArtists` is a headcount here, unlike the named list on
-  // step1_eventAndCrew.performers.
-  minDurationMinutes: { type: Number },
-  maxDurationMinutes: { type: Number },
+  // step1_eventAndCrew.performers. Durations are decimal hours, like every
+  // package duration (1 hr 30 min = 1.5).
+  minDurationHours: { type: Number },
+  maxDurationHours: { type: Number },
   totalTeamSize: { type: Number },
   performingArtists: { type: Number },
   supportingTeam: { type: Number },

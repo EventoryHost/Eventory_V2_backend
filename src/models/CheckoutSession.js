@@ -40,6 +40,14 @@ const CheckoutLineSchema = new mongoose.Schema(
       image: { type: String },
       vendorType: { type: String },
       variantType: { type: String },
+      // Vendor-editable feature set (spaces/setups/menus/items/addOns, per
+      // vendor type — utils/packageDeliverables.js), frozen at line-build
+      // time. Carried onto Booking.packageSnapshot.deliverables at booking
+      // creation (bookingCreationService.js) so a later vendor edit to the
+      // live Package can never retroactively change what the customer
+      // actually booked. Mixed shape, same reasoning as selectedAddOns/
+      // selectedItems above.
+      deliverables: { type: mongoose.Schema.Types.Mixed, default: null },
     },
     eventDetails: {
       // eventType added Step 17 — the final BRD's checkout validation

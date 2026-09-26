@@ -121,7 +121,8 @@ const catererStep2Schema = new mongoose.Schema({
   minMenuSelections: { type: Number },
   // Kitchen setup time and crew size. A caterer running as a venue's in-house
   // service has no Step 1 of its own, so the service body carries them.
-  setupDurationMinutes: { type: Number },
+  // Decimal hours, like every package duration (1 hr 30 min = 1.5).
+  setupDurationHours: { type: Number },
   minTeamSize: { type: Number },
   maxTeamSize: { type: Number },
 }, { _id: false });

@@ -15,6 +15,7 @@ import {
   getVendorReviews,
 } from "../controllers/customerDiscoveryController.js";
 import { publicBrowseLimiter } from "../middlewares/rateLimiters.js";
+import { recordView } from "../controllers/packageAnalyticsController.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
 import {
   browsePackagesQuerySchema,
@@ -280,6 +281,28 @@ router.get(
  *       400: { description: Invalid packageId or missing/invalid date }
  *       404: { description: Package not found or not Live }
  */
+/**
+ * @swagger
+ * /api/customer/packages/{packageId}/view:
+ *   post:
+ *     summary: Count one open of a package's detail page
+ *     description: |
+ *       Public — guests count too. Call once when the detail page opens, not
+ *       on every re-fetch of GET /customer/packages/{packageId}. Feeds the
+ *       vendor's package analytics; only Live packages are counted.
+ *     tags: [Customer Discovery]
+ *     parameters:
+ *       - in: path
+ *         name: packageId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: View counted }
+ *       400: { description: Invalid packageId }
+ *       404: { description: Package not found or not Live }
+ */
+router.post("/packages/:packageId/view", publicBrowseLimiter, recordView);
+
 router.get("/packages/:packageId/slots", publicBrowseLimiter, validateRequest(packageSlotsQuerySchema, "query"), getPackageSlots);
 
 /**
