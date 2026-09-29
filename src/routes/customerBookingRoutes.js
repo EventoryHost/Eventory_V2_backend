@@ -3,6 +3,8 @@ import { getBookings, getBookingDetail, cancelBooking, getInvoicePdf } from "../
 import { protectCustomer } from "../middlewares/customerAuth.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
 import { bookingsQuerySchema } from "../validators/customerBookingValidators.js";
+import { getBookingReview, submitBookingReview } from "../controllers/customerReviewController.js";
+import { submitReviewSchema } from "../validators/customerReviewValidators.js";
 
 const router = express.Router();
 
@@ -124,5 +126,77 @@ router.post("/:bookingId/cancel", protectCustomer, cancelBooking);
  *       404: { description: Not found (or not owned by this customer) }
  */
 router.get("/:bookingId/invoice", protectCustomer, getInvoicePdf);
+
+/**
+ * @swagger
+ * /api/customer/bookings/{bookingId}/review:
+ *   get:
+ *     summary: Review state for this booking's event — what's reviewed, what still can be
+ *     description: |
+ *       The "Add a review" screen covers the whole event (every package
+ *       booked for the same event type on the same day), opened from any
+ *       one of its bookings. Returns the event-level review if one exists,
+ *       whether the event can be reviewed yet, and per package: whether it
+ *       is reviewable and the customer's existing review of it (one per
+ *       package per customer, so it may come from an earlier booking).
+ *     tags: [Customer Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: 'eventKey + canReviewEvent + eventReview + packages[]' }
+ *       400: { description: Invalid bookingId }
+ *       404: { description: Not found (or not owned by this customer) }
+ *   post:
+ *     summary: Submit the event's reviews — event-level ratings and/or package ratings
+ *     description: |
+ *       Create-only. A package is reviewable once its booking is Completed,
+ *       or Confirmed with the event date past. Validation is all or
+ *       nothing: a package outside this event, not yet reviewable, or
+ *       already reviewed fails the request before anything is written.
+ *     tags: [Customer Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               event:
+ *                 type: object
+ *                 properties:
+ *                   overallRating: { type: integer, minimum: 1, maximum: 5 }
+ *                   supportRating: { type: integer, minimum: 1, maximum: 5 }
+ *                   overallHighlights: { type: array, maxItems: 10, items: { type: string, maxLength: 60 } }
+ *                   supportHighlights: { type: array, maxItems: 10, items: { type: string, maxLength: 60 } }
+ *               packages:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   required: [bookingId, rating]
+ *                   properties:
+ *                     bookingId: { type: string }
+ *                     rating: { type: integer, minimum: 1, maximum: 5 }
+ *                     comment: { type: string, maxLength: 2000 }
+ *                     photos:
+ *                       type: array
+ *                       maxItems: 5
+ *                       items: { type: string, format: uri, maxLength: 2000 }
+ *                       description: Uploaded https URLs only — never a data:/base64 URI
+ *     responses:
+ *       201: { description: Saved — returns the updated review state (same shape as GET) }
+ *       400: { description: Validation failed, invalid bookingId, or a package outside this event }
+ *       404: { description: Not found (or not owned by this customer) }
+ *       409: { description: Not reviewable yet, or already reviewed }
+ */
+router.get("/:bookingId/review", protectCustomer, getBookingReview);
+router.post("/:bookingId/review", protectCustomer, validateRequest(submitReviewSchema), submitBookingReview);
 
 export default router;
