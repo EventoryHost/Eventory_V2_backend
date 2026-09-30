@@ -140,6 +140,16 @@ export async function createBookingsFromCheckoutSession(session, payment, option
         variantType: line.packageSnapshot?.variantType,
         gstRatePercent: quoteLine.gstRatePercent ?? null,
         gstInclusive: !!quoteLine.gstInclusive,
+        // Full vendor-editable feature set, frozen on the CheckoutSession
+        // line at buildLine/variant-switch time (customerCheckoutController.js)
+        // — carried through unchanged so a vendor editing their live Package
+        // after this booking exists (new items, renamed setups, etc.) can
+        // never alter what this specific booking says was actually booked.
+        // PackageSnapshotSchema.deliverables already existed (shared with
+        // the vendor-side manual-booking/enquiry paths, see
+        // utils/packageDeliverables.js) — this customer path just never
+        // populated it until now.
+        deliverables: line.packageSnapshot?.deliverables ?? null,
       },
       paymentType: assumeFullyPaid ? "FullPaid" : isFree ? "FreeBooking" : "AdvancePaid",
       status: "NewBooking", // awaiting vendor acknowledgement — the new schema's own default/first status, never auto-Confirmed here

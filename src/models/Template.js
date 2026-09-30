@@ -35,7 +35,7 @@ const TemplateSchema = new mongoose.Schema(
 
     isLive: {
       type: Boolean,
-      default: false, // Templates start hidden until EM explicitly publishes them
+      default: true, // Templates are live on creation; admins can hide them from the rmadmin Templates Library
     },
   },
   { timestamps: true }

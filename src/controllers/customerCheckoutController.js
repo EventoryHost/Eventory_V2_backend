@@ -8,6 +8,7 @@ import { computeContactValidation, computeLinesValidation } from "../services/ch
 import { computeAvailability } from "../utils/packageAvailability.js";
 import { resolveVendorRefId } from "../utils/resolveVendor.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
+import { snapshotDeliverables } from "../utils/packageDeliverables.js";
 
 /**
  * Checkout session — Phase 4 Steps 15-16. A short-lived, price-locked
@@ -84,6 +85,16 @@ async function buildLine({
         image: pkg.step4_sampleMedia?.media?.[0]?.url,
         vendorType: pkg.vendorType,
         variantType: pkg.variantType,
+        // Full vendor-editable feature set (spaces/setups/menus/items/addOns,
+        // per vendor type — see packageDeliverables.js), frozen at the same
+        // moment price/name/image are, so a later vendor edit to any of
+        // these can never retroactively change what this line's booking
+        // says the customer actually booked. GST is intentionally NOT
+        // snapshotted here — it stays sourced from the live quote
+        // (quoteLine.gstRatePercent/gstInclusive, cartPricingService.js),
+        // matching this codebase's existing "price/tax re-verified at every
+        // quote lock, deliverables frozen at line-build time" split.
+        deliverables: snapshotDeliverables(pkg),
       },
       eventDetails: {
         eventType: eventType || null,
@@ -407,6 +418,7 @@ export const updateCheckoutLine = async (req, res) => {
         image: newPkg.step4_sampleMedia?.media?.[0]?.url,
         vendorType: newPkg.vendorType,
         variantType: newPkg.variantType,
+        deliverables: snapshotDeliverables(newPkg),
       };
     }
 

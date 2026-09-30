@@ -3,6 +3,7 @@ import Package from "../models/Package.js";
 import Booking from "../models/Booking.js";
 import Template from "../models/Template.js";
 import Enquiry from "../models/Enquiry.js";
+import { statusFilter } from "../utils/vendorVerificationLegacy.js";
 
 // GET /api/admin/dashboard/kpis
 export const getDashboardKPIs = async (req, res) => {
@@ -25,7 +26,7 @@ export const getDashboardKPIs = async (req, res) => {
       totalLivePackages,
       openEnquiries
     ] = await Promise.all([
-      Vendor.countDocuments({ isVerified: false, isDeactivated: false }),
+      Vendor.countDocuments({ ...statusFilter(["Pending"]), isDeactivated: false }),
       Package.countDocuments({ packageStatus: "Under Review" }),
       Booking.countDocuments({ status: "Pending", createdAt: { $lt: slaThreshold } }),
       Booking.countDocuments({ status: "Pending" }),

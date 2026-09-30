@@ -1,6 +1,7 @@
 import Package from "../models/Package.js";
 import Vendor from "../models/Vendor.js";
 import { getModelForVendor } from "../utils/modelRegistry.js";
+import { upgradeLegacyDurationKeys } from "../utils/legacyDurationKeys.js";
 import { generateISTId } from "../utils/idGenerator.js";
 import {
   buildGroupFilter,
@@ -232,6 +233,8 @@ export const updatePackageStep = async (req, res) => {
     if (!updateField) {
       return res.status(400).json({ status: "FAILED", message: "Invalid step number" });
     }
+
+    if (updateField === STEP_FIELDS[2]) upgradeLegacyDurationKeys(stepData);
 
     // Convert stepData into flat dot-notation updates to prevent full-object replacement
     const flatUpdates = {};
@@ -530,6 +533,7 @@ export const updatePackageGroup = async (req, res) => {
         return res.status(400).json({ status: "FAILED", message: "Invalid step number" });
       }
       if (data && typeof data === "object" && !Array.isArray(data)) {
+        if (field === STEP_FIELDS[2]) upgradeLegacyDurationKeys(data);
         Object.keys(data).forEach((key) => {
           set[`${field}.${key}`] = data[key];
         });
@@ -911,6 +915,7 @@ export const addNestedItem = async (req, res) => {
     const locked = lockedEditResponse(current.packageStatus);
     if (locked) return res.status(409).json(locked);
 
+    upgradeLegacyDurationKeys(item);
     const updatePath = `step2_productsAndPricing.${arrayName}`;
     const updatedPackage = await Package.findByIdAndUpdate(
       packageId,
@@ -943,7 +948,7 @@ export const updateNestedItem = async (req, res) => {
     const subItem = array.id(itemId);
     if (!subItem) return res.status(404).json({ message: "Item not found" });
 
-    Object.assign(subItem, updates);
+    Object.assign(subItem, upgradeLegacyDurationKeys(updates));
     await pkg.save();
 
     return res.status(200).json({ status: "SUCCESS", package: pkg });

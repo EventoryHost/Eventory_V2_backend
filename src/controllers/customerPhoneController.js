@@ -134,7 +134,25 @@ export const verifyPhoneOtp = async (req, res, next) => {
       await customer.save();
 
       const { password, ...safeCustomer } = customer.toObject();
-      return res.status(200).json({ success: true, message: "Phone verified successfully", data: safeCustomer });
+      // customer/accessToken added 2026-09-26 alongside the original `data`
+      // key (kept for whatever already reads it, e.g.
+      // verifyPhoneOtpForAccount on the frontend) — real bug found live:
+      // the LOGIN flow's own verify-otp call (useAuthForm.ts) never passes
+      // `auth:false`, so a browser holding a stale-but-still-valid token
+      // from a previous session lands here instead of the anonymous branch
+      // below, and its `{ customer, accessToken }` destructure crashed with
+      // "Cannot read properties of undefined (reading 'authProviders')"
+      // since this branch never had those keys. accessToken is intentionally
+      // null (no new session is issued for an already-logged-in customer),
+      // and hasLocalPassword's `customer.authProviders?.some(...)` degrades
+      // to false safely rather than throwing.
+      return res.status(200).json({
+        success: true,
+        message: "Phone verified successfully",
+        data: safeCustomer,
+        customer: safeCustomer,
+        accessToken: null,
+      });
     }
 
     // ---- New primary flow: anonymous login-or-signup by phone ----
