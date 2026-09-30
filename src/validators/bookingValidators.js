@@ -287,6 +287,52 @@ export const validateBookingUpdate = (body) => {
   return { valid: errors.length === 0, errors };
 };
 
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * The vendor re-plans the instalments still owed. Every milestone needs a real
+ * due date: this is the screen that fixes a schedule whose dates have lapsed,
+ * so a date already in the past (beyond a day of timezone slack) is refused.
+ */
+export const validatePaymentMilestonesUpdate = (body) => {
+  const errors = [];
+  const milestones = body?.milestones;
+
+  if (!Array.isArray(milestones) || milestones.length === 0) {
+    return { valid: false, errors: ["milestones must be a non-empty array"] };
+  }
+
+  const seen = new Set();
+  const earliest = Date.now() - MS_PER_DAY;
+  milestones.forEach((milestone, i) => {
+    const title = milestone?.title?.trim();
+    if (!title) {
+      errors.push(`milestones[${i}].title is required`);
+    } else if (seen.has(title.toLowerCase())) {
+      errors.push(`milestones[${i}].title "${title}" is duplicated`);
+    } else {
+      seen.add(title.toLowerCase());
+    }
+
+    if (
+      typeof milestone?.percentage !== "number" ||
+      milestone.percentage < 0 ||
+      milestone.percentage > 100
+    ) {
+      errors.push(`milestones[${i}].percentage must be a number between 0 and 100`);
+    }
+
+    const due = milestone?.dueDate ? new Date(milestone.dueDate) : null;
+    if (!due || Number.isNaN(due.getTime())) {
+      errors.push(`milestones[${i}].dueDate must be a valid date`);
+    } else if (milestone.status !== "Received" && due.getTime() < earliest) {
+      errors.push(`milestones[${i}].dueDate cannot be in the past`);
+    }
+  });
+
+  return { valid: errors.length === 0, errors };
+};
+
 // ─── Enquiries ──────────────────────────────────────────────
 
 /**

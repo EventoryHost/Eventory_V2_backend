@@ -1,5 +1,19 @@
 import express from "express";
+import {
+  requireVendor,
+  ownerFromParam,
+  ownerFromBody,
+  ownerOfPackage,
+  ownerOfGroup,
+} from "../middlewares/vendorAuth.js";
+import { getPackageGroupAnalytics } from "../controllers/packageAnalyticsController.js";
 const router = express.Router();
+
+// Every write, and the reads that expose a vendor's own drafts and numbers,
+// must come from the vendor who owns the package. Public package reads stay
+// open: the customer site uses them.
+const ownsPackage = requireVendor(ownerOfPackage);
+const ownsGroup = requireVendor(ownerOfGroup);
 import {
   initializePackage,
   getPackageById,
@@ -210,7 +224,7 @@ import {
  *       500:
  *         description: Server error
  */
-router.post("/initialize", initializePackage);
+router.post("/initialize", requireVendor(ownerFromBody("vendorId")), initializePackage);
 
 /**
  * @swagger
@@ -306,7 +320,7 @@ router.get("/group/:packageGroupId", getPackageGroup);
  *       500:
  *         description: Server error
  */
-router.put("/group/:packageGroupId", updatePackageGroup);
+router.put("/group/:packageGroupId", ownsGroup, updatePackageGroup);
 
 /**
  * @swagger
@@ -377,7 +391,7 @@ router.get("/:packageId", getPackageById);
  *       500:
  *         description: Server error
  */
-router.put("/:packageId", updatePackage);
+router.put("/:packageId", ownsPackage, updatePackage);
 
 /**
  * @swagger
@@ -428,7 +442,7 @@ router.put("/:packageId", updatePackage);
  *       500:
  *         description: Server error
  */
-router.get("/vendor/:vendorId", getVendorPackages);
+router.get("/vendor/:vendorId", requireVendor(ownerFromParam("vendorId")), getVendorPackages);
 
 /**
  * @swagger
@@ -559,7 +573,7 @@ router.get("/vendor/:vendorId", getVendorPackages);
  *       500:
  *         description: Server error
  */
-router.put("/:packageId/step/:stepNumber", updatePackageStep);
+router.put("/:packageId/step/:stepNumber", ownsPackage, updatePackageStep);
 
 /**
  * @swagger
@@ -642,7 +656,7 @@ router.put("/:packageId/step/:stepNumber", updatePackageStep);
  *       500:
  *         description: Server error
  */
-router.post("/group/:packageGroupId/submit", submitPackageGroup);
+router.post("/group/:packageGroupId/submit", ownsGroup, submitPackageGroup);
 
 /**
  * @swagger
@@ -681,7 +695,60 @@ router.post("/group/:packageGroupId/submit", submitPackageGroup);
  *       500:
  *         description: Server error
  */
-router.post("/group/:packageGroupId/go-live", goLivePackageGroup);
+router.post("/group/:packageGroupId/go-live", ownsGroup, goLivePackageGroup);
+
+/**
+ * @swagger
+ * /api/packages/group/{packageGroupId}/analytics:
+ *   get:
+ *     summary: Views, wishlist, cart and booking counts for a package
+ *     description: |
+ *       Summed across every variant of the package group. Backs the vendor
+ *       app's Analytics popup on a Live package.
+ *         - totalViews: every recorded open of the package's detail page.
+ *         - viewsChangePercent: the last `trendWindowDays` days against the
+ *           window before; null when that earlier window had no views.
+ *         - wishlistCount: distinct customers with any variant wishlisted.
+ *         - cartCount: carts that currently hold any variant.
+ *         - bookingCount: bookings of any variant, excluding Declined and
+ *           Cancelled.
+ *         - liveSince: when the package last went Live; null if unknown.
+ *     tags: [Packages]
+ *     parameters:
+ *       - in: path
+ *         name: packageGroupId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Package analytics
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: SUCCESS
+ *                 analytics:
+ *                   type: object
+ *                   properties:
+ *                     liveSince: { type: string, format: date-time, nullable: true }
+ *                     totalViews: { type: integer }
+ *                     viewsLastPeriod: { type: integer }
+ *                     viewsPreviousPeriod: { type: integer }
+ *                     viewsChangePercent: { type: integer, nullable: true }
+ *                     trendWindowDays: { type: integer, example: 30 }
+ *                     wishlistCount: { type: integer }
+ *                     cartCount: { type: integer }
+ *                     bookingCount: { type: integer }
+ *       404:
+ *         description: Package not found
+ *       500:
+ *         description: Server error
+ */
+router.get("/group/:packageGroupId/analytics", ownsGroup, getPackageGroupAnalytics);
 
 /**
  * @swagger
@@ -710,7 +777,7 @@ router.post("/group/:packageGroupId/go-live", goLivePackageGroup);
  *       500:
  *         description: Server error
  */
-router.post("/:packageId/submit", submitPackage);
+router.post("/:packageId/submit", ownsPackage, submitPackage);
 
 /**
  * @swagger
@@ -733,13 +800,13 @@ router.post("/:packageId/submit", submitPackage);
  *       500:
  *         description: Server error
  */
-router.delete("/:packageId", deletePackage);
+router.delete("/:packageId", ownsPackage, deletePackage);
 
 // Permanently remove ONE variant document. 
-router.delete("/:packageId/permanent", hardDeleteVariant);
+router.delete("/:packageId/permanent", ownsPackage, hardDeleteVariant);
 
 // Permanently remove a whole package — every variant in the group.
-router.delete("/group/:packageGroupId/permanent", hardDeletePackage);
+router.delete("/group/:packageGroupId/permanent", ownsGroup, hardDeletePackage);
 
 /**
  * @swagger
@@ -797,7 +864,7 @@ router.delete("/group/:packageGroupId/permanent", hardDeletePackage);
  *       500:
  *         description: Server error
  */
-router.post("/:packageId/duplicate", duplicatePackage);
+router.post("/:packageId/duplicate", ownsPackage, duplicatePackage);
 
 /**
  * @swagger
@@ -858,7 +925,7 @@ router.post("/:packageId/duplicate", duplicatePackage);
  *       500:
  *         description: Server error
  */
-router.post("/:packageId/duplicate-variant", duplicateVariant);
+router.post("/:packageId/duplicate-variant", ownsPackage, duplicateVariant);
 
 // ============================================================
 //  NESTED RESOURCE MANAGEMENT (Step 2 sub-items)
@@ -1024,7 +1091,7 @@ router.post("/:packageId/duplicate-variant", duplicateVariant);
  *       500:
  *         description: Server error
  */
-router.post("/:packageId/nested/add", addNestedItem);
+router.post("/:packageId/nested/add", ownsPackage, addNestedItem);
 
 /**
  * @swagger
@@ -1074,7 +1141,7 @@ router.post("/:packageId/nested/add", addNestedItem);
  *       500:
  *         description: Server error
  */
-router.put("/:packageId/nested/update", updateNestedItem);
+router.put("/:packageId/nested/update", ownsPackage, updateNestedItem);
 
 /**
  * @swagger
@@ -1118,6 +1185,6 @@ router.put("/:packageId/nested/update", updateNestedItem);
  *       500:
  *         description: Server error
  */
-router.delete("/:packageId/nested/remove", removeNestedItem);
+router.delete("/:packageId/nested/remove", ownsPackage, removeNestedItem);
 
 export default router;

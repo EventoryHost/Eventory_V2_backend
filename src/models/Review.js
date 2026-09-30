@@ -10,10 +10,17 @@ import mongoose from "mongoose";
  * info.txt PART 3/4 for what that still needs).
  *
  * bookingId is required — reviews are tied to a real, completed booking
- * ("verified purchase") per the PRD, not free-text reviews. There is
- * nothing yet that enforces the booking is actually Completed or that the
- * reviewer is the booking's customer — that eligibility check is explicitly
- * Step 29's job (submission endpoint), not this model.
+ * ("verified purchase") per the PRD, not free-text reviews. The model
+ * itself doesn't check that the booking is Completed or that the reviewer
+ * owns it; the customer submission endpoint (customerReviewController.js)
+ * does, and is the only writer.
+ *
+ * This is the PACKAGE-level review — one per customer per package (see the
+ * index at the bottom). The event-level ratings from the same "Add a
+ * review" screen ("How would you describe the event overall?", "How was
+ * the event support & coordination?") are about Eventory's service, not a
+ * vendor, so they live in their own model (EventReview.js) rather than
+ * here with a made-up vendorId.
  *
  * *** collection: "customer_reviews", NOT the Mongoose-default "reviews" ***
  * Discovered while testing Step 9: the shared dev database ALREADY has a
@@ -47,6 +54,10 @@ const ReviewSchema = new mongoose.Schema(
     // below compute a breakdown from whatever keys are actually present.
     categoryRatings: { type: Map, of: { type: Number, min: 1, max: 5 }, default: undefined },
     comment: { type: String, trim: true, maxlength: 2000, default: "" },
+    // Photos from the "Share your thoughts" popup — S3/CloudFront URLs the
+    // frontend uploaded itself (same flow as cart noteAttachments), never
+    // data: URIs. Capped at 5 by the submission validator.
+    photos: { type: [String], default: [] },
     // Moderation status — defaults to Published since no moderation flow
     // exists yet (that's part of Step 29). Read endpoints only ever surface
     // Published reviews.
@@ -55,10 +66,20 @@ const ReviewSchema = new mongoose.Schema(
   { timestamps: true, collection: "customer_reviews" }
 );
 
-// One review per booking — a customer reviews a specific completed booking,
-// not the package/vendor in the abstract, and shouldn't be able to submit
-// more than one for the same booking.
-ReviewSchema.index({ bookingId: 1 }, { unique: true });
+// One review per package per customer. Replaced the earlier unique
+// { bookingId } index: the rule that matters is that a customer can't stack
+// several ratings onto the same package, which { bookingId } alone didn't
+// stop across two separate bookings of it. Partial on a string packageId
+// because packageId defaults to null (a vendor-level review), and a plain
+// unique index would treat every null as the same value. The old
+// { bookingId } unique index has to be dropped from the live collection by
+// hand — Mongoose builds new indexes but never removes old ones — see
+// drop_review_booking_unique_index.mjs.
+ReviewSchema.index(
+  { customerId: 1, packageId: 1 },
+  { unique: true, partialFilterExpression: { packageId: { $type: "string" } } }
+);
+ReviewSchema.index({ bookingId: 1 });
 ReviewSchema.index({ packageId: 1, status: 1, createdAt: -1 });
 ReviewSchema.index({ vendorId: 1, status: 1, createdAt: -1 });
 
