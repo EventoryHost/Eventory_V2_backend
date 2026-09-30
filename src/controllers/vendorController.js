@@ -5,6 +5,66 @@ import {
   purgeEligibleAt,
 } from "../utils/accountDeletion.js";
 import { VENDOR_DOC_FIELDS } from "../models/schemas/emActionSchema.js";
+import { computeCompletion } from "../utils/profileCompletion.js";
+import {
+  effectiveVerification,
+  hasVerificationStatus,
+} from "../utils/vendorVerificationLegacy.js";
+import {
+  onVendorEdit,
+  lockedFields,
+  sameValue,
+} from "../services/vendorVerificationService.js";
+
+/**
+ * Fields the vendor's own requests may never write: identity, the admin
+ * review and everything derived from it, account state, and counters the
+ * server maintains. There is no auth on these routes, so without this a
+ * client could PATCH `isVerified: true`.
+ */
+const SERVER_OWNED_FIELDS = new Set([
+  "_id",
+  "__v",
+  "id",
+  "isVerified",
+  "verification",
+  "verificationHistory",
+  "adminReview",
+  "isDeactivated",
+  "deletionRequestedAt",
+  "assignedEmId",
+  "assignedEmName",
+  "rating",
+  "reviewsCount",
+  "wishlistCount",
+]);
+
+/**
+ * Drop server-owned fields, including dotted paths into them
+ * ("verification.status") and any update operator ("$set").
+ */
+function stripServerOwnedFields(payload, { keep = [] } = {}) {
+  const cleaned = {};
+  for (const [key, value] of Object.entries(payload || {})) {
+    if (key.startsWith("$")) continue;
+    const root = key.split(".")[0];
+    if (SERVER_OWNED_FIELDS.has(root) && !keep.includes(root)) continue;
+    cleaned[key] = value;
+  }
+  return cleaned;
+}
+
+/** The stored value at a top-level or dotted ("bankDetails.0.ifscCode") path. */
+const valueAt = (doc, path) =>
+  path.split(".").reduce((node, part) => (node == null ? undefined : node[part]), doc);
+
+/** The vendor plus its completion, the way the app reads it. */
+const withCompletion = (vendor) => {
+  const data = typeof vendor.toObject === "function" ? vendor.toObject() : { ...vendor };
+  if (!hasVerificationStatus(data)) data.verification = effectiveVerification(data);
+  const profileCompletion = computeCompletion(data);
+  return { data: { ...data, profileCompletion }, profileCompletion };
+};
 
 /**
  * Strip any base64 / data URI values from an update payload.
@@ -35,7 +95,8 @@ function sanitizeBase64Fields(payload) {
 // Create a new vendor
 export const createVendor = async (req, res, next) => {
   try {
-    const vendorData = sanitizeBase64Fields({ ...req.body });
+    // `id` may be chosen by the caller (existing behaviour); nothing else server-owned.
+    const vendorData = sanitizeBase64Fields(stripServerOwnedFields(req.body, { keep: ["id"] }));
     if (!vendorData.id) {
       vendorData.id = generateISTId("VEN");
     }
@@ -68,8 +129,9 @@ export const getAllVendors = async (req, res, next) => {
 export const getVendorById = async (req, res, next) => {
   try {
     let query = Vendor.findOne({ id: req.params.id });
-    if (req.query.select) {
-      const fields = req.query.select.split(',').join(' ');
+    const select = typeof req.query.select === "string" ? req.query.select : "";
+    if (select) {
+      const fields = select.split(',').join(' ');
       query = query.select(fields);
     }
     const vendor = await query.lean();
@@ -79,9 +141,13 @@ export const getVendorById = async (req, res, next) => {
         message: "Vendor not found",
       });
     }
+    // A narrow ?select= read skips the completion unless it asks for the
+    // verification — the percentage needs the whole profile.
+    const wantsCompletion =
+      !select || select.split(",").some((f) => f.trim().split(".")[0] === "verification");
     res.status(200).json({
       success: true,
-      data: vendor,
+      data: wantsCompletion ? withCompletion(vendor).data : vendor,
     });
   } catch (error) {
     next(error);
@@ -91,7 +157,9 @@ export const getVendorById = async (req, res, next) => {
 // Update vendor
 export const updateVendor = async (req, res, next) => {
   try {
-    const cleanBody = sanitizeBase64Fields(req.body);
+    const cleanBody = sanitizeBase64Fields(stripServerOwnedFields(req.body));
+    const rootOf = (key) => key.split(".")[0];
+    const sentFields = Object.keys(cleanBody);
 
     // A freshly uploaded business document has not been checked yet, so
     // writing one always clears its verified flag — however it was uploaded,
@@ -100,7 +168,32 @@ export const updateVendor = async (req, res, next) => {
       if (cleanBody[url]) cleanBody[verified] = false;
     }
 
-    const vendor = await Vendor.findOneAndUpdate(
+    const before = await Vendor.findOne({ id: req.params.id }).lean();
+    if (!before) {
+      return res.status(404).json({
+        success: false,
+        message: "Vendor not found",
+      });
+    }
+
+    // While a review group is sent back for changes, only its Not correct
+    // steps may change. Anything else in that group is dropped, and the fields
+    // the vendor actually tried to change are reported back.
+    const locked = new Set(
+      lockedFields(effectiveVerification(before), [...new Set(Object.keys(cleanBody).map(rootOf))])
+    );
+    const ignoredFields = [
+      ...new Set(
+        sentFields
+          .filter((k) => locked.has(rootOf(k)) && !sameValue(valueAt(before, k), cleanBody[k]))
+          .map(rootOf)
+      ),
+    ];
+    for (const key of Object.keys(cleanBody)) {
+      if (locked.has(rootOf(key))) delete cleanBody[key];
+    }
+
+    let vendor = await Vendor.findOneAndUpdate(
       { id: req.params.id },
       cleanBody,
       {
@@ -114,9 +207,30 @@ export const updateVendor = async (req, res, next) => {
         message: "Vendor not found",
       });
     }
+
+    // changedFields: what actually changed value (including the server-side
+    // flag resets above) — re-sending an unchanged field does not reset a
+    // reviewed step. savedFields: what the vendor sent and was written; in a
+    // sent-back group, saving a flagged step counts as fixing it even when
+    // the value is unchanged.
+    const after = vendor.toObject();
+    const writtenFields = [...new Set(Object.keys(cleanBody).map(rootOf))];
+    const changedFields = writtenFields.filter((f) => !sameValue(before[f], after[f]));
+    const savedFields = [
+      ...new Set(sentFields.map(rootOf).filter((f) => writtenFields.includes(f))),
+    ];
+
+    // The profile is already saved; a failure here must not turn it into an error.
+    try {
+      vendor = await onVendorEdit(vendor, changedFields, { savedFields });
+    } catch (hookError) {
+      console.error(`[vendorController] onVendorEdit failed for ${req.params.id}:`, hookError);
+    }
+
     res.status(200).json({
       success: true,
-      data: vendor,
+      ...withCompletion(vendor),
+      ignoredFields,
     });
   } catch (error) {
     next(error);
