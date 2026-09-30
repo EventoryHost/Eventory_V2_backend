@@ -79,7 +79,7 @@ async function getLiveCancellationPolicy(packageId) {
 // Same dual-lookup convention used throughout this file/the vendor's own
 // getBookingById — accepts either the human-readable bookingId ("EVT...")
 // or the MongoDB _id.
-function bookingLookupQuery(bookingIdParam, customerId) {
+export function bookingLookupQuery(bookingIdParam, customerId) {
   const query = { customerId };
   if (bookingIdParam.startsWith("EVT")) {
     query.bookingId = bookingIdParam;
