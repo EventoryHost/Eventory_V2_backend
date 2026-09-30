@@ -103,6 +103,24 @@ const CustomizeRequestSchema = new mongoose.Schema(
   { _id: false }
 );
 
+// Which of an item's OWN vendor-offered colours the customer picked, on the
+// PDP's item-details view (SetupDetailPanel.tsx) — added 2026-09-30 per a
+// real product change: picking among what the vendor already offers is
+// free (multi-select) and deliberately NOT a customizeRequest (nothing for
+// the vendor to act on), but the vendor should still be able to see which
+// of their own colours the customer actually wants, so it's captured here
+// instead — same setupId/itemId scoping as CustomizeRequestSchema above,
+// same String-id reasoning (no real _id on most setup/item subdocuments).
+const ColourPreferenceSchema = new mongoose.Schema(
+  {
+    setupId: { type: String, required: true },
+    itemId: { type: String, required: true },
+    itemLabel: { type: String, required: true, trim: true, maxlength: 200 },
+    colours: { type: [String], default: [] },
+  },
+  { _id: false }
+);
+
 const CartItemSchema = new mongoose.Schema(
   {
     cartId: { type: String, ref: "Cart", required: true, index: true },
@@ -146,6 +164,7 @@ const CartItemSchema = new mongoose.Schema(
     selectedAddOns: { type: [SelectedAddOnSchema], default: [] },
     selectedItems: { type: [SelectedItemSchema], default: [] },
     customizeRequests: { type: [CustomizeRequestSchema], default: [] },
+    colourPreferences: { type: [ColourPreferenceSchema], default: [] },
 
     // Per-vendor special request (final BRD Section 10.2) — lives here
     // since a CartItem is already vendor-scoped. If a vendor ever has more

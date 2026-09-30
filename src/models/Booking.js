@@ -101,6 +101,21 @@ const CustomizeRequestSchema = new mongoose.Schema(
   { _id: true }
 );
 
+// Which of an item's OWN vendor-offered colours the customer picked — see
+// CartItem.js's ColourPreferenceSchema for the full context (added
+// 2026-09-30). Deliberately separate from CustomizeRequestSchema above:
+// this is never something the vendor needs to accept/reject, just a
+// preference to see, so it carries no `status` field.
+const ColourPreferenceSchema = new mongoose.Schema(
+  {
+    setupId: { type: String, required: true },
+    itemId: { type: String, required: true },
+    itemLabel: { type: String, required: true, trim: true },
+    colours: { type: [String], default: [] },
+  },
+  { _id: false }
+);
+
 // Added 2026-09-17 — Booking previously had NO field for the selected
 // add-ons at all: pricing.addonsAdded only ever kept a rolled-up total
 // (see bookingCreationService.js), and this schema itself never carried the
@@ -297,6 +312,10 @@ const BookingSchema = new mongoose.Schema(
     // PDP "Customize items" workshop requests — see CustomizeRequestSchema's
     // own comment above for why this is separate from changeRequests.
     customizeRequests: [CustomizeRequestSchema],
+
+    // PDP item-details colour picks — see ColourPreferenceSchema's own
+    // comment above. Not a request; informational only for the vendor.
+    colourPreferences: [ColourPreferenceSchema],
 
     // The add-ons actually selected on this booking's line at checkout,
     // carried through cart -> checkout line -> here — see

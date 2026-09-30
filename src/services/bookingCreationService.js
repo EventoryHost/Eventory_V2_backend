@@ -167,6 +167,10 @@ export async function createBookingsFromCheckoutSession(session, payment, option
       // checkout line (which carried them from the cart item) — see
       // Booking.js's CustomizeRequestSchema comment for the full chain.
       customizeRequests: line.customizeRequests || [],
+      // Same chain, for the vendor-palette colour picks (item-details view) —
+      // see Booking.js's ColourPreferenceSchema comment. Never a request,
+      // but real customer data the vendor should still see on the booking.
+      colourPreferences: line.colourPreferences || [],
       // Same chain (Cart -> CheckoutSession line -> here) for the selected
       // add-ons themselves — previously dropped entirely at this step (see
       // Booking.js's SelectedAddOnSchema comment, added 2026-09-17). Not

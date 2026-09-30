@@ -37,6 +37,7 @@ async function buildLine({
   selectedAddOns,
   selectedItems,
   customizeRequests,
+  colourPreferences,
   specialRequest,
   noteAttachments,
   quantity,
@@ -106,6 +107,7 @@ async function buildLine({
       selectedAddOns: selectedAddOns || [],
       selectedItems: selectedItems || [],
       customizeRequests: customizeRequests || [],
+      colourPreferences: colourPreferences || [],
       specialRequest: specialRequest || "",
       noteAttachments: noteAttachments || [],
       quantity: quantity || 1,
@@ -232,6 +234,7 @@ export const createCheckoutSession = async (req, res) => {
           selectedAddOns: item.selectedAddOns,
           selectedItems: item.selectedItems,
           customizeRequests: item.customizeRequests,
+          colourPreferences: item.colourPreferences,
           specialRequest: item.specialRequest,
           noteAttachments: item.noteAttachments,
           quantity: item.quantity,
@@ -263,6 +266,7 @@ export const createCheckoutSession = async (req, res) => {
         selectedAddOns,
         selectedItems,
         customizeRequests,
+        colourPreferences,
         specialRequest,
         noteAttachments,
         quantity,
@@ -277,6 +281,7 @@ export const createCheckoutSession = async (req, res) => {
         selectedAddOns,
         selectedItems,
         customizeRequests,
+        colourPreferences,
         specialRequest,
         noteAttachments,
         quantity,
@@ -383,6 +388,7 @@ export const updateCheckoutLine = async (req, res) => {
       selectedAddOns,
       selectedItems,
       customizeRequests,
+      colourPreferences,
       specialRequest,
       noteAttachments,
       quantity,
@@ -443,6 +449,7 @@ export const updateCheckoutLine = async (req, res) => {
     if (selectedAddOns !== undefined) line.selectedAddOns = selectedAddOns;
     if (selectedItems !== undefined) line.selectedItems = selectedItems;
     if (customizeRequests !== undefined) line.customizeRequests = customizeRequests;
+    if (colourPreferences !== undefined) line.colourPreferences = colourPreferences;
     if (specialRequest !== undefined) line.specialRequest = specialRequest;
     if (noteAttachments !== undefined) line.noteAttachments = noteAttachments;
     if (quantity !== undefined) line.quantity = quantity;
