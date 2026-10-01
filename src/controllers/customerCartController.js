@@ -240,6 +240,7 @@ export const addCartItem = async (req, res) => {
       selectedAddOns,
       selectedItems,
       customizeRequests,
+      colourPreferences,
       specialRequest,
       noteAttachments,
       quantity,
@@ -305,6 +306,7 @@ export const addCartItem = async (req, res) => {
       selectedAddOns: selectedAddOns || [],
       selectedItems: selectedItems || [],
       customizeRequests: customizeRequests || [],
+      colourPreferences: colourPreferences || [],
       specialRequest: specialRequest || "",
       noteAttachments: noteAttachments || [],
       quantity,
@@ -349,6 +351,7 @@ export const updateCartItem = async (req, res) => {
       selectedAddOns,
       selectedItems,
       customizeRequests,
+      colourPreferences,
       specialRequest,
       noteAttachments,
       quantity,
@@ -379,6 +382,7 @@ export const updateCartItem = async (req, res) => {
     if (selectedAddOns !== undefined) item.selectedAddOns = selectedAddOns;
     if (selectedItems !== undefined) item.selectedItems = selectedItems;
     if (customizeRequests !== undefined) item.customizeRequests = customizeRequests;
+    if (colourPreferences !== undefined) item.colourPreferences = colourPreferences;
     if (specialRequest !== undefined) item.specialRequest = specialRequest;
     if (noteAttachments !== undefined) item.noteAttachments = noteAttachments;
     if (quantity !== undefined) item.quantity = quantity;

@@ -68,6 +68,10 @@ const CheckoutLineSchema = new mongoose.Schema(
     // selectedAddOns/selectedItems above — a session line is a snapshot,
     // not a place that re-validates this shape.
     customizeRequests: { type: mongoose.Schema.Types.Mixed, default: [] },
+    // Vendor-palette colour picks (PDP item-details view) — see CartItem.js's
+    // own comment on colourPreferences for the full context. Same "session
+    // line is a snapshot" treatment as customizeRequests above.
+    colourPreferences: { type: mongoose.Schema.Types.Mixed, default: [] },
     specialRequest: { type: String, trim: true, maxlength: 500, default: "" },
     // "Notes for vendor" image attachments — see CartItem.js's own comment
     // on noteAttachments for the full context. Carried over the same way
