@@ -213,6 +213,7 @@ export async function readCommercialCsv(fileName) {
   return response.Body ? response.Body.transformToString("utf-8") : null;
 }
 
-export function checkBucketAccess() {
-  return s3.send(new HeadBucketCommand({ Bucket: bucket() }));
+export async function checkBucketAccess() {
+  await s3.send(new HeadBucketCommand({ Bucket: bucket() }));
+  await s3.send(new HeadBucketCommand({ Bucket: env.csvBucket }));
 }

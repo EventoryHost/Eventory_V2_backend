@@ -11,7 +11,7 @@ router.get("/", (req, res) => {
 router.get("/ready", async (req, res, next) => {
   try {
     await checkBucketAccess();
-    res.status(200).json({ success: true, bucket: "reachable" });
+    res.status(200).json({ success: true, buckets: "reachable" });
   } catch (error) {
     next(error);
   }

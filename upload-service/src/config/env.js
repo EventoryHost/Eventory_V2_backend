@@ -5,6 +5,7 @@ const REQUIRED = [
   "AWS_ACCESS_KEY_ID",
   "AWS_SECRET_ACCESS_KEY",
   "AWS_S3_BUCKET_NAME",
+  "CSV_S3_BUCKET",
 ];
 
 const missing = REQUIRED.filter((name) => !process.env[name]);
@@ -21,5 +22,5 @@ export const env = Object.freeze({
   awsSecretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
   bucket: process.env.AWS_S3_BUCKET_NAME,
   cloudFrontUrl: process.env.CLOUDFRONT_URL ?? "",
-  csvBucket: process.env.S3_BUCKET ?? "",
+  csvBucket: process.env.CSV_S3_BUCKET,
 });
