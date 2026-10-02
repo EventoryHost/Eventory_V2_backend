@@ -58,6 +58,18 @@ const customizeRequestSchema = z.object({
   volume: z.string().trim().max(50).optional(),
 });
 
+// Vendor-palette colour picks (PDP item-details view) — added 2026-09-30.
+// Free/multi-select, never a request, but still real data the vendor should
+// see (see CartItem.js's own comment on colourPreferences for the full
+// context). Same accept-and-store, no-catalog-validation precedent as
+// customizeRequestSchema above.
+const colourPreferenceSchema = z.object({
+  setupId: z.string().trim().min(1).max(200),
+  itemId: z.string().trim().min(1).max(200),
+  itemLabel: z.string().trim().min(1).max(200),
+  colours: z.array(z.string().trim().max(50)).max(20).optional(),
+});
+
 // "Notes for vendor" image attachments — added 2026-09-03 (see CartItem.js's
 // own comment on noteAttachments for the full context). Real https URLs
 // only — the frontend uploads to S3 itself and sends back the resulting
@@ -91,6 +103,7 @@ export const addCartItemSchema = z.object({
   selectedAddOns: z.array(selectedAddOnSchema).max(50).optional(),
   selectedItems: z.array(selectedItemSchema).max(100).optional(),
   customizeRequests: z.array(customizeRequestSchema).max(100).optional(),
+  colourPreferences: z.array(colourPreferenceSchema).max(100).optional(),
   specialRequest: z.string().trim().max(500).optional(),
   noteAttachments: noteAttachmentsSchema,
   quantity: z.coerce.number().int().min(1).default(1),
@@ -107,6 +120,7 @@ export const updateCartItemSchema = z.object({
   selectedAddOns: z.array(selectedAddOnSchema).max(50).optional(),
   selectedItems: z.array(selectedItemSchema).max(100).optional(),
   customizeRequests: z.array(customizeRequestSchema).max(100).optional(),
+  colourPreferences: z.array(colourPreferenceSchema).max(100).optional(),
   specialRequest: z.string().trim().max(500).optional(),
   noteAttachments: noteAttachmentsSchema,
   quantity: z.coerce.number().int().min(1).optional(),

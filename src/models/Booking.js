@@ -101,6 +101,21 @@ const CustomizeRequestSchema = new mongoose.Schema(
   { _id: true }
 );
 
+// Which of an item's OWN vendor-offered colours the customer picked — see
+// CartItem.js's ColourPreferenceSchema for the full context (added
+// 2026-09-30). Deliberately separate from CustomizeRequestSchema above:
+// this is never something the vendor needs to accept/reject, just a
+// preference to see, so it carries no `status` field.
+const ColourPreferenceSchema = new mongoose.Schema(
+  {
+    setupId: { type: String, required: true },
+    itemId: { type: String, required: true },
+    itemLabel: { type: String, required: true, trim: true },
+    colours: { type: [String], default: [] },
+  },
+  { _id: false }
+);
+
 // Added 2026-09-17 — Booking previously had NO field for the selected
 // add-ons at all: pricing.addonsAdded only ever kept a rolled-up total
 // (see bookingCreationService.js), and this schema itself never carried the
@@ -126,6 +141,25 @@ const SelectedAddOnSchema = new mongoose.Schema(
     subCategory: { type: String, default: null, trim: true },
     color: { type: String, default: null, trim: true },
     image: { type: String, default: null },
+  },
+  { _id: false }
+);
+
+// Same gap/fix as SelectedAddOnSchema above, for choose-N picks instead of
+// add-ons: pricing.itemsAdded only ever kept the rolled-up total, and this
+// schema had no field to carry the actual selections (which items, from
+// which group) forward from the checkout line at all — mirrors CartItem.js's
+// SelectedItemSchema exactly (groupKey/itemId/itemName/price/isChargeable).
+// itemId is a String for the same reason addOnId above is: vendor step2 item
+// subdocuments frequently have no real _id, and the frontend falls back to a
+// synthetic one.
+const SelectedItemSchema = new mongoose.Schema(
+  {
+    groupKey: { type: String, required: true },
+    itemId: { type: String, default: null },
+    itemName: { type: String, required: true },
+    price: { type: Number, default: 0 },
+    isChargeable: { type: Boolean, default: false },
   },
   { _id: false }
 );
@@ -279,11 +313,22 @@ const BookingSchema = new mongoose.Schema(
     // own comment above for why this is separate from changeRequests.
     customizeRequests: [CustomizeRequestSchema],
 
+    // PDP item-details colour picks — see ColourPreferenceSchema's own
+    // comment above. Not a request; informational only for the vendor.
+    colourPreferences: [ColourPreferenceSchema],
+
     // The add-ons actually selected on this booking's line at checkout,
     // carried through cart -> checkout line -> here — see
     // SelectedAddOnSchema's own comment above for why this was missing
     // entirely until now.
     selectedAddOns: { type: [SelectedAddOnSchema], default: [] },
+
+    // The choose-N picks actually selected on this booking's line at
+    // checkout, carried through cart -> checkout line -> here — see
+    // SelectedItemSchema's own comment above for why this was missing
+    // entirely until now (only the rolled-up pricing.itemsAdded total
+    // survived).
+    selectedItems: { type: [SelectedItemSchema], default: [] },
 
     pricing: {
       type: PricingSchema,

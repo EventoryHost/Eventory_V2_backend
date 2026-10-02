@@ -45,6 +45,15 @@ const customizeRequestSchema = z.object({
   volume: z.string().trim().max(50).optional(),
 });
 
+// Vendor-palette colour picks (PDP item-details view) — same shape/reasoning
+// as customerCartValidators.js's identical schema (2026-09-30).
+const colourPreferenceSchema = z.object({
+  setupId: z.string().trim().min(1).max(200),
+  itemId: z.string().trim().min(1).max(200),
+  itemLabel: z.string().trim().min(1).max(200),
+  colours: z.array(z.string().trim().max(50)).max(20).optional(),
+});
+
 // "Notes for vendor" image attachments — same shape/reasoning as
 // customerCartValidators.js's identical schema (2026-09-03), including the
 // explicit data: URI rejection (z.string().url() alone does NOT reject
@@ -75,6 +84,7 @@ export const createCheckoutSessionSchema = z
     selectedAddOns: z.array(selectedAddOnSchema).max(50).optional(),
     selectedItems: z.array(selectedItemSchema).max(100).optional(),
     customizeRequests: z.array(customizeRequestSchema).max(100).optional(),
+    colourPreferences: z.array(colourPreferenceSchema).max(100).optional(),
     specialRequest: z.string().trim().max(500).optional(),
     noteAttachments: noteAttachmentsSchema,
     quantity: z.coerce.number().int().min(1).default(1),
@@ -98,6 +108,7 @@ export const updateCheckoutLineSchema = z.object({
   selectedAddOns: z.array(selectedAddOnSchema).max(50).optional(),
   selectedItems: z.array(selectedItemSchema).max(100).optional(),
   customizeRequests: z.array(customizeRequestSchema).max(100).optional(),
+  colourPreferences: z.array(colourPreferenceSchema).max(100).optional(),
   specialRequest: z.string().trim().max(500).optional(),
   noteAttachments: noteAttachmentsSchema,
   quantity: z.coerce.number().int().min(1).optional(),
