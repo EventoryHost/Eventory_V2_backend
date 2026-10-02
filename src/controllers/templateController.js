@@ -1,6 +1,7 @@
 import Package from "../models/Package.js";
 import Template from "../models/Template.js";
 import Vendor from "../models/Vendor.js";
+import { buildGroupFilter } from "../utils/packageGroup.js";
 
 const VENDOR_TYPE_LABELS = {
   Caterer: "CATERER",
@@ -86,16 +87,24 @@ export const createTemplate = async (req, res) => {
         .json({ status: "FAILED", message: "Source package not found" });
     }
 
-    // A logical package is a group of variant documents sharing vendorId +
-    // vendorType + packageName. Snapshot the whole group so "Use Template"
-    // restores every variant, not just the card the user tapped. vendorType is
-    // part of the key because generic names like "Package" recur across a
-    // vendor's different categories.
+    // Snapshot the source's whole logical package so "Use Template" restores
+    // every variant, not just the card the user tapped. Siblings are the
+    // variants sharing its packageGroupId. Matching on the name instead swept
+    // in unrelated packages that happen to share it — every draft keeps the
+    // default "Package" until renamed — and the app then rebuilt them as
+    // duplicate variants that all saved into one record. Packages predating
+    // group ids fall back to the name match (vendorType is part of that key
+    // because generic names recur across a vendor's categories).
     const name = sourcePkg.step1_eventAndCrew?.packageName;
+    const siblingFilter = sourcePkg.packageGroupId
+      ? await buildGroupFilter(sourcePkg.packageGroupId)
+      : {
+          vendorId: sourcePkg.vendorId,
+          vendorType: sourcePkg.vendorType,
+          "step1_eventAndCrew.packageName": name,
+        };
     const siblings = await Package.find({
-      vendorId: sourcePkg.vendorId,
-      vendorType: sourcePkg.vendorType,
-      "step1_eventAndCrew.packageName": name,
+      ...siblingFilter,
       packageStatus: { $ne: "Deleted" },
     }).lean();
 
