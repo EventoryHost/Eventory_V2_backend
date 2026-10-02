@@ -121,23 +121,34 @@ export const initializePackage = async (req, res) => {
       ? String(packageGroupId).trim()
       : generateISTId("PKG_GRP");
 
+    // `newGroup: true` is the current app starting a brand-new package: its
+    // first variant has no group yet. Nothing may be reused for it — matching on
+    // the name would hand back some other draft that happens to share it (every
+    // package starts as "Package", and one made from a template keeps the
+    // template's name), and the new package's variants would be filed into
+    // that unrelated package, overwriting it.
+    const startsNewGroup = !hasClientGroupId && req.body.newGroup === true;
+
     // Idempotency: reuse an existing draft for the SAME variant of this package.
     // Prefer the group id; fall back to the legacy name match only when the
-    // client sent no group id (i.e. a client that predates this field).
-    const existingDraft = await Model.findOne(
-      hasClientGroupId
-        ? {
-          packageGroupId: resolvedGroupId,
-          packageStatus: "Draft",
-          variantType: resolvedVariant,
-        }
-        : {
-          vendorId: vendorId,
-          packageStatus: "Draft",
-          variantType: resolvedVariant,
-          "step1_eventAndCrew.packageName": resolvedName,
-        }
-    );
+    // client sent no group id and no newGroup flag (i.e. a client that
+    // predates group ids).
+    const existingDraft = startsNewGroup
+      ? null
+      : await Model.findOne(
+        hasClientGroupId
+          ? {
+            packageGroupId: resolvedGroupId,
+            packageStatus: "Draft",
+            variantType: resolvedVariant,
+          }
+          : {
+            vendorId: vendorId,
+            packageStatus: "Draft",
+            variantType: resolvedVariant,
+            "step1_eventAndCrew.packageName": resolvedName,
+          }
+      );
     if (existingDraft) {
       return res.status(200).json({
         status: "SUCCESS",

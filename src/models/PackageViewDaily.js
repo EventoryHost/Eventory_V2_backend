@@ -1,5 +1,4 @@
 import mongoose from "mongoose";
-
 /**
  * How many times a package's detail page was opened, bucketed per UTC day.
  *
