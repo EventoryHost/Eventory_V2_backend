@@ -10,6 +10,9 @@ import {
   requestPackageChanges,
   updateBooking,
   updatePaymentMilestones,
+  markBookingSeen,
+  raiseVendorBookingIssue,
+  completeBooking,
 } from "../controllers/bookingController.js";
 
 /**
@@ -849,5 +852,85 @@ router.put("/:bookingId", updateBooking);
  *         description: Server error
  */
 router.put("/:bookingId/payment-milestones", updatePaymentMilestones);
+
+/**
+ * @swagger
+ * /api/bookings/{bookingId}/seen:
+ *   put:
+ *     summary: Record that the vendor has opened a booking
+ *     description: >
+ *       Sets vendorSeenAt, which clears the booking's unread state on the
+ *       vendor's list until the customer next acts on it
+ *       (lastCustomerActivityAt). The first call on a NewBooking also moves
+ *       it to Viewed and stamps viewedAt.
+ *     tags: [Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Booking marked as seen }
+ *       404: { description: Booking not found }
+ */
+router.put("/:bookingId/seen", markBookingSeen);
+
+/**
+ * @swagger
+ * /api/bookings/{bookingId}/complete:
+ *   put:
+ *     summary: Mark a confirmed, fully paid booking as completed
+ *     description: >
+ *       Allowed only on a Confirmed booking whose payment milestones are all
+ *       Received (or, with no schedule, whose total has been received).
+ *       Completed is terminal; completedAt is stamped automatically and the
+ *       customer sees the booking under their past bookings.
+ *     tags: [Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Booking completed }
+ *       400: { description: Booking is not Confirmed }
+ *       404: { description: Booking not found }
+ *       409: { description: Final payment not yet received }
+ */
+router.put("/:bookingId/complete", completeBooking);
+
+/**
+ * @swagger
+ * /api/bookings/{bookingId}/issues:
+ *   post:
+ *     summary: Raise an issue about a booking's event (vendor)
+ *     description: >
+ *       Allowed on a Confirmed or Completed booking until issueWindowClosesAt
+ *       (48 hours after the event ends). The issue starts Open.
+ *     tags: [Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [category, description]
+ *             properties:
+ *               category:
+ *                 type: string
+ *                 enum: [Booking, Items, Payment, PaymentMilestone, Application, Other]
+ *               description: { type: string, maxLength: 2000 }
+ *     responses:
+ *       201: { description: Issue raised }
+ *       400: { description: Invalid category or description }
+ *       404: { description: Booking not found }
+ *       409: { description: Booking not confirmed/completed, or the issue window has closed }
+ */
+router.post("/:bookingId/issues", raiseVendorBookingIssue);
 
 export default router;
