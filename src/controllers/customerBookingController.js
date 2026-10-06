@@ -7,6 +7,7 @@ import { releaseSlotIfUnused } from "../utils/releaseSlot.js";
 import { getOrCreateInvoiceForBooking, renderInvoicePdf } from "../services/invoiceService.js";
 import { withPricingBreakdown } from "../utils/pricingBreakdown.js";
 import { round2 } from "../utils/money.js";
+import { raiseBookingIssue } from "../services/bookingIssueService.js";
 
 /**
  * "My Bookings" dashboard — Phase 5 Step 20. Pure read-only projection over
@@ -406,6 +407,32 @@ export const cancelBooking = async (req, res) => {
  * payments — see invoiceService.js's own comment on why re-issuing isn't
  * automatic.
  */
+/**
+ * POST /api/customer/bookings/:bookingId/issues — the customer raises an
+ * issue about their event. Same rules as the vendor's: a Confirmed or
+ * Completed booking, until its issue window closes.
+ */
+export const raiseIssue = async (req, res) => {
+  try {
+    const query = bookingLookupQuery(req.params.bookingId, req.customer._id);
+    if (!query) return res.status(400).json({ status: "FAILED", message: "Invalid bookingId" });
+
+    const booking = await Booking.findOne(query);
+    if (!booking) return res.status(404).json({ status: "FAILED", message: "Booking not found" });
+
+    const result = raiseBookingIssue(booking, req.body ?? {}, "Customer");
+    if (result.error) {
+      return res.status(result.code).json({ status: "FAILED", message: result.error });
+    }
+    await booking.save();
+
+    return res.status(201).json({ status: "SUCCESS", message: "Issue raised", issue: result.issue });
+  } catch (error) {
+    console.error("[customerBooking.raiseIssue]", error);
+    return res.status(500).json({ status: "ERROR", message: "Failed to raise issue" });
+  }
+};
+
 export const getInvoicePdf = async (req, res) => {
   try {
     const { bookingId } = req.params;
