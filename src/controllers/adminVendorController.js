@@ -64,7 +64,7 @@ const queueRow = (row) => {
   return row;
 };
 
-const SEARCH_FIELDS = ["pocName", "businessName", "city", "state", "serviceAreas", "phone", "email", "id"];
+const SEARCH_FIELDS = ["pocName", "businessName", "city", "state", "serviceAreas.area", "serviceAreas.sublocalities", "serviceAreas", "phone", "email", "id"];
 
 /** Case-insensitive, regex-escaped match over the admin search fields. */
 const searchClause = (search) => {

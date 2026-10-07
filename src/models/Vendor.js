@@ -42,7 +42,11 @@ const VendorSchema = new mongoose.Schema({
 
   city: String,
   state: String,
-  serviceAreas: [String],
+  serviceAreas: [{
+    _id: false,
+    area: { type: String, required: true, trim: true },
+    sublocalities: [String],
+  }],
 
   teamSize: String,
   bookingsPerYear: String,
