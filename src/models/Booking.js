@@ -33,6 +33,71 @@ export const PRE_ACCEPTANCE_STATUSES = ["NewBooking", "Viewed", "InDiscussion"];
 // Statuses after which nothing about the booking can change
 export const TERMINAL_STATUSES = ["Declined", "Cancelled", "Completed"];
 
+// Post-event issues. The categories mirror the Support rows on the vendor
+// app's booking details screen.
+export const ISSUE_CATEGORIES = [
+  "Booking",
+  "Items",
+  "Payment",
+  "PaymentMilestone",
+  "Application",
+  "Other",
+];
+export const ISSUE_STATUSES = ["Open", "Resolved"];
+
+/**
+ * Whether all the money on a booking is in: every payment milestone marked
+ * Received, or — for a booking with no schedule — the full total received.
+ * A booking can only be completed once this holds.
+ */
+export const isFullyPaid = (booking) => {
+  const milestones = booking.paymentMilestones ?? [];
+  if (milestones.length) return milestones.every((m) => m.status === "Received");
+  const total = booking.totalAmount || 0;
+  // Amounts are rounded to the rupee, so allow a rupee short.
+  return total > 0 && (booking.totalReceived || 0) >= total - 1;
+};
+
+// How long after the event ends an issue may still be raised.
+export const ISSUE_WINDOW_HOURS = 48;
+
+// Slot times ("HH:MM") are Indian local time.
+const IST_OFFSET_MS = 330 * 60 * 1000;
+
+/**
+ * When the event finishes: the end of the booked slot on the event's IST
+ * calendar day, or the end of that day when no slot was booked. A slot
+ * ending before it starts runs past midnight into the next day.
+ */
+export const eventEndOf = ({ eventDate, startTime, endTime }) => {
+  if (!eventDate) return null;
+  const ist = new Date(new Date(eventDate).getTime() + IST_OFFSET_MS);
+  const [y, m, d] = [ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate()];
+  const parse = (t) => {
+    const match = /^(\d{1,2}):(\d{2})$/.exec(String(t ?? "").trim());
+    return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+  };
+  const end = parse(endTime);
+  const start = parse(startTime);
+  const minutes = end ?? 23 * 60 + 59;
+  const overnight = end != null && start != null && end <= start;
+  return new Date(
+    Date.UTC(y, m, d + (overnight ? 1 : 0), 0, minutes) - IST_OFFSET_MS
+  );
+};
+
+const IssueSchema = new mongoose.Schema(
+  {
+    category: { type: String, enum: ISSUE_CATEGORIES, required: true },
+    description: { type: String, required: true, trim: true, maxlength: 2000 },
+    raisedBy: { type: String, enum: ["Vendor", "Customer"], required: true },
+    status: { type: String, enum: ISSUE_STATUSES, default: "Open" },
+    raisedAt: { type: Date, default: Date.now },
+    resolvedAt: { type: Date, default: null },
+  },
+  { _id: true }
+);
+
 // Statuses that actually OCCUPY the vendor's slot for their event date.
 //
 // Changed 2026-09-25: a slot is reserved ONLY once the vendor has accepted.
@@ -305,6 +370,22 @@ const BookingSchema = new mongoose.Schema(
     cancelledAt: { type: Date, default: null },
     cancelledBy: { type: String, enum: ["Vendor", "Customer"], default: null },
     cancellationReason: { type: String, default: null },
+    // Stamped by the save hook below whenever the booking becomes Completed.
+    completedAt: { type: Date, default: null },
+    // First time the vendor opened the booking (NewBooking -> Viewed).
+    viewedAt: { type: Date, default: null },
+
+    // Unread tracking for the vendor's list: a booking is unread while the
+    // customer has done something (created it, sent changes) since the
+    // vendor last opened it. Kept apart from updatedAt, which the vendor's
+    // own edits — and opening it — also bump.
+    vendorSeenAt: { type: Date, default: null },
+    lastCustomerActivityAt: { type: Date, default: Date.now },
+
+    // Post-event issues and the deadline for raising them — see
+    // ISSUE_WINDOW_HOURS. Recomputed whenever the event's date or slot moves.
+    issues: [IssueSchema],
+    issueWindowClosesAt: { type: Date, default: null },
 
     // Customer-requested additions/removals, and the vendor's decision on each
     changeRequests: [ChangeRequestSchema],
@@ -411,6 +492,24 @@ BookingSchema.pre("save", async function autoLinkCustomer() {
     if (match) this.customerId = match.id || match._id;
   } catch (err) {
     console.warn("[Booking.autoLinkCustomer] lookup failed, continuing without a link:", err.message);
+  }
+});
+
+BookingSchema.pre("save", function stampLifecycle() {
+  if (this.isModified("status") && this.status === "Completed" && !this.completedAt) {
+    this.completedAt = new Date();
+  }
+  if (
+    this.isNew ||
+    this.isModified("eventDate") ||
+    this.isModified("startTime") ||
+    this.isModified("endTime") ||
+    !this.issueWindowClosesAt
+  ) {
+    const end = eventEndOf(this);
+    this.issueWindowClosesAt = end
+      ? new Date(end.getTime() + ISSUE_WINDOW_HOURS * 60 * 60 * 1000)
+      : null;
   }
 });
 

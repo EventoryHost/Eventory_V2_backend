@@ -23,7 +23,6 @@ import bookingRoutes from "./bookingRoutes.js";
 import enquiryRoutes from "./enquiryRoutes.js";
 import transactionRoutes from "./transactionRoutes.js";
 import redirectRoutes from "./redirectRoutes.js";
-import uploadRoutes from "./uploadRoutes.js";
 
 // Admin Routes
 import adminVendorRoutes from "./adminVendorRoutes.js";
@@ -107,7 +106,6 @@ router.use("/bookings", bookingRoutes);
 router.use("/enquiries", enquiryRoutes);
 router.use("/transactions", transactionRoutes);
 router.use("/redirect", redirectRoutes);
-router.use("/uploads", uploadRoutes);
 
 // Mount Admin Routes
 router.use("/admin/vendors", adminVendorRoutes);

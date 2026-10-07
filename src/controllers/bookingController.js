@@ -1,6 +1,7 @@
 import Booking, {
   PRE_ACCEPTANCE_STATUSES,
   TERMINAL_STATUSES,
+  isFullyPaid,
 } from "../models/Booking.js";
 import Package from "../models/Package.js";
 import Vendor from "../models/Vendor.js";
@@ -9,6 +10,7 @@ import { generateISTId } from "../utils/idGenerator.js";
 import { snapshotDeliverables } from "../utils/packageDeliverables.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 import { releaseSlotIfUnused } from "../utils/releaseSlot.js";
+import { raiseBookingIssue } from "../services/bookingIssueService.js";
 import {
   applyPricingBreakdown,
   withPricingBreakdown,
@@ -210,6 +212,8 @@ export const createBooking = async (req, res) => {
       },
       paymentType: req.body.paymentType,
       status: "NewBooking",
+      // The vendor typed this booking in, so there is nothing unread in it.
+      vendorSeenAt: new Date(),
       respondByAt: req.body.respondByAt
         ? new Date(req.body.respondByAt)
         : new Date(Date.now() + RESPONSE_WINDOW_MS),
@@ -471,6 +475,7 @@ export const requestPackageChanges = async (req, res) => {
     }));
 
     booking.changeRequests.push(...requests);
+    booking.lastCustomerActivityAt = new Date();
     if (PRE_ACCEPTANCE_STATUSES.includes(booking.status)) {
       booking.status = "InDiscussion";
     }
@@ -593,6 +598,29 @@ export const updateBooking = async (req, res) => {
 
     syncTotalReceived(booking);
     applyPricingBreakdown(booking);
+
+    // The schedule must account for the whole (possibly just repriced)
+    // total. Each instalment is rounded to the rupee, so allow a rupee of
+    // drift per milestone.
+    // Skipped when the booking carries no price to measure against (a legacy
+    // record without a package price would otherwise block every save).
+    if (
+      Array.isArray(paymentMilestones) &&
+      booking.paymentMilestones.length &&
+      booking.totalAmount > 0
+    ) {
+      const scheduled = booking.paymentMilestones.reduce(
+        (sum, m) => sum + (m.amount || 0),
+        0
+      );
+      const drift = Math.abs(scheduled - (booking.totalAmount || 0));
+      if (drift > booking.paymentMilestones.length) {
+        return invalid(res, [
+          `payment milestones add up to ${Math.round(scheduled)} but the booking total is ${Math.round(booking.totalAmount || 0)}`,
+        ]);
+      }
+    }
+
     await booking.save();
 
     return res.status(200).json({
@@ -602,6 +630,102 @@ export const updateBooking = async (req, res) => {
     });
   } catch (error) {
     return failed(res, "Failed to update booking", error);
+  }
+};
+
+/**
+ * @desc    Mark a confirmed, fully paid booking as completed
+ * @route   PUT /api/bookings/:bookingId/complete
+ *
+ * The vendor closes the booking once the final payment is in. Completed is
+ * terminal: the customer sees it under their past bookings and can review
+ * it. completedAt is stamped by the Booking save hook.
+ */
+export const completeBooking = async (req, res) => {
+  try {
+    const booking = await findBooking(req.params.bookingId);
+    if (!booking) return notFound(res, "Booking not found");
+
+    if (booking.status !== "Confirmed") {
+      return res.status(400).json({
+        status: "FAILED",
+        message: `Only a confirmed booking can be completed (this one is ${booking.status}).`,
+      });
+    }
+    if (!isFullyPaid(booking)) {
+      return res.status(409).json({
+        status: "FAILED",
+        message: "The booking can be completed once the final payment is received.",
+      });
+    }
+
+    booking.status = "Completed";
+    await booking.save();
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Booking completed",
+      booking: withPricingBreakdown(booking),
+    });
+  } catch (error) {
+    return failed(res, "Failed to complete booking", error);
+  }
+};
+
+/**
+ * @desc    Record that the vendor has opened a booking
+ * @route   PUT /api/bookings/:bookingId/seen
+ *
+ * Clears the booking's unread state on the vendor's list, and the first time
+ * moves a NewBooking to Viewed.
+ */
+export const markBookingSeen = async (req, res) => {
+  try {
+    const booking = await findBooking(req.params.bookingId);
+    if (!booking) return notFound(res, "Booking not found");
+
+    const now = new Date();
+    booking.vendorSeenAt = now;
+    if (booking.status === "NewBooking") {
+      booking.status = "Viewed";
+      booking.viewedAt = now;
+    }
+    await booking.save();
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Booking marked as seen",
+      booking: withPricingBreakdown(booking),
+    });
+  } catch (error) {
+    return failed(res, "Failed to mark booking as seen", error);
+  }
+};
+
+/**
+ * @desc    Raise an issue about a booking's event, as the vendor
+ * @route   POST /api/bookings/:bookingId/issues
+ * @body    { category, description }
+ */
+export const raiseVendorBookingIssue = async (req, res) => {
+  try {
+    const booking = await findBooking(req.params.bookingId);
+    if (!booking) return notFound(res, "Booking not found");
+
+    const result = raiseBookingIssue(booking, req.body ?? {}, "Vendor");
+    if (result.error) {
+      return res.status(result.code).json({ status: "FAILED", message: result.error });
+    }
+    await booking.save();
+
+    return res.status(201).json({
+      status: "SUCCESS",
+      message: "Issue raised",
+      issue: result.issue,
+      booking: withPricingBreakdown(booking),
+    });
+  } catch (error) {
+    return failed(res, "Failed to raise issue", error);
   }
 };
 
