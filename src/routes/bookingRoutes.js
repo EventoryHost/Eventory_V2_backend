@@ -788,11 +788,20 @@ router.post("/:bookingId/change-requests", requestPackageChanges);
  *                       enum: [Pending, PaymentDue]
  *               calendarNote:
  *                 type: string
+ *               confirm:
+ *                 type: boolean
+ *                 description: |
+ *                   Makes the vendor's answer final: saves the decisions above
+ *                   and confirms the booking in the same request, as
+ *                   PUT /:bookingId/accept would. Only for NewBooking, Viewed
+ *                   or InDiscussion, and only once no request is left Pending.
  *     responses:
  *       200:
- *         description: Booking updated
+ *         description: Booking updated (or confirmed, with `confirm`)
  *       400:
  *         description: Validation failed, or booking already resolved
+ *       409:
+ *         description: confirm sent while a request is still Pending
  *       404:
  *         description: Booking or change request not found
  *       500:
