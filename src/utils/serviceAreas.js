@@ -77,3 +77,19 @@ export function flattenServiceAreas(serviceAreas) {
 export function serviceAreaRegexClauses(rx) {
   return [{ "serviceAreas.area": rx }, { "serviceAreas.sublocalities": rx }, { serviceAreas: rx }];
 }
+
+/** A stored item: the new `{ area, sublocalities }` or a legacy string. */
+export function isServiceAreaItem(item) {
+  if (typeof item === "string") return true;
+  return (
+    !!item &&
+    typeof item.area === "string" &&
+    (item.sublocalities === undefined ||
+      (Array.isArray(item.sublocalities) && item.sublocalities.every((s) => typeof s === "string")))
+  );
+}
+
+/** True while the vendor still has the pre-2026-10-07 flat `[String]` shape. */
+export function hasLegacyServiceAreas(serviceAreas) {
+  return Array.isArray(serviceAreas) && serviceAreas.some((item) => typeof item === "string");
+}
