@@ -1,5 +1,6 @@
 import Booking from "../models/Booking.js";
 import { round2 } from "../utils/money.js";
+import { recordVendorMilestoneDue } from "./vendorPayoutService.js";
 
 /**
  * Applies a confirmed-PAID Step 22 milestone payment to its Booking — Phase
@@ -56,6 +57,11 @@ export async function applyMilestonePaymentToBooking(payment) {
 
   payment.bookingCreated = true; // reused as "applied to its booking" for this payment type — see Payment.js comment
   await payment.save();
+
+  // Records what the vendor is now owed for this milestone — does not move
+  // any real money. The business admin portal approves/fires the actual
+  // payout against this same Transaction data — PM decision 2026-10-10.
+  await recordVendorMilestoneDue({ booking, milestoneTitle: milestone.title, grossAmount: payment.amount });
 
   return booking;
 }

@@ -2,6 +2,7 @@ import Booking from "../models/Booking.js";
 import { generateISTId } from "../utils/idGenerator.js";
 import { round2 } from "../utils/money.js";
 import { applyPricingBreakdown } from "../utils/pricingBreakdown.js";
+import { recordVendorMilestoneDue } from "./vendorPayoutService.js";
 
 /**
  * Turns a paid CheckoutSession into real Booking documents — Phase 4 Step
@@ -227,20 +228,36 @@ export async function createBookingsFromCheckoutSession(session, payment, option
     });
     // Vendor's own utility (utils/pricingBreakdown.js) — runs first so the
     // "Pricing Breakdown" card's own fields (subtotal/tax/etc.) are
-    // populated the same way vendor-side reads them. BUT: that utility
-    // always treats tax as EXCLUSIVE (adds it on top of subtotal) — it has
-    // no gstInclusive branch. When a package's GST is actually inclusive,
-    // trusting its totalAmount would double-count tax already folded into
-    // the price, and — critically — would stop matching what Cashfree
-    // actually charged (quoteLine.lineTotalInclGst, computed correctly by
-    // this codebase's own inclusive-aware pricing engine). totalAmount is
-    // therefore always overwritten with the REAL charged amount afterward —
-    // this also protects the "milestones must sum to what's actually
-    // charged" invariant already fixed once before (see Step 19's info.txt
-    // writeup on why milestones and the token amount must agree in rupees).
+    // populated the same way vendor-side reads them. That utility now has
+    // its own gstInclusive branch (reads packageSnapshot.gstInclusive, set
+    // just above), so it no longer double-counts tax already folded into
+    // an inclusive package's price. totalAmount is still overwritten with
+    // the REAL Cashfree-charged amount afterward regardless — belt and
+    // suspenders, and this also protects the "milestones must sum to what's
+    // actually charged" invariant already fixed once before (see Step 19's
+    // info.txt writeup on why milestones and the token amount must agree in
+    // rupees).
     applyPricingBreakdown(booking);
     booking.totalAmount = quoteLine.lineTotalInclGst || 0;
     await booking.save();
+
+    // Records what the vendor is owed for the checkout-time token payment —
+    // does not move any real money; the business admin portal approves/
+    // fires the actual payout against this same Transaction data (PM
+    // decision 2026-10-10, see vendorPayoutService.js's own comment).
+    // Skipped for assumeFullyPaid (off-platform payment confirmation): that
+    // money was never actually collected via Cashfree through this app, so
+    // there is nothing real to record as owed from a platform-held payment.
+    if (!assumeFullyPaid) {
+      const receivedMilestone = booking.paymentMilestones.find((m) => m.status === "Received");
+      if (receivedMilestone && receivedMilestone.amount > 0) {
+        await recordVendorMilestoneDue({
+          booking,
+          milestoneTitle: receivedMilestone.title,
+          grossAmount: receivedMilestone.amount,
+        });
+      }
+    }
 
     createdBookingIds.push(booking._id);
 
