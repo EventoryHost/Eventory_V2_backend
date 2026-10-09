@@ -10,6 +10,7 @@ import {
   legacyVerification,
 } from "../utils/vendorVerificationLegacy.js";
 import { computeCompletion } from "../utils/profileCompletion.js";
+import { isServiceAreaItem } from "../utils/serviceAreas.js";
 import { deriveStatus } from "../utils/vendorVerificationStatus.js";
 
 const VendorSchema = new mongoose.Schema({
@@ -42,7 +43,16 @@ const VendorSchema = new mongoose.Schema({
 
   city: String,
   state: String,
-  serviceAreas: [String],
+  // `[{ area, sublocalities }]`. Mixed so vendors still holding the legacy
+  // flat `[String]` keep it until they re-save from the app (see
+  // utils/serviceAreas.js); every write is normalised to the new shape.
+  serviceAreas: {
+    type: [mongoose.Schema.Types.Mixed],
+    validate: {
+      validator: (list) => list.every(isServiceAreaItem),
+      message: "serviceAreas must be [{ area, sublocalities: [String] }]",
+    },
+  },
 
   teamSize: String,
   bookingsPerYear: String,

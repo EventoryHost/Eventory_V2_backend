@@ -6,6 +6,7 @@ import {
 } from "../utils/accountDeletion.js";
 import { VENDOR_DOC_FIELDS } from "../models/schemas/emActionSchema.js";
 import { computeCompletion } from "../utils/profileCompletion.js";
+import { normalizeServiceAreas } from "../utils/serviceAreas.js";
 import {
   effectiveVerification,
   hasVerificationStatus,
@@ -91,12 +92,18 @@ function sanitizeBase64Fields(payload) {
   return sanitized;
 }
 
+/** Accept legacy flat `serviceAreas` strings from older app builds. */
+function normalizeServiceAreaPayload(payload) {
+  if (!Array.isArray(payload.serviceAreas)) return payload;
+  return { ...payload, serviceAreas: normalizeServiceAreas(payload.serviceAreas) };
+}
+
 
 // Create a new vendor
 export const createVendor = async (req, res, next) => {
   try {
     // `id` may be chosen by the caller (existing behaviour); nothing else server-owned.
-    const vendorData = sanitizeBase64Fields(stripServerOwnedFields(req.body, { keep: ["id"] }));
+    const vendorData = normalizeServiceAreaPayload(sanitizeBase64Fields(stripServerOwnedFields(req.body, { keep: ["id"] })));
     if (!vendorData.id) {
       vendorData.id = generateISTId("VEN");
     }
@@ -157,7 +164,7 @@ export const getVendorById = async (req, res, next) => {
 // Update vendor
 export const updateVendor = async (req, res, next) => {
   try {
-    const cleanBody = sanitizeBase64Fields(stripServerOwnedFields(req.body));
+    const cleanBody = normalizeServiceAreaPayload(sanitizeBase64Fields(stripServerOwnedFields(req.body)));
     const rootOf = (key) => key.split(".")[0];
     const sentFields = Object.keys(cleanBody);
 

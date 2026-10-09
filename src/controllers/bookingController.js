@@ -531,7 +531,19 @@ export const updateBooking = async (req, res) => {
       pricing,
       paymentMilestones,
       calendarNote,
+      confirm,
     } = req.body;
+
+    // `confirm` makes the vendor's answer final: the decisions below are
+    // their response to the customer's requests, and the booking is accepted
+    // with them in the same save. Only a booking still awaiting acceptance can
+    // be confirmed this way.
+    if (confirm && !PRE_ACCEPTANCE_STATUSES.includes(booking.status)) {
+      return res.status(400).json({
+        status: "FAILED",
+        message: `Cannot confirm a booking with status "${booking.status}".`,
+      });
+    }
 
     if (Array.isArray(changeRequests)) {
       for (const decision of changeRequests) {
@@ -621,11 +633,32 @@ export const updateBooking = async (req, res) => {
       }
     }
 
+    if (confirm) {
+      // Every request needs an answer before the booking is locked in: a
+      // request left Pending on a confirmed booking would never be decided,
+      // and the customer would see it awaiting the vendor forever.
+      const undecided = [
+        ...booking.changeRequests,
+        ...booking.customizeRequests,
+      ].filter((request) => request.status === "Pending").length;
+      if (undecided > 0) {
+        return res.status(409).json({
+          status: "FAILED",
+          message: `Accept or decline every request before confirming (${undecided} still pending).`,
+        });
+      }
+
+      booking.status = "Confirmed";
+      booking.confirmedAt = new Date();
+    }
+
     await booking.save();
+
+    if (confirm) await syncPackageBooked(booking.packageId, booking.eventDate);
 
     return res.status(200).json({
       status: "SUCCESS",
-      message: "Booking updated",
+      message: confirm ? "Booking confirmed" : "Booking updated",
       booking: withPricingBreakdown(booking),
     });
   } catch (error) {
