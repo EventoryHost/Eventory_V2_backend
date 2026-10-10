@@ -5,6 +5,17 @@ import ChatSession from "../models/ChatSession.js";
 import ChatMessage from "../models/ChatMessage.js";
 import ChatEnquiry from "../models/ChatEnquiry.js";
 import { handleBotTurn } from "../services/chatBotEngine.js";
+import { notifyHelpRequest, notifyHelpCallBack, notifyHelpMessage, notifyAreaWaitlist } from "../services/chatSlackNotifier.js";
+import AreaWaitlist from "../models/AreaWaitlist.js";
+import { lookupArea } from "../services/areaLookupService.js";
+import { resolveArea } from "../utils/serviceability.js";
+import {
+  callBackDeadline,
+  checkLate,
+  isOffHours,
+  nextTicket,
+  serializeHelpRequest,
+} from "../services/helpRequestService.js";
 import { room } from "../config/socket.js";
 import { generateISTId } from "../utils/idGenerator.js";
 
@@ -294,5 +305,217 @@ export const resetChat = async (req, res) => {
   } catch (error) {
     console.error("[customerChatController] resetChat error:", error);
     return res.status(500).json({ success: false, message: "Failed to reset chat" });
+  }
+};
+
+/**
+ * @desc Help panel hand-off — the customer's brief for an Event Manager
+ * (frontend HelpBriefCard). Stored as a ChatEnquiry lead (source
+ * "help_panel") and posted to the same Slack channel as chatbot leads.
+ * Public: anonymous visitors can send one; a valid token links it to the
+ * customer instead.
+ * @route POST /api/customer/chat/help-request
+ */
+export const createHelpRequest = async (req, res) => {
+  try {
+    const identity = await resolveChatIdentity(req, req.body);
+    const b = req.body;
+    const ticket = await nextTicket();
+    const enquiry = await ChatEnquiry.create({
+      ticket,
+      ...toEnquiryFilter(identity),
+      source: "help_panel",
+      eventType: b.occasion,
+      guestCount: b.guests,
+      budgetOption: "Yes",
+      budgetRange: b.budget,
+      servicesNeeded: [b.vendorType],
+      city: b.area || null,
+      eventDateRaw: b.date || null,
+      replyMode: b.replyMode,
+      bestTimeToCall: b.replyMode === "call-me" ? b.callTime || null : null,
+      phoneNumber: b.replyMode === "call-me" ? b.phone : null,
+      customerName: identity.customer?.name || null,
+      pageUrl: b.pageUrl || null,
+      hasReferencePhoto: Boolean(b.hasPhoto),
+      // Figma 9.6: an unserved area still sends; the team checks travel.
+      areaServed: b.area ? resolveArea(b.area).serviceable : null,
+      transcript: b.transcript || [],
+      status: b.replyMode === "call-me" ? "FLOW_COMPLETE" : "STEP_8_HANDOFF",
+      createdOffHours: isOffHours(),
+      // "Call me" is a call back from the start (Figma 07): one request, one
+      // ref, and a promise that follows the call-time chip.
+      callBack:
+        b.replyMode === "call-me"
+          ? {
+              requestId: generateISTId("CB"),
+              ticket,
+              phone: b.phone,
+              window: b.callTime && b.callTime !== "As soon as possible" ? b.callTime : null,
+              callBy: callBackDeadline(b.callTime),
+            }
+          : null,
+    });
+
+    // Fire-and-forget, same as the chatbot's notifications: a Slack
+    // failure must never fail the customer's request.
+    notifyHelpRequest(enquiry)
+      .then(() => ChatEnquiry.updateOne({ _id: enquiry._id }, { $set: { slackNotifiedAt: new Date() } }))
+      .catch((err) => console.error("[createHelpRequest] Slack notify failed:", err.message));
+
+    return res.status(201).json({
+      success: true,
+      enquiryId: enquiry.enquiryId,
+      anonId: identity.anonId ?? null,
+      request: serializeHelpRequest(enquiry, { late: false }),
+    });
+  } catch (error) {
+    console.error("createHelpRequest error:", error);
+    return res.status(500).json({ success: false, message: "Could not send your request" });
+  }
+};
+
+/**
+ * The caller's own help request, or null. Unlike resolveChatIdentity this
+ * never mints an anon id: a request is only visible to the customer token
+ * or anon_id that sent it.
+ */
+async function findOwnHelpRequest(req, input) {
+  const customer = await resolveLoggedInCustomer(req);
+  const anonId = (input.anon_id || "").toString().trim();
+  if (!customer && !anonId) return null;
+  return ChatEnquiry.findOne({
+    enquiryId: req.params.enquiryId,
+    source: "help_panel",
+    ...(customer ? { customerId: customer._id } : { anonId }),
+  });
+}
+
+/**
+ * @desc Help panel thread after the brief: Event Manager replies, the
+ * customer's own follow-ups, call back and whether it's now late (30 min,
+ * no reply — flags the team lead once). Polled by the panel.
+ * @route GET /api/customer/chat/help-request/:enquiryId?anon_id=
+ */
+export const getHelpRequest = async (req, res) => {
+  try {
+    const enquiry = await findOwnHelpRequest(req, req.query || {});
+    if (!enquiry) return res.status(404).json({ success: false, message: "Request not found" });
+    const late = await checkLate(enquiry);
+    return res.json({ success: true, request: serializeHelpRequest(enquiry, { late }) });
+  } catch (error) {
+    console.error("getHelpRequest error:", error);
+    return res.status(500).json({ success: false, message: "Could not load your request" });
+  }
+};
+
+/**
+ * @desc Customer writes again in the help thread; the team sees it on Slack.
+ * @route POST /api/customer/chat/help-request/:enquiryId/messages
+ */
+export const postHelpRequestMessage = async (req, res) => {
+  try {
+    const enquiry = await findOwnHelpRequest(req, req.body);
+    if (!enquiry) return res.status(404).json({ success: false, message: "Request not found" });
+    const message = { messageId: generateISTId("HMSG"), from: "customer", text: req.body.text, sentAt: new Date() };
+    await ChatEnquiry.updateOne({ _id: enquiry._id }, { $push: { helpMessages: message } });
+    notifyHelpMessage(enquiry, message.text).catch((err) =>
+      console.error("[postHelpRequestMessage] Slack notify failed:", err.message)
+    );
+    return res.status(201).json({ success: true, message });
+  } catch (error) {
+    console.error("postHelpRequestMessage error:", error);
+    return res.status(500).json({ success: false, message: "Could not send your message" });
+  }
+};
+
+/**
+ * @desc "Get a call back" from the status card: within 30 min in hours,
+ * 9:30 AM IST otherwise. One call back per request — asking again returns
+ * the existing one.
+ * @route POST /api/customer/chat/help-request/:enquiryId/call-back
+ */
+export const requestHelpCallBack = async (req, res) => {
+  try {
+    const enquiry = await findOwnHelpRequest(req, req.body);
+    if (!enquiry) return res.status(404).json({ success: false, message: "Request not found" });
+    if (!enquiry.callBack) {
+      enquiry.callBack = {
+        requestId: generateISTId("CB"),
+        ticket: await nextTicket(),
+        phone: req.body.phone,
+        callBy: callBackDeadline(),
+      };
+      if (!enquiry.phoneNumber) enquiry.phoneNumber = req.body.phone;
+      await enquiry.save();
+      notifyHelpCallBack(enquiry).catch((err) =>
+        console.error("[requestHelpCallBack] Slack notify failed:", err.message)
+      );
+    }
+    return res.status(201).json({ success: true, request: serializeHelpRequest(enquiry, { late: false }) });
+  } catch (error) {
+    console.error("requestHelpCallBack error:", error);
+    return res.status(500).json({ success: false, message: "Could not request a call back" });
+  }
+};
+
+/**
+ * @desc Help panel location step (Figma "09"): served, not served (with the
+ * closest areas we cover), or ambiguous ("Sector 15" — which city?).
+ * Public; no identity needed.
+ * @route GET /api/customer/chat/area-check?area=
+ */
+export const checkHelpArea = async (req, res) => {
+  try {
+    const area = await lookupArea(req.query.area);
+    return res.json({ success: true, area });
+  } catch (error) {
+    console.error("checkHelpArea error:", error);
+    return res.status(500).json({ success: false, message: "Could not check that area" });
+  }
+};
+
+/**
+ * @desc "Notify me when Eventory begins serving {area}" — stores the lead
+ * (one per phone + area; repeats refresh it) and posts it to Slack.
+ * @route POST /api/customer/chat/area-waitlist
+ */
+export const joinAreaWaitlist = async (req, res) => {
+  try {
+    const identity = await resolveChatIdentity(req, req.body);
+    const b = req.body;
+    const phone = b.phone.replace(/\D/g, "").slice(-10);
+    const area = resolveArea(b.area);
+    const entry = await AreaWaitlist.findOneAndUpdate(
+      { phone, areaKey: b.area.trim().toLowerCase() },
+      {
+        $set: {
+          area: b.area.trim(),
+          pincode: area.pincode,
+          areaSource: b.areaSource || "typed",
+          consent: true,
+          customerId: identity.customerId ?? null,
+          anonId: identity.anonId ?? null,
+          // Only what this request says — a repeat sign-up never wipes
+          // the plan an earlier one recorded.
+          ...Object.fromEntries(
+            Object.entries({
+              customerName: identity.customer?.name,
+              occasion: b.occasion,
+              guests: b.guests,
+              budget: b.budget,
+              requestText: b.requestText,
+              pageUrl: b.pageUrl,
+            }).filter(([, v]) => v)
+          ),
+        },
+      },
+      { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+    notifyAreaWaitlist(entry).catch((err) => console.error("[joinAreaWaitlist] Slack notify failed:", err.message));
+    return res.status(201).json({ success: true, anonId: identity.anonId ?? null });
+  } catch (error) {
+    console.error("joinAreaWaitlist error:", error);
+    return res.status(500).json({ success: false, message: "Could not save that" });
   }
 };
