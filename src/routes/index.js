@@ -23,7 +23,6 @@ import bookingRoutes from "./bookingRoutes.js";
 import enquiryRoutes from "./enquiryRoutes.js";
 import transactionRoutes from "./transactionRoutes.js";
 import redirectRoutes from "./redirectRoutes.js";
-import uploadRoutes from "./uploadRoutes.js";
 
 // Admin Routes
 import adminVendorRoutes from "./adminVendorRoutes.js";
@@ -31,6 +30,7 @@ import adminPackageRoutes from "./adminPackageRoutes.js";
 import adminBookingRoutes from "./adminBookingRoutes.js";
 import adminTemplateRoutes from "./adminTemplateRoutes.js";
 import adminDashboardRoutes from "./adminDashboardRoutes.js";
+import adminHelpRequestRoutes from "./adminHelpRequestRoutes.js";
 
 /**
  * API namespace convention:
@@ -107,7 +107,6 @@ router.use("/bookings", bookingRoutes);
 router.use("/enquiries", enquiryRoutes);
 router.use("/transactions", transactionRoutes);
 router.use("/redirect", redirectRoutes);
-router.use("/uploads", uploadRoutes);
 
 // Mount Admin Routes
 router.use("/admin/vendors", adminVendorRoutes);
@@ -115,6 +114,7 @@ router.use("/admin/packages", adminPackageRoutes);
 router.use("/admin/bookings", adminBookingRoutes);
 router.use("/admin/templates", adminTemplateRoutes);
 router.use("/admin/dashboard", adminDashboardRoutes);
+router.use("/admin/help-requests", adminHelpRequestRoutes);
 
 export default router;
 

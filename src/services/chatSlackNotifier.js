@@ -68,4 +68,73 @@ export async function notifyFlowComplete(enquiry) {
   await post(text);
 }
 
-export default { notifyNewLead, notifyHandoffStarted, notifyFlowComplete };
+/** @desc Help panel brief sent to the Event Manager team. */
+export async function notifyHelpRequest(enquiry) {
+  const reach =
+    enquiry.replyMode === "call-me"
+      ? `📞 *Call back:* ${enquiry.phoneNumber || "—"} (${enquiry.bestTimeToCall || "Anytime"})`
+      : "💬 *Reply in the help chat* (customer chose Reply here)";
+  const text =
+    `🆘 *Help panel request ${enquiry.ticket || ""}* (enquiry ${enquiry.enquiryId})\n` +
+    `${reach}\n` +
+    `*Date:* ${enquiry.eventDateRaw || "Not given"}\n` +
+    `${formatEnquiryBlock(enquiry)}\n` +
+    `*Page:* ${enquiry.pageUrl || "—"}` +
+    (enquiry.areaServed === false
+      ? "\n⚠️ *Area not served yet* — check whether a vendor travels there."
+      : "") +
+    (enquiry.hasReferencePhoto
+      ? "\n📷 *Has a reference photo* — not uploaded; ask the customer to share it on WhatsApp."
+      : "") +
+    (enquiry.transcript?.length ? `\n*Chat so far:*\n> ${enquiry.transcript.join("\n> ")}` : "");
+  await post(text);
+}
+
+const istTime = (date) =>
+  new Date(date).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit", hour12: true });
+
+/** @desc Help panel request with no reply after 30 min — for the team lead. */
+export async function notifyHelpRequestLate(enquiry) {
+  await post(
+    `⚠️ *Help panel request ${enquiry.ticket || ""} waiting 30+ min* (enquiry ${enquiry.enquiryId}) — team lead, please pick this up.\n` +
+      `${formatEnquiryBlock(enquiry)}`
+  );
+}
+
+/** @desc Customer asked for a call back from the help panel thread. */
+export async function notifyHelpCallBack(enquiry) {
+  await post(
+    `📞 *Call back requested ${enquiry.callBack.ticket || ""}* (request ${enquiry.ticket || enquiry.enquiryId})\n` +
+      `*Phone:* ${enquiry.callBack.phone}\n*Call by:* ${istTime(enquiry.callBack.callBy)}\n` +
+      `${formatEnquiryBlock(enquiry)}`
+  );
+}
+
+/** @desc Out-of-area "Notify me" lead from the help panel. */
+export async function notifyAreaWaitlist(entry) {
+  const plan = [entry.occasion, entry.guests && `${entry.guests} guests`, entry.budget].filter(Boolean).join(" · ");
+  await post(
+    `📍 *Out-of-area lead:* ${entry.area}${entry.pincode ? ` (${entry.pincode})` : ""}` +
+      `${entry.areaSource === "location_tag" ? " — from their location tag" : ""}\n` +
+      `*Phone:* ${entry.phone}${entry.customerName ? ` · ${entry.customerName}` : ""}\n` +
+      (plan ? `*Planning:* ${plan}\n` : "") +
+      (entry.requestText ? `> ${entry.requestText}\n` : "") +
+      `Wants one WhatsApp message when we start serving ${entry.area}.`
+  );
+}
+
+/** @desc Customer wrote again in the help panel thread. */
+export async function notifyHelpMessage(enquiry, text) {
+  await post(`💬 *New message on help request ${enquiry.ticket || enquiry.enquiryId}*\n> ${text}`);
+}
+
+export default {
+  notifyNewLead,
+  notifyHandoffStarted,
+  notifyFlowComplete,
+  notifyHelpRequest,
+  notifyHelpRequestLate,
+  notifyHelpCallBack,
+  notifyHelpMessage,
+  notifyAreaWaitlist,
+};

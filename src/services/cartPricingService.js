@@ -258,12 +258,53 @@ export async function computeQuoteForLines(lines, discount = 0) {
   // EVERY available line produced a real fee, so the frontend can show
   // "₹X (+ more once you add event dates)" rather than a falsely-final
   // number.
-  const convenienceFee = round2(availableLines.reduce((sum, l) => sum + (l.convenienceFee || 0), 0));
+  const rawConvenienceFee = round2(availableLines.reduce((sum, l) => sum + (l.convenienceFee || 0), 0));
   const convenienceFeeComplete =
     availableLines.length > 0 && availableLines.every((l) => l.convenienceFeeConfigured);
-  const convenienceFeeConfigured = convenienceFee > 0 || convenienceFeeComplete;
+  const convenienceFeeConfigured = rawConvenienceFee > 0 || convenienceFeeComplete;
 
-  const grandTotal = round2(Math.max(0, subtotal + gstTotal + convenienceFee - discount));
+  // Round the customer's final payable total up to the next ₹100 (e.g. 999
+  // -> 1000, 2370 -> 2400) — PM spec, mirrored from the business admin's
+  // custom-order round-off (Math.ceil(x/100)*100). The gap this creates is
+  // never a separate "round off" line the customer would notice: it's folded
+  // straight into convenienceFee, so subtotal + gstTotal + convenienceFee
+  // still sums exactly to grandTotal — nothing to visibly not add up.
+  const rawGrandTotal = Math.max(0, subtotal + gstTotal + rawConvenienceFee - discount);
+  const grandTotal = rawGrandTotal > 0 ? Math.ceil(rawGrandTotal / 100) * 100 : 0;
+  const roundOffGap = round2(grandTotal - rawGrandTotal);
+  const convenienceFee = round2(rawConvenienceFee + roundOffGap);
+
+  // Reconcile the payment schedule against the real payable total. Each
+  // line's milestones (computeLineMilestones above) only sum to that one
+  // line's own tax-inclusive package total — convenienceFee, discount, and
+  // the round-off gap above are order-level and never distributed into any
+  // line's milestones, so concatenating every line's schedule would under-
+  // or over-total against grandTotal (the exact "Payment Schedule modal
+  // rows don't add up to the total" bug reported by PM, mirrored off the
+  // business admin's custom-order schedule — see CustomOrderForm.tsx, which
+  // injects the same kind of gap into the last/"Final Pay" milestone rather
+  // than leaving it unreconciled). Fix: inject the gap into the LAST
+  // milestone of the LAST available line, same "last slot absorbs the
+  // drift" pattern bookingController.js already uses for whole-rupee
+  // milestone rounding.
+  const allMilestoneAmounts = availableLines.flatMap((l) =>
+    l.milestones.map((m) => m.amount).filter((a) => a != null)
+  );
+  if (allMilestoneAmounts.length > 0) {
+    const milestonesSum = round2(allMilestoneAmounts.reduce((sum, a) => sum + a, 0));
+    const milestoneGap = round2(grandTotal - milestonesSum);
+    if (milestoneGap !== 0) {
+      outer: for (let i = availableLines.length - 1; i >= 0; i--) {
+        const lineMilestones = availableLines[i].milestones;
+        for (let j = lineMilestones.length - 1; j >= 0; j--) {
+          if (lineMilestones[j].amount != null) {
+            lineMilestones[j].amount = round2(lineMilestones[j].amount + milestoneGap);
+            break outer;
+          }
+        }
+      }
+    }
+  }
 
   const linesWithToken = availableLines.filter((l) => l.token.tokenConfigured);
   const allTokensConfigured = linesWithToken.length === availableLines.length && availableLines.length > 0;

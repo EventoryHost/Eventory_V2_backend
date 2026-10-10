@@ -1,5 +1,5 @@
 import express from "express";
-import { getBookings, getBookingDetail, cancelBooking, getInvoicePdf } from "../controllers/customerBookingController.js";
+import { getBookings, getBookingDetail, cancelBooking, getInvoicePdf, raiseIssue } from "../controllers/customerBookingController.js";
 import { protectCustomer } from "../middlewares/customerAuth.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
 import { bookingsQuerySchema } from "../validators/customerBookingValidators.js";
@@ -100,6 +100,40 @@ router.get("/:bookingId", protectCustomer, getBookingDetail);
  *       409: { description: Booking is already Cancelled/Declined/Completed — cannot cancel }
  */
 router.post("/:bookingId/cancel", protectCustomer, cancelBooking);
+
+/**
+ * @swagger
+ * /api/customer/bookings/{bookingId}/issues:
+ *   post:
+ *     summary: Raise an issue about my event
+ *     description: >
+ *       Allowed on a Confirmed or Completed booking until issueWindowClosesAt
+ *       (48 hours after the event ends).
+ *     tags: [Customer Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [category, description]
+ *             properties:
+ *               category:
+ *                 type: string
+ *                 enum: [Booking, Items, Payment, PaymentMilestone, Application, Other]
+ *               description: { type: string, maxLength: 2000 }
+ *     responses:
+ *       201: { description: Issue raised }
+ *       400: { description: Invalid bookingId, category or description }
+ *       404: { description: Not found (or not owned by this customer) }
+ *       409: { description: Booking not confirmed/completed, or the issue window has closed }
+ */
+router.post("/:bookingId/issues", protectCustomer, raiseIssue);
 
 /**
  * @swagger
