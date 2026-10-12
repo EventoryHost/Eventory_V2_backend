@@ -1,5 +1,5 @@
 import express from "express";
-import { listAreaWaitlist, listHelpRequests, replyToHelpRequest } from "../controllers/adminHelpRequestController.js";
+import { getHelpRequestThread, listAreaWaitlist, listHelpRequests, replyToHelpRequest } from "../controllers/adminHelpRequestController.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
 import { helpRequestReplySchema } from "../validators/customerHelpValidators.js";
 
@@ -11,6 +11,7 @@ const router = express.Router();
  */
 router.get("/", listHelpRequests);
 router.get("/area-waitlist", listAreaWaitlist);
+router.get("/:enquiryId", getHelpRequestThread);
 router.post("/:enquiryId/reply", validateRequest(helpRequestReplySchema), replyToHelpRequest);
 
 export default router;

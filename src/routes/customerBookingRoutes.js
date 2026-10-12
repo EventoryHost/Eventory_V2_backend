@@ -1,8 +1,16 @@
 import express from "express";
-import { getBookings, getBookingDetail, cancelBooking, getInvoicePdf, raiseIssue } from "../controllers/customerBookingController.js";
+import {
+  getBookings,
+  getBookingDetail,
+  cancelBooking,
+  getInvoicePdf,
+  raiseIssue,
+  acceptProposal,
+  addCustomizeRequests,
+} from "../controllers/customerBookingController.js";
 import { protectCustomer } from "../middlewares/customerAuth.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
-import { bookingsQuerySchema } from "../validators/customerBookingValidators.js";
+import { bookingsQuerySchema, addCustomizeRequestsSchema } from "../validators/customerBookingValidators.js";
 import { getBookingReview, submitBookingReview } from "../controllers/customerReviewController.js";
 import { submitReviewSchema } from "../validators/customerReviewValidators.js";
 
@@ -100,6 +108,62 @@ router.get("/:bookingId", protectCustomer, getBookingDetail);
  *       409: { description: Booking is already Cancelled/Declined/Completed — cannot cancel }
  */
 router.post("/:bookingId/cancel", protectCustomer, cancelBooking);
+
+/**
+ * @swagger
+ * /api/customer/bookings/{bookingId}/proposal/accept:
+ *   post:
+ *     summary: Accept the vendor's decisions on my requests (Review Proposal)
+ *     tags: [Customer Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Proposal accepted — proposalResponse returned }
+ *       400: { description: Invalid bookingId }
+ *       404: { description: Not found (or not owned by this customer) }
+ *       409: { description: Booking is terminal, has no requests, or some are still Pending }
+ */
+router.post("/:bookingId/proposal/accept", protectCustomer, acceptProposal);
+
+/**
+ * @swagger
+ * /api/customer/bookings/{bookingId}/customize-requests:
+ *   post:
+ *     summary: Send follow-up "Customize items" requests (Review Proposal → Still Needs Changes)
+ *     tags: [Customer Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [requests]
+ *             properties:
+ *               requests:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   required: [setupId, itemId, requestType, label]
+ *     responses:
+ *       201: { description: Requests appended as Pending }
+ *       400: { description: Invalid bookingId or request body }
+ *       404: { description: Not found (or not owned by this customer) }
+ *       409: { description: Booking is Declined/Cancelled/Completed }
+ */
+router.post(
+  "/:bookingId/customize-requests",
+  protectCustomer,
+  validateRequest(addCustomizeRequestsSchema),
+  addCustomizeRequests
+);
 
 /**
  * @swagger

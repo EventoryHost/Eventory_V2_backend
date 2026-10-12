@@ -33,6 +33,9 @@ export const PRE_ACCEPTANCE_STATUSES = ["NewBooking", "Viewed", "InDiscussion"];
 // Statuses after which nothing about the booking can change
 export const TERMINAL_STATUSES = ["Declined", "Cancelled", "Completed"];
 
+// The customer's answer to the vendor's proposal — see Booking.proposalResponse.
+export const PROPOSAL_RESPONSE_STATUSES = ["Accepted", "ChangesRequested"];
+
 // Post-event issues. The categories mirror the Support rows on the vendor
 // app's booking details screen.
 export const ISSUE_CATEGORIES = [
@@ -156,6 +159,13 @@ const CustomizeRequestSchema = new mongoose.Schema(
       enum: CHANGE_REQUEST_STATUSES,
       default: "Pending",
     },
+    // When the vendor last decided this request — stamped by updateBooking,
+    // same as ChangeRequestSchema's own respondedAt.
+    respondedAt: { type: Date, default: null },
+    // When the customer sent it. Requests carried from checkout predate the
+    // field; ones sent later from "Still needs changes" on Review Proposal
+    // carry it, so the vendor can tell a follow-up round apart.
+    requestedAt: { type: Date, default: null },
   },
   // `_id: true` — was false until 2026-09-22. The vendor's accept/decline
   // addresses one request by id, so ids must be STABLE: Mongoose mints a
@@ -393,6 +403,17 @@ const BookingSchema = new mongoose.Schema(
     // PDP "Customize items" workshop requests — see CustomizeRequestSchema's
     // own comment above for why this is separate from changeRequests.
     customizeRequests: [CustomizeRequestSchema],
+
+    // The customer's answer to the vendor's decisions on their requests —
+    // the "Review Proposal" screen. null status means the vendor's latest
+    // decisions haven't been answered yet; updateBooking resets it whenever
+    // the vendor decides a request, so every new round is reviewed afresh.
+    // "ChangesRequested" is set when the customer sends follow-up requests
+    // instead of accepting.
+    proposalResponse: {
+      status: { type: String, enum: [...PROPOSAL_RESPONSE_STATUSES, null], default: null },
+      respondedAt: { type: Date, default: null },
+    },
 
     // PDP item-details colour picks — see ColourPreferenceSchema's own
     // comment above. Not a request; informational only for the vendor.

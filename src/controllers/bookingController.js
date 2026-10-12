@@ -569,8 +569,21 @@ export const updateBooking = async (req, res) => {
         if (!request) {
           return notFound(res, `Customize request "${decision.id}" not found`);
         }
-        if (decision.status !== undefined) request.status = decision.status;
+        if (decision.status !== undefined) {
+          request.status = decision.status;
+          request.respondedAt = new Date();
+        }
       }
+    }
+
+    // A fresh decision is a fresh proposal: the customer's earlier answer
+    // (accepted, or sent more changes) was to the previous round, so clear it
+    // and let their Review Proposal screen ask again.
+    const decidedSomething = [...(changeRequests || []), ...(customizeRequests || [])].some(
+      (decision) => decision.status !== undefined
+    );
+    if (decidedSomething) {
+      booking.proposalResponse = { status: null, respondedAt: null };
     }
 
     if (pricing) {

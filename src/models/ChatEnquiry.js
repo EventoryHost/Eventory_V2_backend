@@ -59,9 +59,32 @@ const ChatEnquirySchema = new mongoose.Schema(
     // goes to the team, who check whether a vendor travels there.
     areaServed: { type: Boolean, default: null },
     transcript: { type: [String], default: [] },
-    // Help panel thread after the brief is sent: the customer's follow-ups
-    // and the Event Manager's replies, polled by the panel
-    // (GET /api/customer/chat/help-request/:enquiryId).
+    // The help panel chat this ticket was raised in (HelpConversation). One
+    // ticket per chat; replies come back into this same chat.
+    conversationId: { type: String, default: null },
+    // Who raised it, as they were at the time — customerId above is the
+    // link; this is what the Event Manager reads (code = Customer.id,
+    // "CUS…"). Guests only have anonId and the brief's phone.
+    customer: {
+      type: new mongoose.Schema(
+        {
+          code: { type: String, default: null },
+          name: { type: String, default: null },
+          email: { type: String, default: null },
+          phone: { type: String, default: null },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    // Ticket lifecycle for the Event Manager side: open until someone
+    // replies, then replied; closed is set by the team.
+    ticketStatus: { type: String, enum: ["open", "replied", "closed", null], default: null },
+    lastMessageAt: { type: Date, default: null },
+    lastMessageFrom: { type: String, enum: ["customer", "event_manager", null], default: null },
+    messageCount: { type: Number, default: 0 },
+    // Before HelpMessage: the thread lived here. Still read for old
+    // tickets; new messages go to HelpMessage (customer_help_messages).
     helpMessages: {
       type: [
         {
@@ -136,5 +159,10 @@ const ChatEnquirySchema = new mongoose.Schema(
 ChatEnquirySchema.index({ anonId: 1, status: 1 });
 ChatEnquirySchema.index({ customerId: 1, status: 1 });
 ChatEnquirySchema.index({ source: 1, createdAt: -1 });
+// All of one customer's tickets, newest first; a chat's ticket; ticket refs.
+ChatEnquirySchema.index({ source: 1, customerId: 1, createdAt: -1 });
+ChatEnquirySchema.index({ source: 1, anonId: 1, createdAt: -1 });
+ChatEnquirySchema.index({ conversationId: 1 }, { sparse: true });
+ChatEnquirySchema.index({ ticket: 1 }, { sparse: true });
 
 export default mongoose.model("ChatEnquiry", ChatEnquirySchema);
