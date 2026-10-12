@@ -1,0 +1,194 @@
+area,locality,pincode,source
+Gurgaon,Old Gurgaon,122001,general knowledge
+Gurgaon,Sector 14,122001,general knowledge
+Gurgaon,Sector 29,122001,general knowledge
+Gurgaon,South City 1,122001,general knowledge
+Gurgaon,MG Road,122002,general knowledge
+Gurgaon,DLF Cyber City,122002,general knowledge
+Gurgaon,DLF Phase 1,122002,general knowledge
+Gurgaon,DLF Phase 2,122002,general knowledge
+Gurgaon,DLF Phase 3,,general knowledge
+Gurgaon,DLF Phase 4,,general knowledge
+Gurgaon,DLF Phase 5,,general knowledge
+Gurgaon,Sushant Lok,,general knowledge
+Gurgaon,Golf Course Road,,general knowledge
+Gurgaon,Golf Course Extension Road,,general knowledge
+Gurgaon,Sector 56,122011,general knowledge
+Gurgaon,Sector 57,122003,general knowledge
+Gurgaon,Sohna Road,122018,general knowledge
+Gurgaon,Nirvana Country,,general knowledge
+Gurgaon,Palam Vihar,122017,general knowledge
+Gurgaon,Udyog Vihar,,general knowledge
+Gurgaon,Manesar,,general knowledge
+Faridabad,NIT Faridabad,121001,general knowledge
+Faridabad,Neelam Chowk,121001,general knowledge
+Faridabad,Old Faridabad,121002,general knowledge
+Faridabad,Sector 16,121002,general knowledge
+Faridabad,Sector 17,121002,general knowledge
+Faridabad,Sector 15,121007,general knowledge
+Faridabad,Sector 28,121008,general knowledge
+Faridabad,Sector 37,121003,general knowledge
+Faridabad,Sector 46,121010,general knowledge
+Faridabad,Surajkund,121009,general knowledge
+Faridabad,Ballabgarh,121004,general knowledge
+Faridabad,Greater Faridabad (Sectors 75-89),,general knowledge
+Faridabad,Sector 21,,general knowledge
+Faridabad,Sainik Colony,,general knowledge
+Faridabad,Sector 9,,general knowledge
+Faridabad,Badkhal,,general knowledge
+Ghaziabad,Indirapuram,201014,general knowledge
+Ghaziabad,Vaishali,201010,general knowledge
+Ghaziabad,Kaushambi,201010,general knowledge
+Ghaziabad,Vasundhara,201012,general knowledge
+Ghaziabad,Brij Vihar,201011,general knowledge
+Ghaziabad,Ramprastha,201011,general knowledge
+Ghaziabad,Sahibabad,201005,general knowledge
+Ghaziabad,Shalimar Garden,201005,general knowledge
+Ghaziabad,Rajendra Nagar,201005,general knowledge
+Ghaziabad,Mohan Nagar,201007,general knowledge
+Ghaziabad,Raj Nagar,201002,general knowledge
+Ghaziabad,Kavi Nagar,201002,general knowledge
+Ghaziabad,Shastri Nagar,201002,general knowledge
+Ghaziabad,Nehru Nagar,201001,general knowledge
+Ghaziabad,Raj Nagar Extension,201017,general knowledge
+Ghaziabad,Crossings Republik,201016,general knowledge
+Ghaziabad,Govindpuram,201013,general knowledge
+Ghaziabad,Vijay Nagar,201009,general knowledge
+Ghaziabad,Pratap Vihar,201009,general knowledge
+Ghaziabad,Loni,201102,general knowledge
+Ghaziabad,Modinagar,201204,general knowledge
+Ghaziabad,Muradnagar,201206,general knowledge
+Noida,Noida Sector 12,201301,general knowledge
+Noida,Noida Sector 15,201301,general knowledge
+Noida,Noida Sector 16 (Film City),201301,general knowledge
+Noida,Noida Sector 18,201301,general knowledge
+Noida,Noida Sector 19,201301,general knowledge
+Noida,Noida Sector 25,201301,general knowledge
+Noida,Noida Sector 27,201301,general knowledge
+Noida,Noida Sector 38A (GIP Mall),201301,general knowledge
+Noida,Noida Sector 44,,general knowledge
+Noida,Noida Sector 50,,general knowledge
+Noida,Noida Sector 51,,general knowledge
+Noida,Noida Sector 62,201309,general knowledge
+Noida,Noida Sector 63,,general knowledge
+Noida,Noida Sector 76,,general knowledge
+Noida,Noida Sector 78,,general knowledge
+Noida,Noida Sector 93,201304,general knowledge
+Noida,Noida Sector 104,,general knowledge
+Noida,Noida Sector 128,201304,general knowledge
+Noida,Noida Sector 135,,general knowledge
+Noida,Noida Sector 137,201305,general knowledge
+Noida,Noida Sector 150,,general knowledge
+Noida,Noida Sector 168,,general knowledge
+Noida,Noida Expressway (Sectors 93-168),,general knowledge
+Noida,Jaypee Wish Town,201304,general knowledge
+Greater Noida,Pari Chowk,201310,general knowledge
+Greater Noida,Knowledge Park,201310,general knowledge
+Greater Noida,Alpha 1 & 2,,general knowledge
+Greater Noida,Beta 1 & 2,,general knowledge
+Greater Noida,Gamma 1 & 2,,general knowledge
+Greater Noida,Jagat Farm (Gamma 1),,general knowledge
+Greater Noida,Delta 1-3,,general knowledge
+Greater Noida,Omega 1-3,,general knowledge
+Greater Noida,Chi sectors,,general knowledge
+Greater Noida,Sigma sectors,,general knowledge
+Greater Noida,Zeta 1 & 2,,general knowledge
+Greater Noida,Techzone / Ecotech,,general knowledge
+Greater Noida,Kasna,,general knowledge
+Greater Noida,Surajpur,,general knowledge
+Greater Noida,Dadri,203207,general knowledge
+Greater Noida,Greater Noida West (Noida Extension),,general knowledge
+Greater Noida,Gaur City,,general knowledge
+Greater Noida,Bisrakh,,general knowledge
+Greater Noida,Techzone 4,,general knowledge
+Greater Noida,Gaur Chowk (Ek Murti),,general knowledge
+Central Delhi,Karol Bagh,110005,general knowledge
+Central Delhi,Dev Nagar,110005,general knowledge
+Central Delhi,Pusa Road,110005,general knowledge
+Central Delhi,Anand Parbat,110005,general knowledge
+Central Delhi,Rajinder Nagar,110060,general knowledge
+Central Delhi,Patel Nagar,110008,general knowledge
+Central Delhi,West Patel Nagar,110008,general knowledge
+Central Delhi,Baljeet Nagar,110008,general knowledge
+Central Delhi,Shadipur,110008,general knowledge
+Central Delhi,Paharganj,110055,general knowledge
+Central Delhi,Jhandewalan,110055,general knowledge
+Central Delhi,Inderpuri,110012,general knowledge
+Central Delhi,Naraina,110028,general knowledge
+Central Delhi,Naraina Vihar,110028,general knowledge
+Central Delhi,Kirti Nagar,110015,general knowledge
+Central Delhi,Moti Nagar,110015,general knowledge
+Central Delhi,Ramesh Nagar,110015,general knowledge
+Central Delhi,Rajouri Garden,110027,general knowledge
+Central Delhi,Punjabi Bagh,110026,general knowledge
+South Delhi,Hauz Khas,110016,general knowledge
+South Delhi,Green Park,110016,general knowledge
+South Delhi,Safdarjung Enclave,110029,general knowledge
+South Delhi,Malviya Nagar,110017,general knowledge
+South Delhi,Saket,110017,general knowledge
+South Delhi,Panchsheel Park,110017,general knowledge
+South Delhi,Sheikh Sarai,110017,general knowledge
+South Delhi,Mehrauli,110030,general knowledge
+South Delhi,Chhatarpur,110074,general knowledge
+South Delhi,Vasant Kunj,110070,general knowledge
+South Delhi,Mahipalpur,110037,general knowledge
+South Delhi,Greater Kailash I,110048,general knowledge
+South Delhi,Greater Kailash II,110048,general knowledge
+South Delhi,Kailash Colony,110048,general knowledge
+South Delhi,South Extension,110049,general knowledge
+South Delhi,Defence Colony,110024,general knowledge
+South Delhi,Lajpat Nagar,110024,general knowledge
+South Delhi,Jangpura,110014,general knowledge
+South Delhi,Nizamuddin,110013,general knowledge
+South Delhi,Kalkaji,110019,general knowledge
+South Delhi,Nehru Place,110019,general knowledge
+South Delhi,Chittaranjan Park,110019,general knowledge
+South Delhi,Alaknanda,110019,general knowledge
+South Delhi,East of Kailash,110065,general knowledge
+South Delhi,New Friends Colony,110025,general knowledge
+South Delhi,Jasola,110025,general knowledge
+South Delhi,Okhla Industrial Area,110020,general knowledge
+South Delhi,Sarita Vihar,110076,general knowledge
+South Delhi,Badarpur,110044,general knowledge
+Old Delhi,Chandni Chowk,110006,general knowledge
+Old Delhi,Jama Masjid,110006,general knowledge
+Old Delhi,Chawri Bazar,110006,general knowledge
+Old Delhi,Ballimaran,110006,general knowledge
+Old Delhi,Lal Kuan,110006,general knowledge
+Old Delhi,Khari Baoli,110006,general knowledge
+Old Delhi,Fatehpuri,110006,general knowledge
+Old Delhi,Nai Sarak,110006,general knowledge
+Old Delhi,Kinari Bazar,110006,general knowledge
+Old Delhi,Dariba Kalan,110006,general knowledge
+Old Delhi,Katra Neel,110006,general knowledge
+Old Delhi,Kucha Pati Ram,,general knowledge
+Old Delhi,Turkman Gate,,general knowledge
+Old Delhi,Daryaganj,110002,general knowledge
+Old Delhi,Delhi Gate,110002,general knowledge
+Old Delhi,Sadar Bazar,110006,general knowledge
+Old Delhi,Kashmere Gate,110006,general knowledge
+Old Delhi,Mori Gate,,general knowledge
+Old Delhi,Tis Hazari,110054,general knowledge
+Old Delhi,Civil Lines,110054,general knowledge
+Old Delhi,Kamla Nagar,110007,general knowledge
+Old Delhi,Shakti Nagar,110007,general knowledge
+New Delhi,Connaught Place,110001,general knowledge
+New Delhi,Janpath,110001,general knowledge
+New Delhi,Barakhamba Road,110001,general knowledge
+New Delhi,Gole Market,110001,general knowledge
+New Delhi,Mandir Marg,110001,general knowledge
+New Delhi,Chanakyapuri,110021,general knowledge
+New Delhi,Moti Bagh,110021,general knowledge
+New Delhi,Lodhi Colony,110003,general knowledge
+New Delhi,Lodhi Road,110003,general knowledge
+New Delhi,Khan Market,110003,general knowledge
+New Delhi,Golf Links,110003,general knowledge
+New Delhi,Jor Bagh,110003,general knowledge
+New Delhi,Sunder Nagar,110003,general knowledge
+New Delhi,Sarojini Nagar,110023,general knowledge
+New Delhi,Kidwai Nagar,110023,general knowledge
+New Delhi,Netaji Nagar,110023,general knowledge
+New Delhi,R K Puram,110022,general knowledge
+New Delhi,Vasant Vihar,110057,general knowledge
+New Delhi,Munirka,110067,general knowledge
+New Delhi,Delhi Cantonment,110010,general knowledge

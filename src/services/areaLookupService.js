@@ -1,10 +1,11 @@
 import axios from "axios";
-import { closestByPincode, closestHubs, resolveArea } from "../utils/serviceability.js";
+import { closestHubs, closestServed, resolveArea, servedInCity } from "../utils/helpServiceAreas.js";
 
 /**
- * Help panel location step: resolveArea (dataset only), plus — for an area
- * we don't serve — the closest areas we do, for the "Closest areas we
- * cover" chips. Places with no pincode in the text ("Jaipur") are geocoded
+ * Help panel location step: resolveArea (ncrServiceAreas.csv), plus — for
+ * an area we don't serve — the closest areas we do, for the "Closest areas
+ * we cover" chips: served localities when it's in a city we're in, else the
+ * nearest cities. Places we can't place from the text ("Jaipur") are geocoded
  * once with OpenStreetMap Nominatim (the same free geocoder the site's
  * location picker uses), cached in memory; a failed lookup just means no
  * chips.
@@ -31,13 +32,21 @@ async function geocode(text) {
   return point;
 }
 
+// Within this of a city centre, a geocoded place counts as in that city.
+const IN_CITY_KM = 25;
+
 export async function lookupArea(text) {
   const area = resolveArea(text);
   if (area.serviceable || area.ambiguous.length) return { ...area, closest: [] };
-  let closest = area.pincode ? closestByPincode(area.pincode) : [];
+  let closest = closestServed(area);
   if (!closest.length) {
     const point = await geocode(area.input);
-    if (point) closest = closestHubs(point.lat, point.lon);
+    if (point) {
+      const hubs = closestHubs(point.lat, point.lon);
+      closest = hubs[0].km <= IN_CITY_KM
+        ? servedInCity(hubs[0].city)
+        : hubs.map(({ label, city }) => ({ label, city }));
+    }
   }
   return { ...area, closest };
 }

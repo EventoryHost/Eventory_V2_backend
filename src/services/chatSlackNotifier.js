@@ -115,7 +115,7 @@ export async function notifyAreaWaitlist(entry) {
   const plan = [entry.occasion, entry.guests && `${entry.guests} guests`, entry.budget].filter(Boolean).join(" · ");
   await post(
     `📍 *Out-of-area lead:* ${entry.area}${entry.pincode ? ` (${entry.pincode})` : ""}` +
-      `${entry.areaSource === "location_tag" ? " — from their location tag" : ""}\n` +
+      `${{ location_tag: " — from their location tag", current_location: " — their current location" }[entry.areaSource] ?? ""}\n` +
       `*Phone:* ${entry.phone}${entry.customerName ? ` · ${entry.customerName}` : ""}\n` +
       (plan ? `*Planning:* ${plan}\n` : "") +
       (entry.requestText ? `> ${entry.requestText}\n` : "") +

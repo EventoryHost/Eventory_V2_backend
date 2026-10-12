@@ -14,3 +14,22 @@ export const bookingsQuerySchema = z.object({
   sort: z.enum(["newest", "eventDate_asc", "eventDate_desc", "amount_desc"]).default("newest"),
   ...paginationFields,
 });
+
+// Same shape the cart carries (CartItem.js's CustomizeRequestSchema) — the
+// follow-up round from Review Proposal is built by the same PDP workshop.
+// status is deliberately absent: a new request is always Pending.
+const customizeRequestSchema = z.object({
+  setupId: z.string().trim().min(1).max(200),
+  itemId: z.string().trim().min(1).max(200),
+  requestType: z.enum(["change", "add", "remove"]),
+  label: z.string().trim().min(1).max(200),
+  quantity: z.number().int().min(0).max(100000).nullish(),
+  type: z.string().trim().max(200).nullish(),
+  colours: z.array(z.string().trim().min(1).max(100)).max(50).default([]),
+  volume: z.string().trim().max(100).nullish(),
+});
+
+export const addCustomizeRequestsSchema = z.object({
+  requests: z.array(customizeRequestSchema).min(1).max(50),
+});
+
