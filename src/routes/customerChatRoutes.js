@@ -1,5 +1,25 @@
 import express from "express";
-import { initChat, sendMessage, getMessages, getChatStatus, resetChat } from "../controllers/customerChatController.js";
+import {
+  initChat,
+  sendMessage,
+  getMessages,
+  getChatStatus,
+  resetChat,
+  createHelpRequest,
+  getHelpRequest,
+  postHelpRequestMessage,
+  requestHelpCallBack,
+  checkHelpArea,
+  joinAreaWaitlist,
+} from "../controllers/customerChatController.js";
+import { validateRequest } from "../middlewares/validateRequest.js";
+import {
+  createHelpRequestSchema,
+  helpRequestCallBackSchema,
+  helpRequestMessageSchema,
+  areaCheckQuerySchema,
+  areaWaitlistSchema,
+} from "../validators/customerHelpValidators.js";
 
 const router = express.Router();
 
@@ -110,5 +130,140 @@ router.get("/status", getChatStatus);
  *       404: { description: No active chat found to reset }
  */
 router.post("/reset", resetChat);
+
+/**
+ * @swagger
+ * /api/customer/chat/help-request:
+ *   post:
+ *     summary: Send the help panel brief to the Event Manager team (stored as a ChatEnquiry lead + Slack post)
+ *     tags: [Customer Chat]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [occasion, guests, budget, vendorType, replyMode]
+ *             properties:
+ *               anon_id: { type: string }
+ *               occasion: { type: string }
+ *               guests: { type: string }
+ *               budget: { type: string }
+ *               vendorType: { type: string }
+ *               area: { type: string }
+ *               date: { type: string }
+ *               replyMode: { type: string, enum: [reply-here, call-me] }
+ *               callTime: { type: string }
+ *               phone: { type: string, description: "Required when replyMode is call-me" }
+ *               pageUrl: { type: string }
+ *               transcript: { type: array, items: { type: string } }
+ *     responses:
+ *       201: { description: "{ enquiryId, anonId }" }
+ *       400: { description: Validation failed }
+ */
+router.post("/help-request", validateRequest(createHelpRequestSchema), createHelpRequest);
+
+/**
+ * @swagger
+ * /api/customer/chat/help-request/{enquiryId}:
+ *   get:
+ *     summary: Help panel thread after the brief — Event Manager replies, call back, late flag (polled)
+ *     tags: [Customer Chat]
+ *     parameters:
+ *       - in: path
+ *         name: enquiryId
+ *         required: true
+ *         schema: { type: string }
+ *       - in: query
+ *         name: anon_id
+ *         schema: { type: string, description: "The anon id the request was sent with; omit if logged in" }
+ *     responses:
+ *       200: { description: "{ request: { enquiryId, createdAt, replyMode, offHours, late, replied, callBack, messages } }" }
+ *       404: { description: Not this caller's request }
+ */
+router.get("/help-request/:enquiryId", getHelpRequest);
+
+/**
+ * @swagger
+ * /api/customer/chat/help-request/{enquiryId}/messages:
+ *   post:
+ *     summary: Customer follow-up message in the help thread (posted to Slack)
+ *     tags: [Customer Chat]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [text]
+ *             properties:
+ *               anon_id: { type: string }
+ *               text: { type: string }
+ *     responses:
+ *       201: { description: "{ message }" }
+ */
+router.post("/help-request/:enquiryId/messages", validateRequest(helpRequestMessageSchema), postHelpRequestMessage);
+
+/**
+ * @swagger
+ * /api/customer/chat/help-request/{enquiryId}/call-back:
+ *   post:
+ *     summary: Request a call back on a help request (within 30 min, or 9:30 AM IST after hours)
+ *     tags: [Customer Chat]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [phone]
+ *             properties:
+ *               anon_id: { type: string }
+ *               phone: { type: string }
+ *     responses:
+ *       201: { description: "{ request } with callBack set" }
+ */
+router.post("/help-request/:enquiryId/call-back", validateRequest(helpRequestCallBackSchema), requestHelpCallBack);
+
+/**
+ * @swagger
+ * /api/customer/chat/area-check:
+ *   get:
+ *     summary: Help panel location step — is this free-text area / pincode served? Closest served areas if not; city choices if ambiguous
+ *     tags: [Customer Chat]
+ *     parameters:
+ *       - in: query
+ *         name: area
+ *         required: true
+ *         schema: { type: string, example: "Sector 15" }
+ *     responses:
+ *       200: { description: "{ area: { label, serviceable, city, pincode, matchedBy, ambiguous[], closest[] } }" }
+ */
+router.get("/area-check", validateRequest(areaCheckQuerySchema, "query"), checkHelpArea);
+
+/**
+ * @swagger
+ * /api/customer/chat/area-waitlist:
+ *   post:
+ *     summary: Out-of-area "Notify me" lead — one WhatsApp message when Eventory starts serving the area
+ *     tags: [Customer Chat]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [area, phone, consent]
+ *             properties:
+ *               anon_id: { type: string }
+ *               area: { type: string }
+ *               areaSource: { type: string, enum: [typed, location_tag] }
+ *               phone: { type: string }
+ *               consent: { type: boolean, enum: [true] }
+ *               occasion: { type: string }
+ *               guests: { type: string }
+ *               budget: { type: string }
+ *               requestText: { type: string }
+ *               pageUrl: { type: string }
+ *     responses:
+ *       201: { description: Saved }
+ */
+router.post("/area-waitlist", validateRequest(areaWaitlistSchema), joinAreaWaitlist);
 
 export default router;
