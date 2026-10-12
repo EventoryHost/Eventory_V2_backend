@@ -11,6 +11,9 @@ import {
   requestHelpCallBack,
   checkHelpArea,
   joinAreaWaitlist,
+  listHelpConversations,
+  getHelpConversation,
+  saveHelpConversation,
 } from "../controllers/customerChatController.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
 import {
@@ -19,6 +22,7 @@ import {
   helpRequestMessageSchema,
   areaCheckQuerySchema,
   areaWaitlistSchema,
+  helpConversationSaveSchema,
 } from "../validators/customerHelpValidators.js";
 
 const router = express.Router();
@@ -253,7 +257,7 @@ router.get("/area-check", validateRequest(areaCheckQuerySchema, "query"), checkH
  *             properties:
  *               anon_id: { type: string }
  *               area: { type: string }
- *               areaSource: { type: string, enum: [typed, location_tag] }
+ *               areaSource: { type: string, enum: [typed, location_tag, current_location] }
  *               phone: { type: string }
  *               consent: { type: boolean, enum: [true] }
  *               occasion: { type: string }
@@ -265,5 +269,51 @@ router.get("/area-check", validateRequest(areaCheckQuerySchema, "query"), checkH
  *       201: { description: Saved }
  */
 router.post("/area-waitlist", validateRequest(areaWaitlistSchema), joinAreaWaitlist);
+
+/**
+ * @swagger
+ * /api/customer/chat/help-conversations:
+ *   get:
+ *     summary: Help panel "Your chats" — the customer's (or this browser's) saved conversations, newest first
+ *     tags: [Customer Chat]
+ *     parameters:
+ *       - { in: query, name: anon_id, schema: { type: string } }
+ *     responses:
+ *       200: { description: "{ conversations: [{ conversationId, title, preview, ticket, enquiryId, lastMessageAt }] }" }
+ */
+router.get("/help-conversations", listHelpConversations);
+
+/**
+ * @swagger
+ * /api/customer/chat/help-conversations/{conversationId}:
+ *   get:
+ *     summary: One saved help panel conversation (its thread items), to resume it
+ *     tags: [Customer Chat]
+ *     parameters:
+ *       - { in: path, name: conversationId, required: true, schema: { type: string } }
+ *       - { in: query, name: anon_id, schema: { type: string } }
+ *     responses:
+ *       200: { description: "{ conversation }" }
+ *       404: { description: Not found or not yours }
+ *   put:
+ *     summary: Save the help panel thread (created on first save)
+ *     tags: [Customer Chat]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [items]
+ *             properties:
+ *               anon_id: { type: string }
+ *               items: { type: array, items: { type: object } }
+ *               state: { type: object }
+ *               enquiryId: { type: string }
+ *               ticket: { type: string }
+ *     responses:
+ *       200: { description: "{ anonId }" }
+ */
+router.get("/help-conversations/:conversationId", getHelpConversation);
+router.put("/help-conversations/:conversationId", validateRequest(helpConversationSaveSchema), saveHelpConversation);
 
 export default router;

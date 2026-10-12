@@ -13,7 +13,7 @@ const AreaWaitlistSchema = new mongoose.Schema(
     areaKey: { type: String, required: true }, // lower-cased, for de-duping
     pincode: { type: String, default: null },
     // Where it came from: typed in the chat, or the site's location tag.
-    areaSource: { type: String, enum: ["typed", "location_tag"], default: "typed" },
+    areaSource: { type: String, enum: ["typed", "location_tag", "current_location"], default: "typed" },
     phone: { type: String, required: true },
     // WhatsApp consent (the card's checkbox; account holders consent by account).
     consent: { type: Boolean, required: true },

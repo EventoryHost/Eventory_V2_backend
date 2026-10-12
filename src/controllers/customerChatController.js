@@ -7,13 +7,19 @@ import ChatEnquiry from "../models/ChatEnquiry.js";
 import { handleBotTurn } from "../services/chatBotEngine.js";
 import { notifyHelpRequest, notifyHelpCallBack, notifyHelpMessage, notifyAreaWaitlist } from "../services/chatSlackNotifier.js";
 import AreaWaitlist from "../models/AreaWaitlist.js";
+import HelpConversation from "../models/HelpConversation.js";
 import { lookupArea } from "../services/areaLookupService.js";
-import { resolveArea } from "../utils/serviceability.js";
+import { resolveArea } from "../utils/helpServiceAreas.js";
 import {
   callBackDeadline,
   checkLate,
+  claimGuestHelpData,
+  customerSnapshot,
   isOffHours,
+  loadTicketMessages,
   nextTicket,
+  recordTicketMessage,
+  recordTranscript,
   serializeHelpRequest,
 } from "../services/helpRequestService.js";
 import { room } from "../config/socket.js";
@@ -320,10 +326,37 @@ export const createHelpRequest = async (req, res) => {
   try {
     const identity = await resolveChatIdentity(req, req.body);
     const b = req.body;
+    const owner = toEnquiryFilter(identity);
+
+    // A ticket belongs to the chat it was raised in, one per chat: sending
+    // the brief again (a double tap, a retry) returns the same ticket.
+    let conversationId = null;
+    if (b.conversationId) {
+      const chat = await HelpConversation.findOne({ conversationId: b.conversationId }, { customerId: 1, anonId: 1 }).lean();
+      const mine =
+        !chat ||
+        (identity.customerId ? String(chat.customerId) === String(identity.customerId) : chat.anonId === identity.anonId && !chat.customerId);
+      if (mine) {
+        conversationId = b.conversationId;
+        const existing = await ChatEnquiry.findOne({ source: "help_panel", conversationId, ...owner });
+        if (existing) {
+          return res.status(200).json({
+            success: true,
+            enquiryId: existing.enquiryId,
+            anonId: identity.anonId ?? null,
+            request: serializeHelpRequest(existing, { late: false, messages: await loadTicketMessages(existing) }),
+          });
+        }
+      }
+    }
+
     const ticket = await nextTicket();
     const enquiry = await ChatEnquiry.create({
       ticket,
-      ...toEnquiryFilter(identity),
+      ...owner,
+      conversationId,
+      customer: customerSnapshot(identity.customer, b.phone || null),
+      ticketStatus: "open",
       source: "help_panel",
       eventType: b.occasion,
       guestCount: b.guests,
@@ -357,8 +390,13 @@ export const createHelpRequest = async (req, res) => {
           : null,
     });
 
-    // Fire-and-forget, same as the chatbot's notifications: a Slack
-    // failure must never fail the customer's request.
+    // The chat now carries its ticket, even before the panel's next save.
+    if (conversationId) {
+      await HelpConversation.updateOne({ conversationId }, { $set: { enquiryId: enquiry.enquiryId, ticket } });
+    }
+
+    // Saved first; Slack is only a notification. Fire-and-forget, same as
+    // the chatbot's: a Slack failure must never fail the customer's request.
     notifyHelpRequest(enquiry)
       .then(() => ChatEnquiry.updateOne({ _id: enquiry._id }, { $set: { slackNotifiedAt: new Date() } }))
       .catch((err) => console.error("[createHelpRequest] Slack notify failed:", err.message));
@@ -367,7 +405,7 @@ export const createHelpRequest = async (req, res) => {
       success: true,
       enquiryId: enquiry.enquiryId,
       anonId: identity.anonId ?? null,
-      request: serializeHelpRequest(enquiry, { late: false }),
+      request: serializeHelpRequest(enquiry, { late: false, messages: [] }),
     });
   } catch (error) {
     console.error("createHelpRequest error:", error);
@@ -384,6 +422,8 @@ async function findOwnHelpRequest(req, input) {
   const customer = await resolveLoggedInCustomer(req);
   const anonId = (input.anon_id || "").toString().trim();
   if (!customer && !anonId) return null;
+  // Raised as a guest, then signed in: the ticket moves to the account.
+  if (customer && anonId) await claimGuestHelpData(anonId, customer);
   return ChatEnquiry.findOne({
     enquiryId: req.params.enquiryId,
     source: "help_panel",
@@ -402,7 +442,8 @@ export const getHelpRequest = async (req, res) => {
     const enquiry = await findOwnHelpRequest(req, req.query || {});
     if (!enquiry) return res.status(404).json({ success: false, message: "Request not found" });
     const late = await checkLate(enquiry);
-    return res.json({ success: true, request: serializeHelpRequest(enquiry, { late }) });
+    const messages = await loadTicketMessages(enquiry);
+    return res.json({ success: true, request: serializeHelpRequest(enquiry, { late, messages }) });
   } catch (error) {
     console.error("getHelpRequest error:", error);
     return res.status(500).json({ success: false, message: "Could not load your request" });
@@ -417,12 +458,22 @@ export const postHelpRequestMessage = async (req, res) => {
   try {
     const enquiry = await findOwnHelpRequest(req, req.body);
     if (!enquiry) return res.status(404).json({ success: false, message: "Request not found" });
-    const message = { messageId: generateISTId("HMSG"), from: "customer", text: req.body.text, sentAt: new Date() };
-    await ChatEnquiry.updateOne({ _id: enquiry._id }, { $push: { helpMessages: message } });
-    notifyHelpMessage(enquiry, message.text).catch((err) =>
+    // Stored in the ticket's chat before Slack hears about it.
+    const saved = await recordTicketMessage(enquiry, {
+      role: "customer",
+      text: req.body.text,
+      clientId: req.body.clientId,
+      senderId: enquiry.customer?.code ?? enquiry.anonId ?? null,
+      senderName: enquiry.customer?.name ?? enquiry.customerName ?? null,
+      via: "help_request",
+    });
+    notifyHelpMessage(enquiry, saved.text).catch((err) =>
       console.error("[postHelpRequestMessage] Slack notify failed:", err.message)
     );
-    return res.status(201).json({ success: true, message });
+    return res.status(201).json({
+      success: true,
+      message: { messageId: saved.messageId, from: "customer", text: saved.text, sentAt: saved.sentAt },
+    });
   } catch (error) {
     console.error("postHelpRequestMessage error:", error);
     return res.status(500).json({ success: false, message: "Could not send your message" });
@@ -452,7 +503,8 @@ export const requestHelpCallBack = async (req, res) => {
         console.error("[requestHelpCallBack] Slack notify failed:", err.message)
       );
     }
-    return res.status(201).json({ success: true, request: serializeHelpRequest(enquiry, { late: false }) });
+    const messages = await loadTicketMessages(enquiry);
+    return res.status(201).json({ success: true, request: serializeHelpRequest(enquiry, { late: false, messages }) });
   } catch (error) {
     console.error("requestHelpCallBack error:", error);
     return res.status(500).json({ success: false, message: "Could not request a call back" });
@@ -517,5 +569,126 @@ export const joinAreaWaitlist = async (req, res) => {
   } catch (error) {
     console.error("joinAreaWaitlist error:", error);
     return res.status(500).json({ success: false, message: "Could not save that" });
+  }
+};
+
+// ---- Help panel conversations ("Your chats") ----
+
+const CONVERSATION_ID = /^[A-Za-z0-9-]{8,64}$/;
+// Generous for a rule-based thread with package cards; stops abuse.
+const MAX_CONVERSATION_BYTES = 1_000_000;
+
+const textOf = (item) => (typeof item?.text === "string" ? item.text : null);
+const isMessage = (item) => ["me", "assistant", "event-manager"].includes(item?.kind);
+
+function conversationSummary(c) {
+  return {
+    conversationId: c.conversationId,
+    title: c.title,
+    preview: c.preview,
+    ticket: c.ticket,
+    enquiryId: c.enquiryId,
+    lastMessageAt: c.lastMessageAt,
+  };
+}
+
+/** Whose conversations these are; signing in claims this browser's anonymous ones. */
+async function conversationOwner(req, input) {
+  const customer = await resolveLoggedInCustomer(req);
+  const anonId = (input.anon_id || "").toString().trim();
+  if (customer) {
+    if (anonId) await claimGuestHelpData(anonId, customer);
+    return { customerId: customer._id };
+  }
+  return anonId ? { anonId, customerId: null } : null;
+}
+
+/**
+ * @desc The customer's help panel chats, newest first.
+ * @route GET /api/customer/chat/help-conversations?anon_id=
+ */
+export const listHelpConversations = async (req, res) => {
+  try {
+    const owner = await conversationOwner(req, req.query || {});
+    if (!owner) return res.json({ success: true, conversations: [] });
+    const rows = await HelpConversation.find(owner, { items: 0, state: 0 })
+      .sort({ lastMessageAt: -1 })
+      .limit(30)
+      .lean();
+    return res.json({ success: true, conversations: rows.map(conversationSummary) });
+  } catch (error) {
+    console.error("listHelpConversations error:", error);
+    return res.status(500).json({ success: false, message: "Could not load your chats" });
+  }
+};
+
+/**
+ * @desc One help panel chat, to resume it.
+ * @route GET /api/customer/chat/help-conversations/:conversationId?anon_id=
+ */
+export const getHelpConversation = async (req, res) => {
+  try {
+    const owner = await conversationOwner(req, req.query || {});
+    const c = owner && (await HelpConversation.findOne({ conversationId: req.params.conversationId, ...owner }).lean());
+    if (!c) return res.status(404).json({ success: false, message: "Chat not found" });
+    return res.json({ success: true, conversation: { ...conversationSummary(c), items: c.items, state: c.state } });
+  } catch (error) {
+    console.error("getHelpConversation error:", error);
+    return res.status(500).json({ success: false, message: "Could not load that chat" });
+  }
+};
+
+/**
+ * @desc Saves the panel's thread (created on first save). Someone else's
+ * conversation id is a 404, never an overwrite.
+ * @route PUT /api/customer/chat/help-conversations/:conversationId
+ */
+export const saveHelpConversation = async (req, res) => {
+  try {
+    const { conversationId } = req.params;
+    if (!CONVERSATION_ID.test(conversationId)) return res.status(400).json({ success: false, message: "Bad chat id" });
+    const b = req.body;
+    if (JSON.stringify(b.items).length > MAX_CONVERSATION_BYTES) {
+      return res.status(413).json({ success: false, message: "Chat too long to save" });
+    }
+    const identity = await resolveChatIdentity(req, b);
+    const owner = identity.customerId ? { customerId: identity.customerId } : { anonId: identity.anonId, customerId: null };
+
+    const existing = await HelpConversation.findOne({ conversationId }, { items: 0, state: 0 }).lean();
+    const mine =
+      existing &&
+      (owner.customerId ? String(existing.customerId) === String(owner.customerId) : existing.anonId === owner.anonId && !existing.customerId);
+    if (existing && !mine) return res.status(404).json({ success: false, message: "Chat not found" });
+
+    const messages = b.items.filter(isMessage);
+    const title = textOf(messages.find((i) => i.kind === "me" && !i.photoUrl)) ?? textOf(messages[0]);
+    const preview = textOf(messages[messages.length - 1]);
+    await HelpConversation.updateOne(
+      { conversationId },
+      {
+        $set: {
+          ...owner,
+          items: b.items,
+          state: b.state ?? null,
+          title: title?.slice(0, 200) ?? null,
+          preview: preview?.slice(0, 200) ?? null,
+          ...(b.enquiryId ? { enquiryId: b.enquiryId } : {}),
+          ...(b.ticket ? { ticket: b.ticket } : {}),
+          ...(existing?.preview !== preview || !existing ? { lastMessageAt: new Date() } : {}),
+        },
+        $setOnInsert: { conversationId },
+      },
+      { upsert: true }
+    );
+    // Every message line, one document each, for the Event Manager side.
+    const saved = await HelpConversation.findOne(
+      { conversationId },
+      { conversationId: 1, enquiryId: 1, ticket: 1, customerId: 1, anonId: 1 }
+    ).lean();
+    await recordTranscript(saved, b.items);
+    return res.json({ success: true, anonId: identity.anonId ?? null });
+  } catch (error) {
+    console.error("saveHelpConversation error:", error);
+    return res.status(500).json({ success: false, message: "Could not save this chat" });
   }
 };

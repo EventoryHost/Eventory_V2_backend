@@ -25,6 +25,8 @@ export const createHelpRequestSchema = z
     pageUrl: optionalText(500),
     /** Last few chat lines, so the Event Manager doesn't ask again. */
     transcript: z.array(z.string().trim().max(500)).max(20).optional(),
+    /** The help panel chat it's raised in; the ticket stays in it. */
+    conversationId: z.string().regex(/^[A-Za-z0-9-]{8,64}$/).optional(),
   })
   .superRefine((data, ctx) => {
     if (data.replyMode === "call-me" && !(data.phone && data.phone.replace(/\D/g, "").length >= 10)) {
@@ -41,7 +43,7 @@ export const areaCheckQuerySchema = z.object({
 export const areaWaitlistSchema = z.object({
   anon_id: optionalText(64),
   area: z.string().trim().min(1).max(200),
-  areaSource: z.enum(["typed", "location_tag"]).optional(),
+  areaSource: z.enum(["typed", "location_tag", "current_location"]).optional(),
   phone: z
     .string()
     .trim()
@@ -58,6 +60,8 @@ export const areaWaitlistSchema = z.object({
 export const helpRequestMessageSchema = z.object({
   anon_id: optionalText(64),
   text: z.string().trim().min(1).max(1000),
+  /** The panel's id for this message, so it's stored once. */
+  clientId: z.string().regex(/^[A-Za-z0-9-]{8,64}$/).optional(),
 });
 
 /** "Get a call back" from the status card. */
@@ -71,6 +75,17 @@ export const helpRequestCallBackSchema = z.object({
 
 /** Event Manager reply, posted from the team's side. */
 export const helpRequestReplySchema = z.object({
+  /** The Event Manager's id on the team's side, if it has one. */
+  senderId: optionalText(64),
   senderName: z.string().trim().min(1).max(60),
   text: z.string().trim().min(1).max(2000),
+});
+
+/** Help panel conversation save (the "Your chats" tab). */
+export const helpConversationSaveSchema = z.object({
+  anon_id: optionalText(64),
+  items: z.array(z.record(z.string(), z.unknown())).max(400),
+  state: z.record(z.string(), z.unknown()).nullable().optional(),
+  enquiryId: optionalText(64),
+  ticket: optionalText(20),
 });
