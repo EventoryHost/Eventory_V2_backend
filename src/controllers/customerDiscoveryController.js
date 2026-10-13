@@ -1203,13 +1203,19 @@ export const getServiceableCities = async (req, res) => {
 
 export const getVendorFilters = async (req, res) => {
   try {
+    // Optional — a category tab (e.g. the vendor listing's Decorator tab)
+    // asks for this to get an Event Type list scoped to just ITS OWN vendor
+    // type, same as getPackageFilters' own vendorType param, so a tab never
+    // offers an event type that only exists on a different vendor type's
+    // Live packages. Omitted entirely by the page's initial "All" load.
+    const { vendorType: scopeVendorType } = req.query;
     const [eventCategories, [facets]] = await Promise.all([
       // Sourced from LIVE PACKAGES, not Vendor.eventCategories (what a
       // vendor self-declared at onboarding) — a vendor can claim a category
       // with zero Live packages actually tagged that way, which used to
       // make this filter offer an option that always landed on "no
       // packages found". See liveEventCategoriesCache.js's own comment.
-      getLiveEventCategories(),
+      getLiveEventCategories(scopeVendorType || undefined),
       Vendor.aggregate([
         { $match: { isDeactivated: { $ne: true } } },
         {
@@ -1257,15 +1263,48 @@ export const browseVendors = async (req, res) => {
     const query = { isDeactivated: { $ne: true } };
 
     if (vendorType) query.vendorType = { $regex: vendorTypePattern(vendorType), $options: "i" };
-    if (eventCategory) {
-      query.eventCategories = { $elemMatch: { $regex: `^${escapeRegex(eventCategory)}$`, $options: "i" } };
-    }
 
     // `city` and `q` are each a set of alternatives, so neither can own the
     // top-level $or — with both applied, the second would overwrite the
     // first and silently widen the results. Collected into $and instead, so
     // they intersect the way the two separate controls imply.
     const and = [];
+
+    // Sourced from LIVE PACKAGES, not Vendor.eventCategories (what a vendor
+    // self-declared at onboarding) — same fix as getVendorFilters/
+    // liveEventCategoriesCache.js, and for the same reason: a vendor can
+    // claim "Baby Shower Decoration" with zero Live packages actually
+    // tagged that way, which would otherwise surface (or hide) vendors that
+    // don't actually match what the filter option promises. Comma-separated
+    // = OR across several categories (the sidebar's multi-select), same
+    // convention as browsePackages' own eventCategory handling.
+    if (eventCategory) {
+      const categories = String(eventCategory)
+        .split(",")
+        .map((c) => c.trim())
+        .filter(Boolean);
+      if (categories.length) {
+        const pattern = categories.map((c) => `^${escapeRegex(c)}$`).join("|");
+        const matchingPackages = await Package.find({
+          packageStatus: "Live",
+          "step1_eventAndCrew.eventCategories": { $elemMatch: { $regex: pattern, $options: "i" } },
+        })
+          .select("vendorId")
+          .lean();
+        const rawVendorIds = [...new Set(matchingPackages.map((p) => String(p.vendorId)).filter(Boolean))];
+        // Package.vendorId is inconsistently stored (real Vendor._id on
+        // newer documents, the business-facing "VEN..." id string on seeded
+        // ones) — same dual-match pattern getPackageFilters' own vendorId
+        // resolution already uses, see that function's comment.
+        const castableIds = rawVendorIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
+        const vendorIdMatches = [];
+        if (castableIds.length) vendorIdMatches.push({ _id: { $in: castableIds } });
+        if (rawVendorIds.length) vendorIdMatches.push({ id: { $in: rawVendorIds } });
+        // No matching package at all must exclude every vendor, not silently
+        // widen to "no eventCategory filter applied".
+        and.push(vendorIdMatches.length ? { $or: vendorIdMatches } : { _id: "__no_such_vendor__" });
+      }
+    }
 
     if (city) {
       and.push({
