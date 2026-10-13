@@ -13,6 +13,7 @@ import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { buildGroupFilter } from "../utils/packageGroupFilter.js";
 import { getPackageBasePrice, getEffectivePackagePrice } from "../utils/packagePrice.js";
 import { computeLineConvenienceFee } from "../services/convenienceFeeService.js";
+import { getLiveEventCategories } from "../utils/liveEventCategoriesCache.js";
 
 /**
  * Public (no-auth), read-only discovery endpoints for the customer side:
@@ -151,10 +152,26 @@ export const browsePackages = async (req, res) => {
       query.vendorId = vendor ? { $in: [vendor._id, vendor.id].filter(Boolean) } : "__no_such_vendor__";
     }
 
+    // Comma-separated = OR across several categories (the sidebar's
+    // multi-select checkboxes) — a single value still works exactly as
+    // before. Real bug fixed 2026-10-14: the frontend used to apply a
+    // multi-select event-type filter entirely client-side, against
+    // whichever single page of "newest"/default results happened to already
+    // be loaded — a real, Live package tagged with the picked category
+    // could easily not be on that page, showing "no packages found" for a
+    // category that was never actually empty. Matching server-side means
+    // every selectable category (itself only ever offered because at least
+    // one Live package has it — see liveEventCategoriesCache.js) reliably
+    // finds its real packages regardless of pagination/sort.
     if (eventCategory) {
-      query["step1_eventAndCrew.eventCategories"] = {
-        $elemMatch: { $regex: `^${escapeRegex(eventCategory)}$`, $options: "i" },
-      };
+      const categories = String(eventCategory)
+        .split(",")
+        .map((c) => c.trim())
+        .filter(Boolean);
+      if (categories.length) {
+        const pattern = categories.map((c) => `^${escapeRegex(c)}$`).join("|");
+        query["step1_eventAndCrew.eventCategories"] = { $elemMatch: { $regex: pattern, $options: "i" } };
+      }
     }
 
     if (guests) {
@@ -1083,37 +1100,41 @@ export const getFeaturedReviews = async (req, res) => {
  */
 export const getPackageFilters = async (req, res) => {
   try {
-    const [facets] = await Package.aggregate([
-      { $match: { packageStatus: "Live" } },
-      {
-        $facet: {
-          eventCategories: [
-            { $unwind: "$step1_eventAndCrew.eventCategories" },
-            { $group: { _id: "$step1_eventAndCrew.eventCategories" } },
-            { $sort: { _id: 1 } },
-          ],
-          vendorTypes: [{ $group: { _id: "$vendorType" } }, { $sort: { _id: 1 } }],
-          priceRange: [
-            {
-              $group: {
-                _id: null,
-                min: { $min: "$step3_policiesAndCharges.packagePricing.price" },
-                max: { $max: "$step3_policiesAndCharges.packagePricing.price" },
+    // Optional — a category tab (e.g. the package listing's Decorator tab)
+    // asks for this to get an Event Type list scoped to just ITS OWN vendor
+    // type, so it never offers an option (like "Workshop", Photographer-
+    // only) that can only ever resolve to "no packages found" for that tab.
+    // Omitted entirely by the page's initial "All" load.
+    const { vendorType: scopeVendorType } = req.query;
+    const [eventCategories, [facets]] = await Promise.all([
+      getLiveEventCategories(scopeVendorType || undefined),
+      Package.aggregate([
+        { $match: { packageStatus: "Live" } },
+        {
+          $facet: {
+            vendorTypes: [{ $group: { _id: "$vendorType" } }, { $sort: { _id: 1 } }],
+            priceRange: [
+              {
+                $group: {
+                  _id: null,
+                  min: { $min: "$step3_policiesAndCharges.packagePricing.price" },
+                  max: { $max: "$step3_policiesAndCharges.packagePricing.price" },
+                },
               },
-            },
-          ],
-          guestRange: [
-            {
-              $group: {
-                _id: null,
-                minGuests: { $min: "$step1_eventAndCrew.capacity.minGuests" },
-                maxGuests: { $max: "$step1_eventAndCrew.capacity.maxGuests" },
+            ],
+            guestRange: [
+              {
+                $group: {
+                  _id: null,
+                  minGuests: { $min: "$step1_eventAndCrew.capacity.minGuests" },
+                  maxGuests: { $max: "$step1_eventAndCrew.capacity.maxGuests" },
+                },
               },
-            },
-          ],
-          vendorIds: [{ $group: { _id: "$vendorId" } }],
+            ],
+            vendorIds: [{ $group: { _id: "$vendorId" } }],
+          },
         },
-      },
+      ]),
     ]);
 
     // .filter(Boolean) alone isn't enough here — it drops null/undefined
@@ -1153,7 +1174,7 @@ export const getPackageFilters = async (req, res) => {
     return res.status(200).json({
       status: "SUCCESS",
       filters: {
-        eventCategories: facets.eventCategories.map((f) => f._id),
+        eventCategories,
         vendorTypes: facets.vendorTypes.map((f) => f._id),
         cities: cities.sort(),
         priceRange: facets.priceRange[0] || { min: null, max: null },
@@ -1182,30 +1203,33 @@ export const getServiceableCities = async (req, res) => {
 
 export const getVendorFilters = async (req, res) => {
   try {
-    const [facets] = await Vendor.aggregate([
-      { $match: { isDeactivated: { $ne: true } } },
-      {
-        $facet: {
-          vendorTypes: [
-            { $match: { vendorType: { $nin: [null, ""] } } },
-            { $group: { _id: "$vendorType" } },
-            { $sort: { _id: 1 } },
-          ],
-          eventCategories: [
-            { $unwind: "$eventCategories" },
-            { $group: { _id: "$eventCategories" } },
-            { $sort: { _id: 1 } },
-          ],
-          cities: [{ $match: { city: { $nin: [null, ""] } } }, { $group: { _id: "$city" } }, { $sort: { _id: 1 } }],
+    const [eventCategories, [facets]] = await Promise.all([
+      // Sourced from LIVE PACKAGES, not Vendor.eventCategories (what a
+      // vendor self-declared at onboarding) — a vendor can claim a category
+      // with zero Live packages actually tagged that way, which used to
+      // make this filter offer an option that always landed on "no
+      // packages found". See liveEventCategoriesCache.js's own comment.
+      getLiveEventCategories(),
+      Vendor.aggregate([
+        { $match: { isDeactivated: { $ne: true } } },
+        {
+          $facet: {
+            vendorTypes: [
+              { $match: { vendorType: { $nin: [null, ""] } } },
+              { $group: { _id: "$vendorType" } },
+              { $sort: { _id: 1 } },
+            ],
+            cities: [{ $match: { city: { $nin: [null, ""] } } }, { $group: { _id: "$city" } }, { $sort: { _id: 1 } }],
+          },
         },
-      },
+      ]),
     ]);
 
     return res.status(200).json({
       status: "SUCCESS",
       filters: {
         vendorTypes: facets.vendorTypes.map((f) => f._id),
-        eventCategories: facets.eventCategories.map((f) => f._id),
+        eventCategories,
         cities: facets.cities.map((f) => f._id),
         sortOptions: ["rating", "newest"],
         // "response-rate" sort is NOT offered: Vendor.js has no responseRate
