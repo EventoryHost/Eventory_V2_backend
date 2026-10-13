@@ -7,6 +7,7 @@ import { releaseSlotIfUnused } from "../utils/releaseSlot.js";
 import { getOrCreateInvoiceForBooking, renderInvoicePdf } from "../services/invoiceService.js";
 import { withPricingBreakdown } from "../utils/pricingBreakdown.js";
 import { round2 } from "../utils/money.js";
+import { raiseBookingIssue } from "../services/bookingIssueService.js";
 
 /**
  * "My Bookings" dashboard — Phase 5 Step 20. Pure read-only projection over
@@ -53,7 +54,7 @@ const STATUS_BY_TAB = {
 // nothing vendor-private is exposed by carrying them here.
 const BOOKING_LIST_FIELDS =
   "bookingId vendorId packageId eventType eventDate location packageSnapshot paymentType status " +
-  "totalAmount totalReceived createdAt changeRequests customizeRequests confirmedAt";
+  "totalAmount totalReceived createdAt changeRequests customizeRequests confirmedAt proposalResponse";
 
 function escapeRegex(str) {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -287,6 +288,11 @@ export const getBookingDetail = async (req, res) => {
       status: "SUCCESS",
       booking,
       priceBreakdown,
+      // The keyed rows behind charges[] above (originalPackagePrice,
+      // itemsAdded/addonsAdded, itemsRemoved/addonsRemoved, discountAllowed,
+      // tax) — the Review Proposal screen labels each one individually,
+      // which the flattened charges[] can't express.
+      pricingBreakdown,
       paymentTimeline,
       cancellationPolicy,
       emContact,
@@ -406,6 +412,32 @@ export const cancelBooking = async (req, res) => {
  * payments — see invoiceService.js's own comment on why re-issuing isn't
  * automatic.
  */
+/**
+ * POST /api/customer/bookings/:bookingId/issues — the customer raises an
+ * issue about their event. Same rules as the vendor's: a Confirmed or
+ * Completed booking, until its issue window closes.
+ */
+export const raiseIssue = async (req, res) => {
+  try {
+    const query = bookingLookupQuery(req.params.bookingId, req.customer._id);
+    if (!query) return res.status(400).json({ status: "FAILED", message: "Invalid bookingId" });
+
+    const booking = await Booking.findOne(query);
+    if (!booking) return res.status(404).json({ status: "FAILED", message: "Booking not found" });
+
+    const result = raiseBookingIssue(booking, req.body ?? {}, "Customer");
+    if (result.error) {
+      return res.status(result.code).json({ status: "FAILED", message: result.error });
+    }
+    await booking.save();
+
+    return res.status(201).json({ status: "SUCCESS", message: "Issue raised", issue: result.issue });
+  } catch (error) {
+    console.error("[customerBooking.raiseIssue]", error);
+    return res.status(500).json({ status: "ERROR", message: "Failed to raise issue" });
+  }
+};
+
 export const getInvoicePdf = async (req, res) => {
   try {
     const { bookingId } = req.params;
@@ -430,5 +462,110 @@ export const getInvoicePdf = async (req, res) => {
     return res.status(200).send(pdfBuffer);
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to generate invoice", error: error.message });
+  }
+};
+
+
+// Every request on the booking, both lists — the vendor's proposal is their
+// decision on all of them.
+function allRequestsOf(booking) {
+  return [...(booking.changeRequests || []), ...(booking.customizeRequests || [])];
+}
+
+/**
+ * POST /api/customer/bookings/:bookingId/proposal/accept — the customer
+ * accepts the vendor's decisions on their requests (Review Proposal →
+ * "Accept Proposal"). Only once every request has an answer: accepting a
+ * proposal the vendor is still writing would lock in nothing.
+ */
+export const acceptProposal = async (req, res) => {
+  try {
+    const query = bookingLookupQuery(req.params.bookingId, req.customer._id);
+    if (!query) return res.status(400).json({ status: "FAILED", message: "Invalid bookingId" });
+
+    const booking = await Booking.findOne(query);
+    if (!booking) return res.status(404).json({ status: "FAILED", message: "Booking not found" });
+
+    if (TERMINAL_STATUSES.includes(booking.status)) {
+      return res.status(409).json({
+        status: "FAILED",
+        message: `This booking is ${booking.status.toLowerCase()} — there is no proposal to accept`,
+      });
+    }
+
+    const requests = allRequestsOf(booking);
+    if (requests.length === 0) {
+      return res.status(409).json({ status: "FAILED", message: "This booking has no requests to review" });
+    }
+    if (requests.some((request) => request.status === "Pending")) {
+      return res.status(409).json({
+        status: "FAILED",
+        message: "The vendor hasn't answered every request yet — there is no proposal to accept",
+      });
+    }
+
+    booking.proposalResponse = { status: "Accepted", respondedAt: new Date() };
+    booking.lastCustomerActivityAt = new Date();
+    await booking.save();
+
+    // No notification system exists in this codebase yet — logged so the
+    // answer is visible server-side, same as cancelBooking.
+    console.warn(
+      `[acceptProposal] Booking ${booking.bookingId} (vendor ${booking.vendorId}): customer accepted the proposal. No vendor notification sent — no notification system exists yet.`
+    );
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: "Proposal accepted",
+      proposalResponse: booking.proposalResponse,
+    });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to accept proposal", error: error.message });
+  }
+};
+
+/**
+ * POST /api/customer/bookings/:bookingId/customize-requests — follow-up
+ * "Customize items" requests sent from Review Proposal → "Still Needs
+ * Changes". Appended as Pending onto the same customizeRequests list the
+ * checkout carried over, so the vendor decides them exactly like the first
+ * round (PUT /api/bookings/:bookingId). The earlier decisions stay as they
+ * are; only the customer's answer moves to "ChangesRequested".
+ */
+export const addCustomizeRequests = async (req, res) => {
+  try {
+    const query = bookingLookupQuery(req.params.bookingId, req.customer._id);
+    if (!query) return res.status(400).json({ status: "FAILED", message: "Invalid bookingId" });
+
+    const booking = await Booking.findOne(query);
+    if (!booking) return res.status(404).json({ status: "FAILED", message: "Booking not found" });
+
+    if (TERMINAL_STATUSES.includes(booking.status)) {
+      return res.status(409).json({
+        status: "FAILED",
+        message: `This booking is ${booking.status.toLowerCase()} — it can't take new requests`,
+      });
+    }
+
+    const now = new Date();
+    for (const request of req.body.requests) {
+      booking.customizeRequests.push({ ...request, status: "Pending", requestedAt: now });
+    }
+    booking.proposalResponse = { status: "ChangesRequested", respondedAt: now };
+    booking.lastCustomerActivityAt = now;
+    await booking.save();
+
+    console.warn(
+      `[addCustomizeRequests] Booking ${booking.bookingId} (vendor ${booking.vendorId}): customer sent ${req.body.requests.length} more request(s). No vendor notification sent — no notification system exists yet.`
+    );
+
+    return res.status(201).json({
+      status: "SUCCESS",
+      message: `${req.body.requests.length} request(s) sent to the vendor`,
+      customizeRequests: booking.customizeRequests,
+      proposalResponse: booking.proposalResponse,
+    });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to send requests", error: error.message });
   }
 };

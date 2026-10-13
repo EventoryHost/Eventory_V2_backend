@@ -8,8 +8,6 @@ import {
   requestChanges,
   getAllVendors,
   reviewSection,
-  makePayout,
-  getPayoutHistory,
   assignEmToVendor,
   getSearchSuggestions,
   reviewVendorStep,
@@ -39,7 +37,5 @@ router.put("/:id/groups/:group/request-changes", requestVendorGroupChanges);
 router.put("/:id/groups/:group/reject", rejectVendorGroup);
 router.get("/:id/verification-history", getVerificationHistory);
 router.put("/:id/assign-em", assignEmToVendor);
-router.post("/:id/payout", makePayout);
-router.get("/:id/payout-history", getPayoutHistory);
 
 export default router;

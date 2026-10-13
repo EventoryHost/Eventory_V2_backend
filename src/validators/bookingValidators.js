@@ -256,6 +256,7 @@ export const validateBookingUpdate = (body) => {
     pricing,
     paymentMilestones,
     calendarNote,
+    confirm,
   } = body;
 
   if (
@@ -263,14 +264,19 @@ export const validateBookingUpdate = (body) => {
     customizeRequests === undefined &&
     pricing === undefined &&
     paymentMilestones === undefined &&
-    calendarNote === undefined
+    calendarNote === undefined &&
+    confirm === undefined
   ) {
     return {
       valid: false,
       errors: [
-        "nothing to update — send changeRequests, customizeRequests, pricing, paymentMilestones or calendarNote",
+        "nothing to update — send changeRequests, customizeRequests, pricing, paymentMilestones, calendarNote or confirm",
       ],
     };
+  }
+
+  if (confirm !== undefined && typeof confirm !== "boolean") {
+    errors.push("confirm must be a boolean");
   }
 
   if (changeRequests !== undefined) {

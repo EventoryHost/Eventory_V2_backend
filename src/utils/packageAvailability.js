@@ -87,9 +87,8 @@ export async function computeAvailability(pkg, { date, guests, time, timeSlot })
         .select("startTime endTime")
         .lean();
       const overlapping = sameDay.filter((b) => {
-        const bs = parseTimeToMinutes(b.startTime);
-        const be = parseTimeToMinutes(b.endTime);
-        return bs != null && be != null && bs < slotRange.e && be > slotRange.s;
+        const booked = parseSlotRange(b.startTime, b.endTime);
+        return booked != null && booked.s < slotRange.e && booked.e > slotRange.s;
       }).length;
       availability.timeSlot = timeSlot;
       availability.capacityAvailable = overlapping < (pkg.bookingCapacity?.simultaneousBookings ?? 1);
@@ -130,10 +129,24 @@ export async function computeAvailability(pkg, { date, guests, time, timeSlot })
 // "HH:MM - HH:MM" (the slots endpoint's `value`) -> minutes, or null.
 export function parseSlotValue(str) {
   const m = String(str || "").match(/^\s*(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\s*$/);
-  if (!m) return null;
-  const sMin = parseTimeToMinutes(m[1]);
-  const eMin = parseTimeToMinutes(m[2]);
-  return sMin == null || eMin == null ? null : { s: sMin, e: eMin };
+  return m ? parseSlotRange(m[1], m[2]) : null;
+}
+
+const MINUTES_IN_DAY = 24 * 60;
+
+/**
+ * A slot's [s, e) in minutes from the start of its day, or null when either
+ * end is unparseable. An end at or before the start runs past midnight —
+ * the same rule as Booking.js's eventEndOf — so "9:00 PM - 12:00 AM" is
+ * [1260, 1440), not [1260, 0). Without this a slot ending at midnight never
+ * overlapped anything: it always showed as free, and bookings in it never
+ * blocked a later customer.
+ */
+export function parseSlotRange(startTime, endTime) {
+  const s = parseTimeToMinutes(startTime);
+  const e = parseTimeToMinutes(endTime);
+  if (s == null || e == null) return null;
+  return { s, e: e <= s ? e + MINUTES_IN_DAY : e };
 }
 
 /**
@@ -152,10 +165,11 @@ export async function validateTimeSlotSelection(pkg, date, timeSlot) {
 
 function timeWithinSlot(requestedTime, startTime, endTime) {
   const t = parseTimeToMinutes(requestedTime);
-  const s = parseTimeToMinutes(startTime);
-  const e = parseTimeToMinutes(endTime);
-  if (t == null || s == null || e == null) return false;
-  return t >= s && t <= e;
+  const slot = parseSlotRange(startTime, endTime);
+  if (t == null || slot == null) return false;
+  // A slot past midnight also covers the early hours of the next day.
+  const within = (m) => m >= slot.s && m <= slot.e;
+  return within(t) || within(t + MINUTES_IN_DAY);
 }
 
 // Handles both "HH:MM" 24h (what the customer sends) and "h:mm AM/PM" (how
@@ -201,15 +215,18 @@ export function buildAutoSlots(price) {
   return { lengthHours, slots };
 }
 
+// Both formatters wrap past midnight, so a slot ending at 1440 still reads
+// "12:00 AM" / "00:00" — the "HH:MM" form is what customers send back and
+// what bookings store.
 function minutesToLabel(mins) {
-  const h24 = Math.floor(mins / 60);
+  const h24 = Math.floor((mins % MINUTES_IN_DAY) / 60);
   const m = String(mins % 60).padStart(2, "0");
   const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
   return `${h12}:${m} ${h24 < 12 ? "AM" : "PM"}`;
 }
 
 function minutesToHHMM(mins) {
-  const h = String(Math.floor(mins / 60)).padStart(2, "0");
+  const h = String(Math.floor((mins % MINUTES_IN_DAY) / 60)).padStart(2, "0");
   const m = String(mins % 60).padStart(2, "0");
   return `${h}:${m}`;
 }
@@ -275,8 +292,8 @@ export async function computeSlotsForDate(pkg, date) {
 
   const simultaneous = pkg.bookingCapacity?.simultaneousBookings ?? 1;
   const booked = bookings
-    .map((b) => ({ s: parseTimeToMinutes(b.startTime), e: parseTimeToMinutes(b.endTime) }))
-    .filter((b) => b.s != null && b.e != null);
+    .map((b) => parseSlotRange(b.startTime, b.endTime))
+    .filter(Boolean);
 
   // Vendor-declared slots win. When the vendor left the package on FULL_DAY
   // (or TIME_SLOTS with no usable slots), Eventory generates the day's slots
@@ -284,8 +301,11 @@ export async function computeSlotsForDate(pkg, date) {
   let raw = [];
   if (workMode === "TIME_SLOTS") {
     raw = (settings.timeSlots || [])
-      .map((slot) => ({ s: parseTimeToMinutes(slot.startTime), e: parseTimeToMinutes(slot.endTime), startTime: slot.startTime, endTime: slot.endTime }))
-      .filter((slot) => slot.s != null && slot.e != null);
+      .map((slot) => {
+        const range = parseSlotRange(slot.startTime, slot.endTime);
+        return range && { ...range, startTime: slot.startTime, endTime: slot.endTime };
+      })
+      .filter(Boolean);
     result.slotSource = "VENDOR";
   }
   if (raw.length === 0) {

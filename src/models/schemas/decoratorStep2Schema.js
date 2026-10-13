@@ -71,6 +71,7 @@ const decoratorStep2Schema = new mongoose.Schema({
   ],
   included: [{ type: String }],
   notIncluded: [{ type: String }],
+  teardownRequired: { type: Boolean, default: false },
   // Setup time and crew breakdown. A decorator running as a venue's in-house
   // service has no Step 1 of its own, so the service body carries them.
   // Decimal hours, like every package duration (1 hr 30 min = 1.5).

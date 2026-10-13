@@ -46,6 +46,81 @@ const ChatEnquirySchema = new mongoose.Schema(
     phoneNumber: { type: String, default: null },
     bestTimeToCall: { type: String, default: null },
 
+    // Help panel hand-off brief (POST /api/customer/chat/help-request) —
+    // same lead record as the chatbot flow, tagged so the two can be told
+    // apart. Additive: chatbot-created enquiries leave these at defaults.
+    source: { type: String, enum: ["chatbot", "help_panel"], default: "chatbot" },
+    replyMode: { type: String, enum: ["reply-here", "call-me", null], default: null },
+    pageUrl: { type: String, default: null },
+    // The customer attached a reference photo to the brief. Photos aren't
+    // stored yet (product decision), so the Event Manager asks for it.
+    hasReferencePhoto: { type: Boolean, default: false },
+    // The brief's area is outside the served region (Figma 9.6): it still
+    // goes to the team, who check whether a vendor travels there.
+    areaServed: { type: Boolean, default: null },
+    transcript: { type: [String], default: [] },
+    // The help panel chat this ticket was raised in (HelpConversation). One
+    // ticket per chat; replies come back into this same chat.
+    conversationId: { type: String, default: null },
+    // Who raised it, as they were at the time — customerId above is the
+    // link; this is what the Event Manager reads (code = Customer.id,
+    // "CUS…"). Guests only have anonId and the brief's phone.
+    customer: {
+      type: new mongoose.Schema(
+        {
+          code: { type: String, default: null },
+          name: { type: String, default: null },
+          email: { type: String, default: null },
+          phone: { type: String, default: null },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+    // Ticket lifecycle for the Event Manager side: open until someone
+    // replies, then replied; closed is set by the team.
+    ticketStatus: { type: String, enum: ["open", "replied", "closed", null], default: null },
+    lastMessageAt: { type: Date, default: null },
+    lastMessageFrom: { type: String, enum: ["customer", "event_manager", null], default: null },
+    messageCount: { type: Number, default: 0 },
+    // Before HelpMessage: the thread lived here. Still read for old
+    // tickets; new messages go to HelpMessage (customer_help_messages).
+    helpMessages: {
+      type: [
+        {
+          _id: false,
+          messageId: { type: String, required: true },
+          from: { type: String, enum: ["customer", "event_manager"], required: true },
+          senderName: { type: String, default: null },
+          text: { type: String, required: true },
+          sentAt: { type: Date, default: Date.now },
+        },
+      ],
+      default: [],
+    },
+    // Short ref shown to the customer ("TKT-1042") and on Slack.
+    ticket: { type: String, default: null },
+    firstReplyAt: { type: Date, default: null },
+    // Sent outside 9 AM–9 PM IST: no 30-minute promise, so never "late".
+    createdOffHours: { type: Boolean, default: false },
+    // 30 min with no reply: flagged once to the team lead on Slack.
+    lateFlaggedAt: { type: Date, default: null },
+    callBack: {
+      type: new mongoose.Schema(
+        {
+          requestId: { type: String, required: true },
+          ticket: { type: String, default: null },
+          phone: { type: String, required: true },
+          // The brief's call-time chip, e.g. "This evening, 6–9 PM"; null = ASAP.
+          window: { type: String, default: null },
+          requestedAt: { type: Date, default: Date.now },
+          callBy: { type: Date, required: true },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
+
     // Set once the Slack notification for this lead has actually been
     // posted (see chatSlackNotifier.js) — separate from `status` so a
     // Slack-post failure never blocks/loops the conversation itself.
@@ -83,5 +158,11 @@ const ChatEnquirySchema = new mongoose.Schema(
 
 ChatEnquirySchema.index({ anonId: 1, status: 1 });
 ChatEnquirySchema.index({ customerId: 1, status: 1 });
+ChatEnquirySchema.index({ source: 1, createdAt: -1 });
+// All of one customer's tickets, newest first; a chat's ticket; ticket refs.
+ChatEnquirySchema.index({ source: 1, customerId: 1, createdAt: -1 });
+ChatEnquirySchema.index({ source: 1, anonId: 1, createdAt: -1 });
+ChatEnquirySchema.index({ conversationId: 1 }, { sparse: true });
+ChatEnquirySchema.index({ ticket: 1 }, { sparse: true });
 
 export default mongoose.model("ChatEnquiry", ChatEnquirySchema);

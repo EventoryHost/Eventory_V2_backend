@@ -1,4 +1,5 @@
 import fs from "fs";
+import { flattenServiceAreas, normalizeServiceAreas } from "./serviceAreas.js";
 
 /**
  * Location serviceability — the PDP's "is this vendor available at my
@@ -12,12 +13,13 @@ import fs from "fs";
  *     product owner named as the source of truth). Any pincode outside it is
  *     non-serviceable, for every vendor.
  *  2. VENDOR: the vendor's own `serviceAreas` (picked in vendor onboarding,
- *     "What is your Service area?" — city chips plus locality chips, plain
- *     strings). There is no pincode/radius data on the vendor side, so a
- *     vendor area is matched to a pincode by NAME: a city chip covers every
- *     pincode in that city; a locality chip covers pincodes whose
- *     post-office/area names contain it (e.g. "Sector 18" -> "Sector 18
- *     Noida"). A vendor with NO serviceAreas declared has stated no
+ *     "What is your Service area?" — `[{ area, sublocalities }]`, see
+ *     utils/serviceAreas.js). There is no pincode/radius data on the vendor
+ *     side, so a vendor area is matched to a pincode by NAME: an area with no
+ *     localities covers every pincode in that city/region; a locality covers
+ *     pincodes whose post-office/area names contain it (e.g. "Sector 18" ->
+ *     "Sector 18 Noida"), falling back to its area's city when no post office
+ *     carries the locality's name. A vendor with NO serviceAreas declared has stated no
  *     restriction, so they are treated as serving the whole platform region
  *     (flagged as basis NO_AREAS_DECLARED, not silently presented as a
  *     confirmed match) — 279 of 304 prod vendors are in this state today.
@@ -41,12 +43,18 @@ function cityOf(info) {
   return info.district;
 }
 
-// Vendor UI has "South Delhi"/"North Delhi" chips — map them to the Delhi
-// districts in the dataset.
+// Vendor UI has Delhi region chips ("South Delhi", "Old Delhi", ...) — map
+// them to the Delhi districts in the dataset.
 const DELHI_REGION_CHIPS = {
   "south delhi": ["SOUTH", "SOUTH EAST", "SOUTH WEST"],
   "north delhi": ["NORTH", "NORTH WEST", "NORTH EAST"],
+  "central delhi": ["CENTRAL", "WEST"],
+  "old delhi": ["CENTRAL", "NORTH"],
+  "new delhi": ["NEW DELHI"],
 };
+
+// Area chips spelled differently from the dataset's city labels.
+const AREA_ALIASES = { gurgaon: "gurugram" };
 
 export function extractPincode(text) {
   const m = String(text || "").match(/(?<!\d)(\d{6})(?!\d)/);
@@ -91,7 +99,8 @@ const LOCALITY_CITY = {
 
 // -> "exact" | "city_fallback" | null
 function areaMatchLevel(vendorArea, info) {
-  const a = norm(vendorArea);
+  const raw = norm(vendorArea);
+  const a = AREA_ALIASES[raw] || raw;
   if (!a) return null;
   if (a === norm(info.city)) return "exact"; // city chip
   if (a === "greater noida" && info.district === "GAUTAM BUDDHA NAGAR") {
@@ -101,6 +110,15 @@ function areaMatchLevel(vendorArea, info) {
   if (info.areas.some((n) => norm(n).includes(a))) return "exact";
   if (LOCALITY_CITY[a] && LOCALITY_CITY[a] === info.city) return "city_fallback";
   return null;
+}
+
+// An area with no localities covers its whole city/region. With localities,
+// only those count; when none of them names a post office, the area itself
+// is the (broader) fallback.
+function entryMatchLevel({ area, sublocalities }, info) {
+  if (sublocalities.length === 0) return areaMatchLevel(area, info);
+  if (sublocalities.some((s) => info.areas.some((n) => norm(n).includes(norm(s))))) return "exact";
+  return areaMatchLevel(area, info) ? "city_fallback" : null;
 }
 
 /**
@@ -113,11 +131,11 @@ export function checkServiceability(pincode, vendorServiceAreas) {
     return { platformServiceable: false, vendorServiceable: null, serviceable: false, reason: "OUTSIDE_SERVICE_REGION", basis: null, location: null };
   }
   const location = { pincode: info.pincode, city: info.city, district: info.district, state: info.state, areas: info.areas };
-  const declared = (vendorServiceAreas || []).filter(Boolean);
+  const declared = normalizeServiceAreas(vendorServiceAreas);
   if (declared.length === 0) {
     return { platformServiceable: true, vendorServiceable: true, serviceable: true, reason: null, basis: "NO_AREAS_DECLARED", location };
   }
-  const levels = declared.map((a) => areaMatchLevel(a, info)).filter(Boolean);
+  const levels = declared.map((entry) => entryMatchLevel(entry, info)).filter(Boolean);
   const matched = levels.length > 0;
   return {
     platformServiceable: true,
@@ -129,11 +147,14 @@ export function checkServiceability(pincode, vendorServiceAreas) {
   };
 }
 
-// For the "vendor provides service at" list: keep the vendor's own strings,
-// split into cities (chips that name a platform city) and localities.
-const CITY_NAMES = new Set(["delhi", "gurugram", "faridabad", "ghaziabad", "noida"]);
+// For the "vendor provides service at" list: the vendor's own names, flat,
+// split into areas and localities, plus the structured entries.
 export function describeVendorAreas(serviceAreas) {
-  const all = (serviceAreas || []).filter(Boolean);
-  const cities = all.filter((a) => CITY_NAMES.has(norm(a)));
-  return { all, cities, localities: all.filter((a) => !CITY_NAMES.has(norm(a))) };
+  const areas = normalizeServiceAreas(serviceAreas);
+  return {
+    all: flattenServiceAreas(areas),
+    cities: areas.map((e) => e.area),
+    localities: areas.flatMap((e) => e.sublocalities),
+    areas,
+  };
 }

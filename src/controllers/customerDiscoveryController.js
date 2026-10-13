@@ -7,6 +7,7 @@ import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
 import { utcDayRange } from "../utils/dateRange.js";
 import { computeAvailability, computeSlotsForDate } from "../utils/packageAvailability.js";
 import { checkServiceability, describeVendorAreas, extractPincode, listServiceableCities, lookupPincode } from "../utils/serviceability.js";
+import { serviceAreaRegexClauses } from "../utils/serviceAreas.js";
 import { round2 } from "../utils/money.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { buildGroupFilter } from "../utils/packageGroupFilter.js";
@@ -186,7 +187,7 @@ export const browsePackages = async (req, res) => {
       const vendorIds = await Vendor.find({
         $or: [
           { city: { $regex: `^${escapeRegex(city)}$`, $options: "i" } },
-          { serviceAreas: { $regex: escapeRegex(city), $options: "i" } },
+          ...serviceAreaRegexClauses({ $regex: escapeRegex(city), $options: "i" }),
         ],
       }).select("_id");
       query.vendorId = { $in: vendorIds.map((v) => v._id) };
@@ -1246,7 +1247,7 @@ export const browseVendors = async (req, res) => {
       and.push({
         $or: [
           { city: { $regex: `^${escapeRegex(city)}$`, $options: "i" } },
-          { serviceAreas: { $regex: escapeRegex(city), $options: "i" } },
+          ...serviceAreaRegexClauses({ $regex: escapeRegex(city), $options: "i" }),
         ],
       });
     }
@@ -1263,7 +1264,7 @@ export const browseVendors = async (req, res) => {
           { description: rx },
           { vendorType: rx },
           { city: rx },
-          { serviceAreas: rx },
+          ...serviceAreaRegexClauses(rx),
           { eventCategories: rx },
         ],
       });

@@ -62,11 +62,26 @@ const buildPricingBreakdown = (record) => {
 
   const taxRatePct =
     pricing.taxRatePct ?? record.packageSnapshot?.gstRatePercent ?? 0;
-  const tax = {
-    label: `Taxes (${taxRatePct}% ${pricing.taxLabel || "GST"})`,
-    ratePct: taxRatePct,
-    amount: round2((subtotal * taxRatePct) / 100),
-  };
+  // When the vendor's GST is inclusive, it's already baked into the price
+  // the vendor set — this card must show nothing extra and add nothing on
+  // top, same rule cartPricingService.js's computeGst already applies for
+  // the cart/checkout quote. This function had no such check at all
+  // before (real bug: the card showed/added GST even for inclusive
+  // packages, though the actually-charged Booking.totalAmount was separate
+  // and correct — see bookingCreationService.js, which overwrites it from
+  // the real Cashfree-charged amount right after calling this).
+  const gstInclusive = !!(pricing.taxInclusive ?? record.packageSnapshot?.gstInclusive);
+  const tax = gstInclusive
+    ? {
+        label: `Taxes (${taxRatePct}% ${pricing.taxLabel || "GST"} — included in price)`,
+        ratePct: taxRatePct,
+        amount: 0,
+      }
+    : {
+        label: `Taxes (${taxRatePct}% ${pricing.taxLabel || "GST"})`,
+        ratePct: taxRatePct,
+        amount: round2((subtotal * taxRatePct) / 100),
+      };
 
   return {
     originalPackagePrice: round2(originalPackagePrice),
