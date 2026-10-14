@@ -311,7 +311,30 @@ export async function computeQuoteForLines(lines, discount = 0) {
 
   const linesWithToken = availableLines.filter((l) => l.token.tokenConfigured);
   const allTokensConfigured = linesWithToken.length === availableLines.length && availableLines.length > 0;
-  const tokenAmountTotal = round2(linesWithToken.reduce((sum, l) => sum + (l.token.tokenAmount || 0), 0));
+  const rawTokenAmountTotal = round2(linesWithToken.reduce((sum, l) => sum + (l.token.tokenAmount || 0), 0));
+
+  // Round the advance ("Pay now to confirm") due at booking up to the next
+  // ₹100 — same rule, and the same reason, as grandTotal's own round-off
+  // above: a clean number at the point of payment rather than an odd
+  // percentage-derived figure (e.g. 25% of ₹46,787 = ₹11,696.75). Capped at
+  // grandTotal so rounding up can never ask for more than the whole booking
+  // costs. The gap this creates is pushed into the LAST priced line's own
+  // token.tokenAmount — same "last slot absorbs the drift" reconciliation
+  // the milestone schedule above already uses — so the per-line amount
+  // that actually gets saved onto that line's Booking.totalReceived
+  // (bookingCreationService.js) still sums to the exact amount Cashfree
+  // charges, instead of a display-only rounding that drifts from what's
+  // persisted.
+  const tokenAmountTotal = allTokensConfigured
+    ? Math.min(rawTokenAmountTotal > 0 ? Math.ceil(rawTokenAmountTotal / 100) * 100 : 0, grandTotal)
+    : null;
+  if (allTokensConfigured && tokenAmountTotal !== rawTokenAmountTotal) {
+    const tokenRoundOffGap = round2(tokenAmountTotal - rawTokenAmountTotal);
+    const lastTokenLine = linesWithToken[linesWithToken.length - 1];
+    lastTokenLine.token.tokenAmount = round2((lastTokenLine.token.tokenAmount || 0) + tokenRoundOffGap);
+    lastTokenLine.token.remaining = round2(lastTokenLine.lineTotalInclGst - lastTokenLine.token.tokenAmount);
+  }
+
   const remainingTotal = allTokensConfigured ? round2(grandTotal - tokenAmountTotal) : null;
 
   return {
