@@ -54,14 +54,20 @@ function convenienceFeeDisabled() {
 // parser returned null for literally every value in the database, leaving
 // Booking.paymentMilestones[].dueDate empty on every booking.
 
-// GST rule (explicit, 2026-09-11): show/add GST ONLY when the vendor marked
-// the package price as NOT inclusive of GST (gstInclusive:false) and set a
-// real rate. When gstInclusive:true, GST is already baked into the price the
-// vendor entered — it is NOT a separate charge, so it must not be shown or
-// added at all: gstRatePercent/gstAmount both come back null, same as the
-// "vendor never configured GST" case, rather than surfacing the
-// tax-portion-of-an-inclusive-price figure this function used to compute.
-function computeGst(subtotal, pricing) {
+// GST rule (2026-09-11, tightened 2026-10-15 — PM-reported): show/add GST
+// ONLY when BOTH hold — the vendor has a real GSTIN on file (Vendor.
+// gstNumber, set during onboarding; checked by the caller and passed in as
+// vendorHasGst, never exposed to customers, see utils/publicFields.js) AND
+// the vendor marked the package price as NOT inclusive of GST
+// (gstInclusive:false) with a real rate set. Nothing vendor-side enforces
+// gstRatePercent/gstInclusive and an actual GSTIN going together, so a
+// vendor who never registered one (or explicitly skipped it — see Vendor.
+// isGstSkipped) could still have a package showing/charging GST. Either
+// condition failing means GST must not be shown or added at all:
+// gstRatePercent/gstAmount both come back null, same as the "vendor never
+// configured GST" case.
+function computeGst(subtotal, pricing, vendorHasGst) {
+  if (!vendorHasGst) return { gstInclusive: false, gstRatePercent: null, gstAmount: null };
   const gstInclusive = !!pricing?.gstInclusive;
   const gstRatePercent = pricing?.gstRatePercent ?? null;
   if (gstInclusive || subtotal == null || gstRatePercent == null) {
@@ -152,9 +158,12 @@ export async function computeQuoteForLines(lines, discount = 0) {
   // one, so this doesn't silently break again on the next such flip.
   const vendorIds = [...new Set(lines.map((l) => String(l.vendorId)).filter(Boolean))];
   const validObjectIds = vendorIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
+  // gstNumber selected ONLY to gate GST below (computeGst's vendorHasGst) —
+  // never attached to anything serialized back to the customer; this map
+  // stays purely internal to this function. See computeGst's own comment.
   const vendors = vendorIds.length
     ? await Vendor.find({ $or: [{ _id: { $in: validObjectIds } }, { id: { $in: vendorIds } }] })
-        .select("bookingsPerYear experience teamSize")
+        .select("bookingsPerYear experience teamSize gstNumber")
         .lean()
     : [];
   const vendorById = new Map(vendors.flatMap((v) => [[String(v._id), v], [v.id, v]]));
@@ -191,7 +200,12 @@ export async function computeQuoteForLines(lines, discount = 0) {
     const packagePriceTotal = round2(currentPrice * quantity);
     const lineSubtotal = round2(packagePriceTotal + addonsTotal + chargeableItemsTotal);
 
-    const { gstInclusive, gstRatePercent, gstAmount } = computeGst(lineSubtotal, pkg.step3_policiesAndCharges);
+    const vendorHasGst = Boolean(vendorById.get(String(pkg.vendorId))?.gstNumber);
+    const { gstInclusive, gstRatePercent, gstAmount } = computeGst(
+      lineSubtotal,
+      pkg.step3_policiesAndCharges,
+      vendorHasGst
+    );
     // gstAmount is null both when GST isn't configured AND when it's
     // inclusive (see computeGst) — either way, nothing to add on top.
     const lineTotalInclGst = gstAmount == null ? lineSubtotal : round2(lineSubtotal + gstAmount);

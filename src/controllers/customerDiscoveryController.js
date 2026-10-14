@@ -447,7 +447,30 @@ export const getPackageDetail = async (req, res) => {
     if (!pkg) {
       return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
     }
-    pkg.vendorId = await resolveVendorForPackage(pkg.vendorId);
+    // gstNumber added to the usual public projection ONLY to gate GST
+    // below — stripped back off before this vendor object reaches the
+    // response (publicFields.js deliberately excludes it from every
+    // customer-facing read; the response still needs to be governed by
+    // that same whitelist, not just carry an extra field).
+    pkg.vendorId = await resolveVendorForPackage(pkg.vendorId, `${PUBLIC_VENDOR_FIELDS} gstNumber`);
+    const vendorHasGst = Boolean(pkg.vendorId?.gstNumber);
+    if (pkg.vendorId) delete pkg.vendorId.gstNumber;
+
+    // PM-reported 2026-10-15: a vendor can set gstRatePercent/gstInclusive
+    // on a package without ever having registered a real GSTIN (Vendor.
+    // gstNumber) — nothing vendor-side enforces the two together, and GST
+    // was showing/charging on the PDP, cart and checkout for vendors who
+    // never actually registered one. Neutralized directly on the raw
+    // package object HERE, not just in computePricingPreview below —
+    // getPackageDetail.ts (frontend) reads step3_policiesAndCharges.
+    // gstRatePercent/gstInclusive straight off this same `package` field in
+    // the response for its own PDP price estimate, independently of
+    // pricingPreview, so gating pricingPreview alone wouldn't have reached
+    // that code path.
+    if (!vendorHasGst && pkg.step3_policiesAndCharges) {
+      pkg.step3_policiesAndCharges.gstInclusive = false;
+      pkg.step3_policiesAndCharges.gstRatePercent = null;
+    }
     normalizePackagePricing(pkg);
 
     const { date, guests, time } = req.query;
@@ -665,7 +688,10 @@ function computePricingPreview(pkg, { date, guests }) {
   // the price NOT inclusive of GST and set a real rate. When gstInclusive is
   // true, GST is already baked into the price — not a separate charge, so it
   // must not be shown at all (gstRatePercent/gstAmount both null here, same
-  // as "no GST configured"), not just left out of `total`.
+  // as "no GST configured"), not just left out of `total`. (The caller —
+  // getPackageDetail above — has already zeroed both fields on `pricing`
+  // when the vendor has no real GSTIN on file, so there's nothing extra to
+  // check here for that case.)
   let gstAmount = null;
   let total = subtotal;
   const gstRatePercent = gstInclusive ? null : rawGstRatePercent;
