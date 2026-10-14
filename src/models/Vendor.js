@@ -147,6 +147,17 @@ const VendorSchema = new mongoose.Schema({
     default: false,
   },
 
+  // Admin "Unlive" (added 2026-10-13): hides the vendor and their packages
+  // from customers without touching the vendor's own account — unlike
+  // isDeactivated, which login refuses (authController.js). Only the admin
+  // visibility endpoint writes these; see utils/customerVisibility.js.
+  hiddenByAdmin: {
+    type: Boolean,
+    default: false,
+  },
+  hiddenByAdminAt: { type: Date, default: null },
+  hiddenByAdminReason: { type: String, default: null },
+
   // Step-by-step admin review; see schemas/vendorVerificationSchema.js and
   // services/vendorVerificationService.js.
   verification: {

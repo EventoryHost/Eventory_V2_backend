@@ -7,6 +7,7 @@ import {
 import { VENDOR_DOC_FIELDS } from "../models/schemas/emActionSchema.js";
 import { computeCompletion } from "../utils/profileCompletion.js";
 import { normalizeServiceAreas } from "../utils/serviceAreas.js";
+import { customerVisibility } from "../utils/customerVisibility.js";
 import {
   effectiveVerification,
   hasVerificationStatus,
@@ -33,6 +34,9 @@ const SERVER_OWNED_FIELDS = new Set([
   "adminReview",
   "isDeactivated",
   "deletionRequestedAt",
+  "hiddenByAdmin",
+  "hiddenByAdminAt",
+  "hiddenByAdminReason",
   "assignedEmId",
   "assignedEmName",
   "rating",
@@ -59,12 +63,17 @@ function stripServerOwnedFields(payload, { keep = [] } = {}) {
 const valueAt = (doc, path) =>
   path.split(".").reduce((node, part) => (node == null ? undefined : node[part]), doc);
 
-/** The vendor plus its completion, the way the app reads it. */
+/**
+ * The vendor plus its completion, the way the app reads it, and whether
+ * customers can currently see them (utils/customerVisibility.js) — the app
+ * shows that answer rather than re-deriving the rule.
+ */
 const withCompletion = (vendor) => {
   const data = typeof vendor.toObject === "function" ? vendor.toObject() : { ...vendor };
+  const visibility = customerVisibility(data);
   if (!hasVerificationStatus(data)) data.verification = effectiveVerification(data);
   const profileCompletion = computeCompletion(data);
-  return { data: { ...data, profileCompletion }, profileCompletion };
+  return { data: { ...data, profileCompletion, customerVisibility: visibility }, profileCompletion };
 };
 
 /**

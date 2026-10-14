@@ -4,6 +4,7 @@ import Package from "../models/Package.js";
 import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
+import { visibleVendorIdClause } from "../utils/customerVisibility.js";
 
 /**
  * Compare-up-to-3-packages — Phase 2 Step 11. Packages only (see
@@ -94,7 +95,9 @@ async function loadComparisonForSession(session) {
   // currently-seeded Package.vendorId fails that populate's implicit
   // ObjectId cast (real bug found via end-to-end testing, testsuite.pdf).
   // Resolved manually below instead.
-  const packages = await Package.find({ _id: { $in: session.packageIds } })
+  // A hidden vendor's package (utils/customerVisibility.js) drops out, the
+  // same as a deleted one.
+  const packages = await Package.find({ _id: { $in: session.packageIds }, ...(await visibleVendorIdClause()) })
     .select(COMPARE_PACKAGE_FIELDS)
     .lean();
   await Promise.all(
@@ -128,7 +131,7 @@ export const addCompareItem = async (req, res) => {
   try {
     const { packageId } = req.body;
 
-    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" }).select("vendorType");
+    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live", ...(await visibleVendorIdClause()) }).select("vendorType");
     if (!pkg) {
       return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
     }

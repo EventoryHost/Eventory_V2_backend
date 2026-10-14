@@ -9,6 +9,12 @@ import {
   statusFilter,
 } from "../utils/vendorVerificationLegacy.js";
 import { LEGACY_SECTION_STEPS } from "../constants/vendorSteps.js";
+import {
+  HIDDEN_VENDOR_FILTER,
+  VISIBLE_VENDOR_FILTER,
+  customerVisibility,
+  invalidateHiddenVendors,
+} from "../utils/customerVisibility.js";
 import { VERIFICATION_STATUSES } from "../models/schemas/vendorVerificationSchema.js";
 import {
   reviewStep,
@@ -43,16 +49,22 @@ const sendError = (res, error) => {
 const str = (value) => (typeof value === "string" ? value.trim() : "");
 const reviewerOf = (body) => str(body?.reviewedBy) || str(body?.by) || "Admin";
 
-/** The vendor as the admin screens get it: document + completion, side by side. */
+/**
+ * The vendor as the admin screens get it: document + completion, side by
+ * side, plus whether customers can see them. customerVisibility reads the
+ * stored completionPercent — the figure the customer queries filter on.
+ */
 const vendorResponse = (vendor) => {
   const data = typeof vendor.toObject === "function" ? vendor.toObject() : { ...vendor };
+  const visibility = customerVisibility(data);
   if (!hasVerificationStatus(data)) data.verification = effectiveVerification(data);
   const profileCompletion = computeCompletion(data);
-  return { success: true, data: { ...data, profileCompletion }, profileCompletion };
+  return { success: true, data: { ...data, profileCompletion, customerVisibility: visibility }, profileCompletion };
 };
 
 /** A lean list row: effective verification plus the queue's completion summary. */
 const queueRow = (row) => {
+  row.customerVisibility = customerVisibility(row);
   if (!hasVerificationStatus(row)) {
     row.verification = effectiveVerification(row);
   }
@@ -424,13 +436,21 @@ export const reviewSection = async (req, res) => {
 // GET /api/admin/vendors/all
 export const getAllVendors = async (req, res) => {
   try {
-    const { page = 1, limit = 10, vendorType, isVerified, isDeactivated, city, state, search, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
+    const { page = 1, limit = 10, vendorType, isVerified, isDeactivated, customerVisible, city, state, search, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
     const skip = (page - 1) * limit;
 
     const query = {};
     if (vendorType) query.vendorType = vendorType;
     if (isVerified !== undefined && isVerified !== 'all') query.isVerified = isVerified === 'true';
-    if (isDeactivated !== undefined && isDeactivated !== 'all') query.isDeactivated = isDeactivated === 'true';
+    // $ne: true for "live" — most vendor documents predate the field and have
+    // no isDeactivated at all (same rule as customerDiscoveryController).
+    if (isDeactivated !== undefined && isDeactivated !== 'all') {
+      query.isDeactivated = isDeactivated === 'true' ? true : { $ne: true };
+    }
+    // Whether customers can see the vendor (utils/customerVisibility.js):
+    // not deactivated, not Unlive, at least 50% complete.
+    const visibilityClause =
+      customerVisible === 'true' ? VISIBLE_VENDOR_FILTER : customerVisible === 'false' ? HIDDEN_VENDOR_FILTER : null;
     if (city) query.city = { $regex: `^${escapeRegex(city)}$`, $options: 'i' };
     if (state) query.state = { $regex: `^${escapeRegex(state)}$`, $options: 'i' };
     
@@ -445,12 +465,12 @@ export const getAllVendors = async (req, res) => {
       ];
     }
 
+    // In $and: HIDDEN_VENDOR_FILTER is an $or, which `search` above owns.
+    if (visibilityClause) query.$and = [visibilityClause];
+
     const sort = {};
     sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
 
-    console.log("[getAllVendors] req.query:", req.query);
-    console.log("[getAllVendors] Constructed query:", JSON.stringify(query));
-    
     const vendors = await Vendor.find(query)
       .sort(sort)
       .skip(skip)
@@ -460,7 +480,10 @@ export const getAllVendors = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: vendors,
+      data: vendors.map((v) => {
+        const row = v.toObject();
+        return { ...row, customerVisibility: customerVisibility(row) };
+      }),
       pagination: {
         total,
         page: parseInt(page),
@@ -469,6 +492,37 @@ export const getAllVendors = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// PUT /api/admin/vendors/:id/visibility — admin Live / Unlive
+// Body: { hidden: boolean, reason? }
+// Unlive hides the vendor and every package of theirs from customers; the
+// vendor keeps their app login (unlike deactivation). Existing bookings are
+// untouched. A vendor under 50% complete stays hidden whatever this says.
+export const setVendorVisibility = async (req, res) => {
+  try {
+    const { hidden, reason } = req.body || {};
+    if (typeof hidden !== "boolean") {
+      return res.status(400).json({ success: false, message: "`hidden` must be true or false" });
+    }
+    const filter = mongoose.isValidObjectId(req.params.id)
+      ? { $or: [{ id: req.params.id }, { _id: req.params.id }] }
+      : { id: req.params.id };
+    const vendor = await Vendor.findOneAndUpdate(
+      filter,
+      {
+        $set: hidden
+          ? { hiddenByAdmin: true, hiddenByAdminAt: new Date(), hiddenByAdminReason: str(reason).slice(0, 500) || null }
+          : { hiddenByAdmin: false, hiddenByAdminAt: null, hiddenByAdminReason: null },
+      },
+      { new: true }
+    );
+    if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
+    invalidateHiddenVendors();
+    res.status(200).json(vendorResponse(vendor));
+  } catch (error) {
+    sendError(res, error);
   }
 };
 

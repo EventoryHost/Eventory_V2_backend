@@ -99,6 +99,8 @@ const pricingSchema = z.object({
   addonsAdded: amount.optional(),
   itemsRemoved: amount.optional(),
   addonsRemoved: amount.optional(),
+  additionalCharges: amount.optional(),
+  additionalChargesLabel: z.string().trim().max(100).optional(),
   discountAmount: amount.optional(),
   discountLabel: z.string().trim().max(100).optional(),
   taxRatePct: z.number().min(0).max(100).optional(),

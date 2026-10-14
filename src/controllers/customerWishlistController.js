@@ -8,6 +8,21 @@ import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 import { bumpVendorWishlistCount, bumpVendorWishlistCounts, vendorRefForWishlistItem } from "../utils/wishlistCount.js";
+import { VISIBLE_VENDOR_FILTER, hiddenVendorKeys, visibleVendorIdClause } from "../utils/customerVisibility.js";
+
+/**
+ * Whether a saved item's package or vendor is still visible to customers
+ * (utils/customerVisibility.js). Read before resolveVendorForPackage
+ * replaces the package's raw vendorId.
+ */
+const itemVisibility = (item, hiddenVendors) => {
+  if (item.itemType === "Package") {
+    const pkg = item.packageId;
+    return Boolean(pkg && pkg.packageStatus === "Live" && !hiddenVendors.has(String(pkg.vendorId)));
+  }
+  const vendor = item.vendorId;
+  return Boolean(vendor && !hiddenVendors.has(String(vendor._id)) && !hiddenVendors.has(vendor.id));
+};
 
 /**
  * Authenticated wishlist CRUD + a public read-only share link — Phase 2
@@ -33,7 +48,7 @@ export const addWishlistItem = async (req, res) => {
 
     let priceSnapshot = null;
     if (itemType === "Package") {
-      const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" }).select(
+      const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live", ...(await visibleVendorIdClause()) }).select(
         "vendorType step2_productsAndPricing.setups step3_policiesAndCharges.packagePricing.price " +
           "step3_policiesAndCharges.teamAndEquipment.price step3_policiesAndCharges.overallPriceOfPackage.price"
       );
@@ -43,11 +58,10 @@ export const addWishlistItem = async (req, res) => {
       // getEffectivePackagePrice — see that util's comment.
       priceSnapshot = getEffectivePackagePrice(pkg);
     } else {
-      // Vendor.isDeactivated may simply be unset on older docs — same
-      // "$ne: true" reasoning as the discovery browse endpoints.
+      // Only a vendor customers may see — utils/customerVisibility.js.
       const vendorQuery = mongoose.Types.ObjectId.isValid(vendorId)
-        ? { $or: [{ _id: vendorId }, { id: vendorId }], isDeactivated: { $ne: true } }
-        : { id: vendorId, isDeactivated: { $ne: true } };
+        ? { $or: [{ _id: vendorId }, { id: vendorId }], ...VISIBLE_VENDOR_FILTER }
+        : { id: vendorId, ...VISIBLE_VENDOR_FILTER };
       const vendor = await Vendor.findOne(vendorQuery).select("_id id");
       if (!vendor) {
         return res.status(404).json({ status: "FAILED", message: "Vendor not found or not currently active" });
@@ -98,9 +112,14 @@ export const getWishlist = async (req, res) => {
       .populate({ path: "vendorId", select: PUBLIC_VENDOR_FIELDS })
       .lean();
 
+    const hiddenVendors = new Set(await hiddenVendorKeys());
     const enriched = await Promise.all(
       items.map(async (item) => {
-        if (item.itemType !== "Package") return item;
+        // Saved vendors and packages stay on the list once their vendor is
+        // hidden from customers, flagged unavailable so the page can grey
+        // them out.
+        const stillAvailable = itemVisibility(item, hiddenVendors);
+        if (item.itemType !== "Package") return { ...item, vendorStillAvailable: stillAvailable };
         // The package may have been taken down/deleted since it was saved —
         // populate leaves packageId null in that case, handled here rather
         // than surfacing a confusing partial object to the client.
@@ -111,7 +130,7 @@ export const getWishlist = async (req, res) => {
         const currentPrice = item.packageId ? getEffectivePackagePrice(item.packageId) : null;
         return {
           ...item,
-          packageStillAvailable: Boolean(item.packageId),
+          packageStillAvailable: stillAvailable,
           currentPrice,
           priceChanged: item.priceSnapshot != null && currentPrice != null && currentPrice !== item.priceSnapshot,
         };
@@ -273,12 +292,16 @@ export const getSharedWishlist = async (req, res) => {
       return res.status(404).json({ status: "FAILED", message: "This wishlist link is invalid or no longer shared" });
     }
 
-    const items = await WishlistItem.find({ customerId: customer._id })
+    const savedItems = await WishlistItem.find({ customerId: customer._id })
       .select("-note")
       .sort({ createdAt: -1 })
       .populate({ path: "packageId", select: PACKAGE_CARD_FIELDS })
       .populate({ path: "vendorId", select: PUBLIC_VENDOR_FIELDS })
       .lean();
+
+    // A shared link shows only what customers may still see.
+    const hiddenVendors = new Set(await hiddenVendorKeys());
+    const items = savedItems.filter((item) => itemVisibility(item, hiddenVendors));
 
     // Same manual resolution as getWishlist — see its comment / resolveVendor.js.
     await Promise.all(
