@@ -1,6 +1,7 @@
 import ViewedItem from "../models/ViewedItem.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
+import { hiddenVendorKeys } from "../utils/customerVisibility.js";
 
 /**
  * "Viewed Items" — the customer's recently-opened packages.
@@ -67,7 +68,10 @@ export const getViewedItems = async (req, res) => {
 
     // A package taken down since it was viewed leaves packageId null after
     // populate — drop those rather than handing the client a half object.
-    const live = items.filter((item) => item.packageId);
+    // Likewise a package whose vendor is now hidden from customers
+    // (utils/customerVisibility.js).
+    const hiddenVendors = new Set(await hiddenVendorKeys());
+    const live = items.filter((item) => item.packageId && !hiddenVendors.has(String(item.packageId.vendorId)));
 
     const enriched = await Promise.all(
       live.map(async (item) => {

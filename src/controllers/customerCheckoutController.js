@@ -9,6 +9,7 @@ import { computeAvailability } from "../utils/packageAvailability.js";
 import { resolveVendorRefId } from "../utils/resolveVendor.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 import { snapshotDeliverables } from "../utils/packageDeliverables.js";
+import { hiddenVendorKeys, visibleVendorIdClause } from "../utils/customerVisibility.js";
 
 /**
  * Checkout session — Phase 4 Steps 15-16. A short-lived, price-locked
@@ -42,7 +43,7 @@ async function buildLine({
   noteAttachments,
   quantity,
 }) {
-  const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" });
+  const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live", ...(await visibleVendorIdClause()) });
   if (!pkg) {
     return { error: { status: 404, message: `Package ${packageId} not found or not currently available` } };
   }
@@ -148,11 +149,12 @@ async function computeLinesAvailability(session) {
     .select("packageStatus vendorId step1_eventAndCrew.capacity availabilityCalendar availabilitySettings bookingCapacity")
     .lean();
   const packageById = new Map(packages.map((p) => [String(p._id), p]));
+  const hiddenVendors = new Set(await hiddenVendorKeys());
 
   const results = await Promise.all(
     session.lines.map(async (line) => {
       const pkg = packageById.get(String(line.packageId));
-      if (!pkg || pkg.packageStatus !== "Live") {
+      if (!pkg || pkg.packageStatus !== "Live" || hiddenVendors.has(String(pkg.vendorId))) {
         return { lineId: line._id, packageStillAvailable: false, availability: null };
       }
       const availability = await computeAvailability(pkg, {
@@ -401,7 +403,7 @@ export const updateCheckoutLine = async (req, res) => {
       // Vendor.id rather than Vendor._id (true of most seeded packages),
       // which would leave this line's vendorId unset/stale on a variant
       // switch. newPkg is only read here, never saved, so lean is safe.
-      const newPkg = await Package.findOne({ _id: packageId, packageStatus: "Live" }).lean();
+      const newPkg = await Package.findOne({ _id: packageId, packageStatus: "Live", ...(await visibleVendorIdClause()) }).lean();
       if (!newPkg) return res.status(404).json({ status: "FAILED", message: "Target package not found or not currently available" });
       if (String(newPkg.packageGroupId) !== String(line.packageGroupId)) {
         return res.status(400).json({

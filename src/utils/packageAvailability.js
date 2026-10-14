@@ -1,7 +1,6 @@
 import Booking, { SLOT_OCCUPYING_STATUSES } from "../models/Booking.js";
 import { utcDayRange } from "./dateRange.js";
 import { resolveVendorRefId } from "./resolveVendor.js";
-import { getEffectivePackagePrice } from "./packagePrice.js";
 
 /**
  * Availability is best-effort, built from three independent signals: the
@@ -188,31 +187,23 @@ function parseTimeToMinutes(str) {
 }
 
 // Eventory's default slotting for packages whose vendor did not declare
-// time slots (product rule, 2026-09-21): the event day runs 6 AM - 9 PM and
-// slot length scales with the package's price — <=10K: 3h, >10K..<=20K: 4h,
-// >20K: 5h. Only whole-length slots are generated, so the 4h tier gets 3
-// slots (6-10, 10-2, 2-6) and nothing after 6 PM; flip
-// INCLUDE_PARTIAL_LAST_SLOT to also offer the shorter trailing 6-9 PM slot.
+// time slots — in practice FULL_DAY packages saved before the vendor app
+// dropped full-day availability (2026-10-08). Changed 2026-10-13 to mirror
+// the app's own slot grid (booking_availability_models.dart DaySlots, with
+// kDaySlotHours = 3 and kDefaultDayStart = 6 AM): back-to-back 3h slots
+// from 6 AM, each ending by midnight — 6-9, 9-12, 12-3, 3-6, 6-9 and
+// 9 PM-12 AM. It replaced the 2026-09-21 price tiers (3h/4h/5h over
+// 6 AM-9 PM), which no vendor-saved package could ever match.
+const AUTO_SLOT_HOURS = 3;
 const DAY_START_MIN = 6 * 60;
-const DAY_END_MIN = 21 * 60;
-const INCLUDE_PARTIAL_LAST_SLOT = false;
 
-export function slotLengthHoursForPrice(price) {
-  if (price > 20000) return 5;
-  if (price > 10000) return 4;
-  return 3;
-}
-
-export function buildAutoSlots(price) {
-  const lengthHours = slotLengthHoursForPrice(price || 0);
-  const len = lengthHours * 60;
+export function buildAutoSlots() {
+  const len = AUTO_SLOT_HOURS * 60;
   const slots = [];
-  for (let s = DAY_START_MIN; s < DAY_END_MIN; s += len) {
-    const e = Math.min(s + len, DAY_END_MIN);
-    if (e - s < len && !INCLUDE_PARTIAL_LAST_SLOT) break;
-    slots.push({ s, e });
+  for (let s = DAY_START_MIN; s + len <= MINUTES_IN_DAY; s += len) {
+    slots.push({ s, e: s + len });
   }
-  return { lengthHours, slots };
+  return { lengthHours: AUTO_SLOT_HOURS, slots };
 }
 
 // Both formatters wrap past midnight, so a slot ending at 1440 still reads
@@ -296,8 +287,8 @@ export async function computeSlotsForDate(pkg, date) {
     .filter(Boolean);
 
   // Vendor-declared slots win. When the vendor left the package on FULL_DAY
-  // (or TIME_SLOTS with no usable slots), Eventory generates the day's slots
-  // from the package price instead — see buildAutoSlots.
+  // (or TIME_SLOTS with no usable slots), the package is available all day,
+  // so Eventory offers every slot of the app's 3h grid — see buildAutoSlots.
   let raw = [];
   if (workMode === "TIME_SLOTS") {
     raw = (settings.timeSlots || [])
@@ -309,12 +300,10 @@ export async function computeSlotsForDate(pkg, date) {
     result.slotSource = "VENDOR";
   }
   if (raw.length === 0) {
-    const price = getEffectivePackagePrice(pkg);
-    const auto = buildAutoSlots(price);
+    const auto = buildAutoSlots();
     raw = auto.slots;
     result.slotSource = "AUTO";
     result.slotLengthHours = auto.lengthHours;
-    result.priceBasis = price;
   }
 
   result.slots = raw

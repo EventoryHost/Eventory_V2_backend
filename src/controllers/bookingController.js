@@ -16,6 +16,11 @@ import {
   withPricingBreakdown,
 } from "../utils/pricingBreakdown.js";
 import {
+  DEFAULT_ADDITIONAL_CHARGES_LABEL,
+  additionalChargesDelta,
+  mergeAdditionalChargesIntoFinal,
+} from "../utils/additionalCharges.js";
+import {
   validateCreateBooking,
   validateChangeRequests,
   validateBookingUpdate,
@@ -497,6 +502,7 @@ const PRICING_FIELDS = [
   "addonsAdded",
   "itemsRemoved",
   "addonsRemoved",
+  "additionalCharges",
   "discountAmount",
   "taxRatePct",
 ];
@@ -586,6 +592,7 @@ export const updateBooking = async (req, res) => {
       booking.proposalResponse = { status: null, respondedAt: null };
     }
 
+    const previousAdditionalCharges = booking.pricing?.additionalCharges || 0;
     if (pricing) {
       for (const field of PRICING_FIELDS) {
         if (pricing[field] !== undefined) booking.pricing[field] = pricing[field];
@@ -593,6 +600,10 @@ export const updateBooking = async (req, res) => {
       if (pricing.discountLabel !== undefined) {
         booking.pricing.discountLabel =
           pricing.discountLabel?.trim() || "Discount Allowed";
+      }
+      if (pricing.additionalChargesLabel !== undefined) {
+        booking.pricing.additionalChargesLabel =
+          pricing.additionalChargesLabel?.trim() || DEFAULT_ADDITIONAL_CHARGES_LABEL;
       }
       booking.pricing.updatedAt = new Date();
     }
@@ -623,6 +634,16 @@ export const updateBooking = async (req, res) => {
 
     syncTotalReceived(booking);
     applyPricingBreakdown(booking);
+
+    // Additional charges are collected with the final payment — unless this
+    // request sent the plan itself (utils/additionalCharges.js).
+    if (!Array.isArray(paymentMilestones)) {
+      mergeAdditionalChargesIntoFinal(
+        booking,
+        additionalChargesDelta(booking, previousAdditionalCharges),
+        booking.pricing?.additionalChargesLabel
+      );
+    }
 
     // The schedule must account for the whole (possibly just repriced)
     // total. Each instalment is rounded to the rupee, so allow a rupee of

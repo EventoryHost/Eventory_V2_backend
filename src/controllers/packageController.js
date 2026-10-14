@@ -13,12 +13,15 @@ import {
   ReviewTransitionError,
 } from "../services/packageReviewService.js";
 
-// Only Approved is frozen, so what goes live is exactly what the EM cleared.
+// Approved and Live are frozen, so what customers see is exactly what the EM
+// cleared. Live was added 2026-10-13: an edit to a Live package went straight
+// to customers with no review. The vendor app already freezes Live packages
+// (inventory_item.dart isEditable), so only the raw API path changes.
 // Under Review stays editable: the vendor can keep working on a package that is
 // waiting for review and resubmit it, which puts the revision back in front of
-// the EM (see the Submitted transition). Draft, Action Required and Live have
-// always been editable.
-const LOCKED_FOR_EDIT = ["Approved"];
+// the EM (see the Submitted transition). Draft and Action Required have always
+// been editable. Admin step edits skip the lock — see updatePackageStep.
+const LOCKED_FOR_EDIT = ["Approved", "Live"];
 
 const lockedEditResponse = (packageStatus) =>
   LOCKED_FOR_EDIT.includes(packageStatus)
@@ -234,7 +237,9 @@ export const updatePackageStep = async (req, res) => {
       return res.status(404).json({ status: "FAILED", message: "Package not found" });
     }
 
-    const locked = lockedEditResponse(basePkg.packageStatus);
+    // The admin edit-step route (adminPackageRoutes.js) sets req.isAdmin: the
+    // admin may correct any package, whatever its review state.
+    const locked = !req.isAdmin && lockedEditResponse(basePkg.packageStatus);
     if (locked) return res.status(409).json(locked);
 
     // Solve discriminator gotcha by using the subclass Model so subclass-specific fields like step2 are kept

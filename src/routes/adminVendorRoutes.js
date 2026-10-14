@@ -16,6 +16,7 @@ import {
   requestVendorGroupChanges,
   rejectVendorGroup,
   getVerificationHistory,
+  setVendorVisibility,
 } from "../controllers/adminVendorController.js";
 
 const router = express.Router();
@@ -37,5 +38,6 @@ router.put("/:id/groups/:group/request-changes", requestVendorGroupChanges);
 router.put("/:id/groups/:group/reject", rejectVendorGroup);
 router.get("/:id/verification-history", getVerificationHistory);
 router.put("/:id/assign-em", assignEmToVendor);
+router.put("/:id/visibility", setVendorVisibility);
 
 export default router;
