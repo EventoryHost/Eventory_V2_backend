@@ -6,6 +6,7 @@ import { round2 } from "../utils/money.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 import { computeLineConvenienceFee } from "./convenienceFeeService.js";
 import { computeMilestoneDueDate } from "../utils/milestoneDueDate.js";
+import { hiddenVendorKeys } from "../utils/customerVisibility.js";
 
 /**
  * Cart pricing/due-now calculation — Phase 3 Step 14. This is the
@@ -160,10 +161,12 @@ export async function computeQuoteForLines(lines, discount = 0) {
 
   const feeDisabled = convenienceFeeDisabled();
   const now = new Date();
+  const hiddenVendors = new Set(await hiddenVendorKeys());
 
   const lineQuotes = lines.map((item) => {
     const pkg = packageById.get(String(item.packageId));
-    if (!pkg || pkg.packageStatus !== "Live") {
+    // A hidden vendor's package (utils/customerVisibility.js) can't be bought either.
+    if (!pkg || pkg.packageStatus !== "Live" || hiddenVendors.has(String(pkg.vendorId))) {
       return {
         lineId: item.lineId,
         vendorId: item.vendorId,

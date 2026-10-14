@@ -106,7 +106,7 @@ import {
  *             properties:
  *               key:
  *                 type: string
- *                 enum: [itemsAdded, addonsAdded]
+ *                 enum: [itemsAdded, addonsAdded, additionalCharges]
  *               label:
  *                 type: string
  *               amount:
@@ -261,6 +261,11 @@ import {
  *               type: number
  *             addonsRemoved:
  *               type: number
+ *             additionalCharges:
+ *               type: number
+ *               description: Last-moment extras, shown as their own row and merged into the final unpaid milestone.
+ *             additionalChargesLabel:
+ *               type: string
  *             discountAmount:
  *               type: number
  *             discountLabel:
@@ -762,6 +767,11 @@ router.post("/:bookingId/change-requests", requestPackageChanges);
  *                     type: number
  *                   addonsRemoved:
  *                     type: number
+ *                   additionalCharges:
+ *                     type: number
+ *                     description: Without paymentMilestones in the same body, the change (tax included) is added to the final unpaid milestone.
+ *                   additionalChargesLabel:
+ *                     type: string
  *                   discountAmount:
  *                     type: number
  *                   discountLabel:

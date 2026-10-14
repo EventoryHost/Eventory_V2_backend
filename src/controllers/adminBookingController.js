@@ -7,6 +7,11 @@ import Payment from "../models/Payment.js";
 import Invoice from "../models/Invoice.js";
 import { resolveVendorForPackage, resolveVendorRefId } from "../utils/resolveVendor.js";
 import { applyPricingBreakdown, withPricingBreakdown } from "../utils/pricingBreakdown.js";
+import {
+  DEFAULT_ADDITIONAL_CHARGES_LABEL,
+  additionalChargesDelta,
+  mergeAdditionalChargesIntoFinal,
+} from "../utils/additionalCharges.js";
 import { round2 } from "../utils/money.js";
 import {
   detectConflict,
@@ -734,6 +739,7 @@ export const updateBooking = async (req, res) => {
     }
 
     if (body.pricing && !booking.pricing) booking.pricing = {};
+    const previousAdditionalCharges = booking.pricing?.additionalCharges || 0;
 
     // A booking stored without pricing.taxRatePct hydrates it to the schema
     // default (0), which drops the packageSnapshot GST fallback the lean GET
@@ -755,6 +761,10 @@ export const updateBooking = async (req, res) => {
       }
       if (body.pricing.taxLabel !== undefined) {
         booking.pricing.taxLabel = body.pricing.taxLabel || "GST";
+      }
+      if (body.pricing.additionalChargesLabel !== undefined) {
+        booking.pricing.additionalChargesLabel =
+          body.pricing.additionalChargesLabel || DEFAULT_ADDITIONAL_CHARGES_LABEL;
       }
       // Stamped only when a value actually moved, so resending the stored
       // pricing doesn't read as the booking having been re-priced.
@@ -846,6 +856,16 @@ export const updateBooking = async (req, res) => {
     }
 
     applyPricingBreakdown(booking);
+
+    // Additional charges are collected with the final payment — unless the
+    // admin sent the payment plan in this same edit (utils/additionalCharges.js).
+    if (!Array.isArray(body.paymentMilestones)) {
+      mergeAdditionalChargesIntoFinal(
+        booking,
+        additionalChargesDelta(booking, previousAdditionalCharges),
+        booking.pricing?.additionalChargesLabel
+      );
+    }
 
     try {
       await booking.save();

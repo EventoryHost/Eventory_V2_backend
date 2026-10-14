@@ -79,6 +79,12 @@ export const PricingSchema = new mongoose.Schema(
     itemsRemoved: { type: Number, default: 0, min: 0 },
     addonsRemoved: { type: Number, default: 0, min: 0 },
 
+    // Last-moment extra charges (added 2026-10-13), shown to the customer as
+    // their own breakdown row under this label and merged into the final
+    // unpaid milestone — see utils/additionalCharges.js.
+    additionalCharges: { type: Number, default: 0, min: 0 },
+    additionalChargesLabel: { type: String, default: "Additional Charges" },
+
     discountAmount: { type: Number, default: 0, min: 0 },
     discountLabel: { type: String, default: "Discount Allowed" },
     // default 0, NOT 18 — changed 2026-09-10 per an explicit product rule:

@@ -1,4 +1,5 @@
 import Package from "../models/Package.js";
+import { visibleVendorIdClause } from "./customerVisibility.js";
 
 /**
  * The one, authoritative list of event categories that can actually be
@@ -40,15 +41,22 @@ let cache = null; // { all: string[], byVendorType: Record<string, string[]>, ex
 let inFlight = null; // de-dupes concurrent cache-miss requests into one pair of aggregations
 
 async function fetchLiveEventCategoriesData() {
+  // A hidden vendor (deactivated, Unlive, or under the profile-completion
+  // floor — see customerVisibility.js) must not contribute a filter option
+  // either: the browse endpoints already exclude their packages from
+  // results, so an event category ONLY they have would otherwise be the
+  // same "dead filter" bug this cache exists to prevent, just via a hidden
+  // vendor instead of a self-declared category.
+  const match = { packageStatus: "Live", ...(await visibleVendorIdClause()) };
   const [allRows, byTypeRows] = await Promise.all([
     Package.aggregate([
-      { $match: { packageStatus: "Live" } },
+      { $match: match },
       { $unwind: "$step1_eventAndCrew.eventCategories" },
       { $group: { _id: "$step1_eventAndCrew.eventCategories" } },
       { $sort: { _id: 1 } },
     ]),
     Package.aggregate([
-      { $match: { packageStatus: "Live" } },
+      { $match: match },
       { $unwind: "$step1_eventAndCrew.eventCategories" },
       { $group: { _id: { vendorType: "$vendorType", category: "$step1_eventAndCrew.eventCategories" } } },
       { $group: { _id: "$_id.vendorType", categories: { $addToSet: "$_id.category" } } },

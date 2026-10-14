@@ -14,6 +14,7 @@ import { buildGroupFilter } from "../utils/packageGroupFilter.js";
 import { getPackageBasePrice, getEffectivePackagePrice } from "../utils/packagePrice.js";
 import { computeLineConvenienceFee } from "../services/convenienceFeeService.js";
 import { getLiveEventCategories } from "../utils/liveEventCategoriesCache.js";
+import { VISIBLE_VENDOR_FILTER, hiddenVendorKeys, visibleVendorIdClause } from "../utils/customerVisibility.js";
 
 /**
  * Public (no-auth), read-only discovery endpoints for the customer side:
@@ -97,7 +98,9 @@ export const browsePackages = async (req, res) => {
     const { q, eventCategory, vendorType, vendorId, city, guests, date, minPrice, maxPrice, sort, page, limit } =
       req.query;
 
-    const query = { packageStatus: "Live" };
+    // Hidden vendors' packages never list (utils/customerVisibility.js). In
+    // $and because the vendorId / city filters below overwrite query.vendorId.
+    const query = { packageStatus: "Live", $and: [await visibleVendorIdClause()] };
 
     // Free-text search — added 2026-08-29 for the landing-page search box
     // (frontend's /vendors?q= param already existed and was wired up, but
@@ -367,8 +370,9 @@ export const getPopularPackages = async (req, res) => {
       "step3_policiesAndCharges.guestTiers step4_sampleMedia.media createdAt";
 
     const rankedIds = ranked.map((r) => r._id);
+    const visibleVendor = await visibleVendorIdClause();
     const rankedPackages = rankedIds.length
-      ? await Package.find({ _id: { $in: rankedIds }, packageStatus: "Live" })
+      ? await Package.find({ _id: { $in: rankedIds }, packageStatus: "Live", ...visibleVendor })
           .select(PACKAGE_FIELDS)
           .lean()
       : [];
@@ -395,6 +399,7 @@ export const getPopularPackages = async (req, res) => {
       const fillerPackages = await Package.find({
         packageStatus: "Live",
         _id: { $nin: [...usedIds] },
+        ...visibleVendor,
       })
         .select(PACKAGE_FIELDS)
         .sort({ createdAt: -1 })
@@ -435,7 +440,7 @@ export const getPackageDetail = async (req, res) => {
     // as Vendor.id rather than Vendor._id, which real-world testing found
     // is true of every currently-seeded Live package. Fetch raw + resolve
     // manually instead.
-    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" })
+    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live", ...(await visibleVendorIdClause()) })
       .select("-__v")
       .lean();
 
@@ -490,8 +495,7 @@ export const getPackageSlots = async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(packageId)) {
       return res.status(400).json({ status: "FAILED", message: "Invalid packageId" });
     }
-    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" })
-      // price fields feed the auto-slot length (getEffectivePackagePrice)
+    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live", ...(await visibleVendorIdClause()) })
       .select(
         "vendorId vendorType availabilitySettings availabilityCalendar bookingCapacity " +
           "step2_productsAndPricing.setups.price step3_policiesAndCharges.packagePricing " +
@@ -553,7 +557,9 @@ export const getPackageServiceability = async (req, res) => {
     if (!pincode) {
       return res.status(400).json({ status: "FAILED", message: "A 6-digit pincode is required (send pincode, or a location string containing one)" });
     }
-    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" }).select("vendorId").lean();
+    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live", ...(await visibleVendorIdClause()) })
+      .select("vendorId")
+      .lean();
     if (!pkg) {
       return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
     }
@@ -805,7 +811,7 @@ export const getPackageGroupVariants = async (req, res) => {
     // this endpoint was effectively 404-ing for every real package until
     // this was found and fixed while building the "Most booked" work below.
     const groupFilter = await buildGroupFilter(packageGroupId);
-    const packages = await Package.find({ ...groupFilter, packageStatus: "Live" })
+    const packages = await Package.find({ ...groupFilter, packageStatus: "Live", ...(await visibleVendorIdClause()) })
       .select(PACKAGE_FIELDS)
       .sort({ createdAt: 1 })
       .lean();
@@ -893,9 +899,11 @@ export const getVendorDetail = async (req, res) => {
       return res.status(400).json({ status: "FAILED", message: "Invalid vendorId" });
     }
 
+    // Deactivated, Unlive and under-50%-complete vendors 404 — see
+    // utils/customerVisibility.js.
     const query = mongoose.Types.ObjectId.isValid(vendorId)
-      ? { $or: [{ _id: vendorId }, { id: vendorId }], isDeactivated: { $ne: true } }
-      : { id: vendorId, isDeactivated: { $ne: true } };
+      ? { $or: [{ _id: vendorId }, { id: vendorId }], ...VISIBLE_VENDOR_FILTER }
+      : { id: vendorId, ...VISIBLE_VENDOR_FILTER };
 
     const vendor = await Vendor.findOne(query)
       .select(PUBLIC_VENDOR_FIELDS)
@@ -945,7 +953,8 @@ export const getVendorReviews = async (req, res) => {
       ? [String(vendor._id), vendor.id].filter(Boolean)
       : [String(vendorId)];
 
-    const match = { vendorId: { $in: vendorIdForms }, status: "Published" };
+    // A hidden vendor (utils/customerVisibility.js) lists no reviews.
+    const match = { vendorId: { $in: vendorIdForms, $nin: await hiddenVendorKeys() }, status: "Published" };
     if (minRating) match.rating = { $gte: minRating };
 
     const sortMap = {
@@ -996,7 +1005,7 @@ export const getPackageReviews = async (req, res) => {
     }
 
     const { minRating, sort, page, limit } = req.query;
-    const match = { packageId: String(packageId), status: "Published" };
+    const match = { packageId: String(packageId), status: "Published", ...(await visibleVendorIdClause()) };
     if (minRating) match.rating = { $gte: minRating };
 
     const sortMap = {
@@ -1063,7 +1072,7 @@ export const getPackageReviews = async (req, res) => {
 export const getFeaturedReviews = async (req, res) => {
   try {
     const { limit, minRating } = req.query;
-    const match = { status: "Published" };
+    const match = { status: "Published", ...(await visibleVendorIdClause()) };
     if (minRating) match.rating = { $gte: minRating };
 
     const reviews = await Review.find(match)
@@ -1106,10 +1115,12 @@ export const getPackageFilters = async (req, res) => {
     // only) that can only ever resolve to "no packages found" for that tab.
     // Omitted entirely by the page's initial "All" load.
     const { vendorType: scopeVendorType } = req.query;
+    // An aggregate $match is not cast; the hidden keys are strings, like
+    // every stored Package.vendorId.
     const [eventCategories, [facets]] = await Promise.all([
       getLiveEventCategories(scopeVendorType || undefined),
       Package.aggregate([
-        { $match: { packageStatus: "Live" } },
+        { $match: { packageStatus: "Live", ...(await visibleVendorIdClause()) } },
         {
           $facet: {
             vendorTypes: [{ $group: { _id: "$vendorType" } }, { $sort: { _id: 1 } }],
@@ -1168,7 +1179,7 @@ export const getPackageFilters = async (req, res) => {
     if (rawVendorIds.length) vendorIdMatches.push({ id: { $in: rawVendorIds.map(String) } });
 
     const cities = vendorIdMatches.length
-      ? await Vendor.distinct("city", { $or: vendorIdMatches, city: { $nin: [null, ""] } })
+      ? await Vendor.distinct("city", { $or: vendorIdMatches, city: { $nin: [null, ""] }, ...VISIBLE_VENDOR_FILTER })
       : [];
 
     return res.status(200).json({
@@ -1217,7 +1228,7 @@ export const getVendorFilters = async (req, res) => {
       // packages found". See liveEventCategoriesCache.js's own comment.
       getLiveEventCategories(scopeVendorType || undefined),
       Vendor.aggregate([
-        { $match: { isDeactivated: { $ne: true } } },
+        { $match: VISIBLE_VENDOR_FILTER },
         {
           $facet: {
             vendorTypes: [
@@ -1257,10 +1268,9 @@ export const browseVendors = async (req, res) => {
   try {
     const { q, vendorType, eventCategory, city, sort, page, limit } = req.query;
 
-    // $ne: true (not a strict isDeactivated: false) — most existing Vendor
-    // documents predate this field and simply don't have it set, and an
-    // absent field must not be read as "deactivated".
-    const query = { isDeactivated: { $ne: true } };
+    // Only vendors customers may see: not deactivated, not Unlive, at least
+    // 50% complete — see utils/customerVisibility.js.
+    const query = { ...VISIBLE_VENDOR_FILTER };
 
     if (vendorType) query.vendorType = { $regex: vendorTypePattern(vendorType), $options: "i" };
 
