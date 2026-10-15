@@ -1,5 +1,9 @@
 import mongoose from "mongoose";
+import axios from "axios";
 import Vendor from "../models/Vendor.js";
+import Transaction from "../models/Transaction.js";
+import generateUniqueId from "../utils/generateId.js";
+import { buildPayoutsHeaders, getPayoutsBaseUrl } from "../utils/cashfreePayoutsHelper.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import { computeCompletion, completionSummary } from "../utils/profileCompletion.js";
 import {
@@ -557,5 +561,256 @@ export const assignEmToVendor = async (req, res) => {
     res.status(200).json({ success: true, data: vendor });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// POST /api/admin/vendors/:id/payout
+// Body: { amount, remarks, bankAccountId }
+export const initiateVendorPayout = async (req, res) => {
+  try {
+    const { amount, remarks, bankAccountId } = req.body || {};
+    const parsedAmount = Number(amount);
+    if (!parsedAmount || isNaN(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({ success: false, message: "Valid positive amount is required" });
+    }
+
+    const isObjectId = mongoose.isValidObjectId(req.params.id);
+    const filter = isObjectId
+      ? { $or: [{ id: req.params.id }, { _id: req.params.id }] }
+      : { id: req.params.id };
+
+    const vendor = await Vendor.findOne(filter);
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: "Vendor not found" });
+    }
+
+    let bank = null;
+    if (bankAccountId && Array.isArray(vendor.bankDetails)) {
+      bank = vendor.bankDetails.find(
+        (b) => (b._id && b._id.toString() === String(bankAccountId)) || b.beneficiaryId === String(bankAccountId)
+      );
+    }
+    if (!bank && Array.isArray(vendor.bankDetails) && vendor.bankDetails.length > 0) {
+      if (!bankAccountId) {
+        bank = vendor.bankDetails[0];
+      }
+    }
+
+    if (!bank || !bank.accountNumber || !bank.ifscCode) {
+      return res.status(400).json({
+        success: false,
+        message: "No valid bank account details (account number and IFSC) found for payout",
+      });
+    }
+
+    let beneficiaryId = bank.beneficiaryId;
+
+    const pBase = getPayoutsBaseUrl();
+    const pHeaders = buildPayoutsHeaders();
+
+    // Check if beneficiary already exists in Cashfree
+    let exists = false;
+
+    // 1. First attempt: check by beneficiary_id if present
+    if (beneficiaryId) {
+      try {
+        const beneResp = await axios.get(`${pBase}/beneficiary`, {
+          headers: pHeaders,
+          params: { beneficiary_id: beneficiaryId },
+        });
+        if (beneResp?.status === 200) {
+          exists = true;
+        }
+      } catch (e) {
+        if (e?.response?.status !== 404) {
+          console.error(
+            `[VendorPayout] Cashfree beneficiary lookup by ID failed for ${beneficiaryId}:`,
+            e?.response?.data || e.message
+          );
+        }
+      }
+    }
+
+    // 2. Second attempt: check by bank_account_number and bank_ifsc
+    if (!exists) {
+      try {
+        const bankLookupResp = await axios.get(`${pBase}/beneficiary`, {
+          headers: pHeaders,
+          params: {
+            bank_account_number: bank.accountNumber,
+            bank_ifsc: bank.ifscCode,
+          },
+        });
+        const matchedId =
+          bankLookupResp?.data?.beneficiary_id ||
+          bankLookupResp?.data?.data?.beneficiary_id;
+
+        if (matchedId) {
+          beneficiaryId = matchedId;
+          bank.beneficiaryId = beneficiaryId;
+          await Vendor.updateOne(
+            { _id: vendor._id, "bankDetails._id": bank._id },
+            { $set: { "bankDetails.$.beneficiaryId": beneficiaryId } }
+          );
+          exists = true;
+        }
+      } catch (e) {
+        if (e?.response?.status !== 404) {
+          console.error(
+            `[VendorPayout] Cashfree beneficiary lookup by bank details failed:`,
+            e?.response?.data || e.message
+          );
+        }
+      }
+    }
+
+    // 3. Create beneficiary if not found in Cashfree
+    if (!exists) {
+      if (!beneficiaryId) {
+        beneficiaryId = generateUniqueId("BENE");
+        bank.beneficiaryId = beneficiaryId;
+        await Vendor.updateOne(
+          { _id: vendor._id, "bankDetails._id": bank._id },
+          { $set: { "bankDetails.$.beneficiaryId": beneficiaryId } }
+        );
+      }
+
+      try {
+        const benePhone = (vendor.pocPhone || vendor.phone || "9999999999")
+          .replace(/\D/g, "")
+          .slice(-10)
+          .padStart(10, "9");
+        const beneEmail = vendor.email || "noreply@eventory.in";
+        const beneName = bank.beneficiaryName || vendor.businessName || vendor.pocName || "Vendor";
+
+        await axios.post(
+          `${pBase}/beneficiary`,
+          {
+            beneficiary_id: beneficiaryId,
+            beneficiary_name: beneName,
+            beneficiary_instrument_details: {
+              bank_account_number: bank.accountNumber,
+              bank_ifsc: bank.ifscCode,
+            },
+            beneficiary_contact_details: {
+              beneficiary_email: beneEmail,
+              beneficiary_phone: benePhone,
+              beneficiary_country_code: "+91",
+            },
+          },
+          { headers: pHeaders }
+        );
+        exists = true;
+      } catch (beneErr) {
+        console.error(
+          `[VendorPayout] Failed to create beneficiary ${beneficiaryId}:`,
+          beneErr?.response?.data || beneErr.message
+        );
+
+        // Fallback: if already exists, fetch the existing beneficiary_id from Cashfree
+        const isConflict =
+          beneErr?.response?.status === 409 ||
+          JSON.stringify(beneErr?.response?.data || "").toLowerCase().includes("already exists") ||
+          (beneErr?.message || "").toLowerCase().includes("already exists");
+
+        if (isConflict) {
+          try {
+            const fallbackLookup = await axios.get(`${pBase}/beneficiary`, {
+              headers: pHeaders,
+              params: {
+                bank_account_number: bank.accountNumber,
+                bank_ifsc: bank.ifscCode,
+              },
+            });
+            const fallbackId =
+              fallbackLookup?.data?.beneficiary_id ||
+              fallbackLookup?.data?.data?.beneficiary_id;
+
+            if (fallbackId) {
+              beneficiaryId = fallbackId;
+              bank.beneficiaryId = beneficiaryId;
+              await Vendor.updateOne(
+                { _id: vendor._id, "bankDetails._id": bank._id },
+                { $set: { "bankDetails.$.beneficiaryId": beneficiaryId } }
+              );
+              exists = true;
+            }
+          } catch (lookupErr) {
+            console.error(
+              "[VendorPayout] Fallback beneficiary lookup failed:",
+              lookupErr?.response?.data || lookupErr.message
+            );
+          }
+        }
+
+        if (!exists) {
+          const errData = beneErr?.response?.data;
+          const errMsg = errData?.message || beneErr.message || "Failed to create Cashfree beneficiary";
+          return res.status(502).json({
+            success: false,
+            message: `Cashfree Beneficiary Error: ${errMsg}`,
+            details: errData,
+          });
+        }
+      }
+    }
+
+    // Generate unique transfer ID
+    const transferId = generateUniqueId("TRN");
+    const transferRemarks = str(remarks).slice(0, 70) || "Vendor Payout";
+
+    // Call Cashfree Payouts Transfers API
+    let tData;
+    try {
+      const tResp = await axios.post(
+        `${pBase}/transfers`,
+        {
+          transfer_id: transferId,
+          transfer_amount: parsedAmount,
+          beneficiary_details: { beneficiary_id: beneficiaryId },
+          transfer_mode: "imps",
+          transfer_remarks: transferRemarks,
+        },
+        { headers: pHeaders }
+      );
+      tData = tResp?.data || {};
+    } catch (tErr) {
+      console.error(
+        `[VendorPayout] Transfer failed for vendor ${vendor.id}:`,
+        tErr?.response?.data || tErr.message
+      );
+      const errData = tErr?.response?.data;
+      const errMsg = errData?.message || tErr.message || "Failed to initiate transfer";
+      return res.status(502).json({
+        success: false,
+        message: `Cashfree Transfer Error: ${errMsg}`,
+        details: errData,
+      });
+    }
+
+    // Create Transaction record in V2
+    try {
+      await Transaction.create({
+        vendorId: vendor.id,
+        amount: parsedAmount,
+        milestoneTitle: remarks || "Manual Payout",
+        status: "Received",
+        receivedDate: new Date(),
+        transferId: transferId,
+        cfTransferStatus: tData?.status || "SUCCESS",
+      });
+    } catch (txErr) {
+      console.error(`[VendorPayout] Failed to save Transaction record for ${transferId}:`, txErr);
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        transfer_id: transferId,
+        ...tData,
+      },
+    });
+  } catch (error) {
+    sendError(res, error);
   }
 };
