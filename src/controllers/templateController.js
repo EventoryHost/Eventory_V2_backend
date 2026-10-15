@@ -113,6 +113,16 @@ export const createTemplate = async (req, res) => {
       packages.push(sourcePkg);
     }
 
+    // Sanitize template snapshot packages: force packageStatus to "Draft"
+    // so new packages seeded from this template never inherit "Live" status.
+    const sanitizedPackages = packages.map((pkg) => {
+      const copy = { ...pkg };
+      copy.packageStatus = "Draft";
+      delete copy.emAction;
+      delete copy.reviewHistory;
+      return copy;
+    });
+
     const template = await Template.create({
       packageName: packageName?.trim() || name || "Untitled Package",
       note: note?.trim() || undefined,
@@ -122,7 +132,7 @@ export const createTemplate = async (req, res) => {
       ownerVendorCustomId: vendor.id,
       ownerName: vendor.businessName,
       sourcePackageId: sourcePkg._id,
-      data: { packages },
+      data: { packages: sanitizedPackages },
     });
 
     return res.status(201).json({

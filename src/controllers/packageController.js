@@ -362,15 +362,13 @@ export const updatePackage = async (req, res) => {
   }
 };
 
-// Progress order, furthest-along first. A group's variants do not always agree
-// — a duplicate starts as a Draft beside a submitted sibling — so the card the
-// vendor sees, and therefore the tab it is counted under, takes the
-// furthest-along status in the group. Mirrors InventoryBloc._statusRank.
+// Action-needed states take priority so a group needing fixes is counted under
+// Submitted rather than staying hidden under Live. Mirrors InventoryBloc._statusRank.
 const STATUS_PROGRESS = [
-  "Live",
-  "Approved",
-  "Under Review",
   "Action Required",
+  "Under Review",
+  "Approved",
+  "Live",
   "Draft",
   "Deleted",
 ];
