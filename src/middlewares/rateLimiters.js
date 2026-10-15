@@ -62,3 +62,14 @@ export const publicBrowseLimiter = rateLimit({
   legacyHeaders: false,
   message: { success: false, message: "Too many requests. Please slow down." },
 });
+
+// POST /api/customer/become-vendor/leads — a public write (creates a DB
+// record), unlike the read-only browsing publicBrowseLimiter above covers;
+// kept tight since there's no account/session to tie repeat submissions to.
+export const vendorLeadLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { success: false, message: "Too many submissions from this device. Please try again later." },
+});
