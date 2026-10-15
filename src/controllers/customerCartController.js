@@ -9,6 +9,7 @@ import { round2 } from "../utils/money.js";
 import { computeCartQuote } from "../services/cartPricingService.js";
 import { resolveVendorRefId } from "../utils/resolveVendor.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
+import { hiddenVendorKeys, visibleVendorIdClause } from "../utils/customerVisibility.js";
 
 /**
  * Cart CRUD — Phase 3 Step 13. Every route runs behind identifyCartOwner
@@ -78,11 +79,14 @@ async function buildCartPayload(cart) {
     ? await Package.find({ _id: { $in: packageIds } }).select(PACKAGE_REVALIDATION_FIELDS).lean()
     : [];
   const packageById = new Map(packages.map((p) => [String(p._id), p]));
+  const hiddenVendors = new Set(await hiddenVendorKeys());
 
   const enrichedItems = await Promise.all(
     items.map(async (item) => {
       const pkg = packageById.get(String(item.packageId));
-      const stillLive = Boolean(pkg && pkg.packageStatus === "Live");
+      // A package whose vendor is hidden from customers (Unlive, deactivated,
+      // under 50% complete — utils/customerVisibility.js) is unavailable too.
+      const stillLive = Boolean(pkg && pkg.packageStatus === "Live" && !hiddenVendors.has(String(pkg.vendorId)));
       // getEffectivePackagePrice, not a plain ?? null — see that util's own
       // comment: packagePricing.price is never set for Caterer/Decorator
       // packages, which would otherwise misreport their real (nonzero)
@@ -252,7 +256,7 @@ export const addCartItem = async (req, res) => {
     // hydrating a full Document (even with no populate involved at all),
     // but preserves the real raw stored value on a plain lean() object.
     // Confirmed via direct testing while building this fix (testsuite.pdf).
-    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" }).lean();
+    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live", ...(await visibleVendorIdClause()) }).lean();
     if (!pkg) {
       return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
     }

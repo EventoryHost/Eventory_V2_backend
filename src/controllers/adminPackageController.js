@@ -1,3 +1,4 @@
+import mongoose from "mongoose";
 import Package, { PACKAGE_STATUSES } from "../models/Package.js";
 import Vendor from "../models/Vendor.js";
 import {
@@ -552,17 +553,27 @@ export const getAllPackages = async (req, res) => {
       .limit(parseInt(limit))
       .lean();
 
-    const vendorIds = [...new Set(packagesRaw.map(p => p.vendorId))];
-    const vendors = await Vendor.find({ id: { $in: vendorIds } })
-      .select("id businessName")
+    // Package.vendorId holds the vendor's business id ("VEN...") on most
+    // documents but a Mongo _id on some (see utils/resolveVendor.js), so the
+    // join matches either — a missed join showed the package with no vendor
+    // name, which made it unfindable by vendor in the admin library.
+    const vendorIds = [...new Set(packagesRaw.map(p => String(p.vendorId || "")).filter(Boolean))];
+    const objectIds = vendorIds.filter((v) => mongoose.isValidObjectId(v));
+    const vendors = await Vendor.find({
+      $or: [{ id: { $in: vendorIds } }, ...(objectIds.length ? [{ _id: { $in: objectIds } }] : [])],
+    })
+      .select("id businessName pocName isIndividual")
       .lean();
 
     const vendorMap = {};
-    vendors.forEach(v => vendorMap[v.id] = v);
+    vendors.forEach(v => {
+      vendorMap[v.id] = v;
+      vendorMap[String(v._id)] = v;
+    });
 
     const packages = packagesRaw.map(p => ({
       ...p,
-      vendorId: vendorMap[p.vendorId] || p.vendorId
+      vendorId: vendorMap[String(p.vendorId || "")] || p.vendorId
     }));
 
     const total = await Package.countDocuments(query);
@@ -585,8 +596,21 @@ export const getAllPackages = async (req, res) => {
  * PUT /api/admin/packages/:packageId/status
  *
  * The support escape hatch: it bypasses the state machine on purpose, so it
- * stays a single-document write.
+ * stays a single-document write. It cannot publish: Approved and Live only
+ * come from approve / go-live, which leave Approved / WentLive audit rows
+ * (changed 2026-10-13 — packages went Live through here with no trace).
+ * Every other write it makes is recorded in reviewHistory too.
  */
+const STATUS_ONLY_VIA_REVIEW = ["Approved", "Live"];
+
+// The audit event for a support status write. Draft has no matching
+// REVIEW_EVENTS entry, so it is written without a history row.
+const STATUS_WRITE_EVENT = {
+  "Under Review": "Submitted",
+  "Action Required": "ActionRaised",
+  Deleted: "Rejected",
+};
+
 export const updatePackageStatus = async (req, res) => {
   try {
     const { packageStatus } = req.body;
@@ -594,12 +618,22 @@ export const updatePackageStatus = async (req, res) => {
     if (!PACKAGE_STATUSES.includes(packageStatus)) {
       return res.status(400).json({ success: false, message: "Invalid package status" });
     }
+    if (STATUS_ONLY_VIA_REVIEW.includes(packageStatus)) {
+      return res.status(400).json({
+        success: false,
+        message: `"${packageStatus}" can't be set directly — use approve, then go-live.`,
+      });
+    }
 
-    const pkg = await Package.findByIdAndUpdate(
-      req.params.packageId,
-      { packageStatus },
-      { new: true }
-    );
+    const event = STATUS_WRITE_EVENT[packageStatus];
+    const update = { $set: { packageStatus } };
+    if (event) {
+      update.$push = {
+        reviewHistory: { event, by: req.body?.by || "Admin", at: new Date() },
+      };
+    }
+
+    const pkg = await Package.findByIdAndUpdate(req.params.packageId, update, { new: true });
     if (!pkg) return res.status(404).json({ success: false, message: "Package not found" });
 
     res.status(200).json({ success: true, data: pkg });

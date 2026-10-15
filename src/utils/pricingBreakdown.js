@@ -18,9 +18,13 @@
 
 const round2 = (value) => Math.round(value * 100) / 100;
 
+// `labelKey` names a vendor-authored label on `pricing` that overrides the
+// default. additionalCharges: last-moment extras, merged into the final
+// payment — see utils/additionalCharges.js.
 const ADDITION_ROWS = [
   { key: "itemsAdded", label: "Items Added" },
   { key: "addonsAdded", label: "Add-ons added" },
+  { key: "additionalCharges", label: "Additional Charges", labelKey: "additionalChargesLabel" },
 ];
 
 const DEDUCTION_ROWS = [
@@ -30,14 +34,14 @@ const DEDUCTION_ROWS = [
 
 const sumRows = (rows) => rows.reduce((total, row) => total + row.amount, 0);
 
-const buildPricingBreakdown = (record) => {
+export const buildPricingBreakdown = (record) => {
   const pricing = record.pricing || {};
   const originalPackagePrice =
     pricing.basePrice ?? record.packageSnapshot?.price ?? 0;
 
   const additions = ADDITION_ROWS.map((row) => ({
     key: row.key,
-    label: row.label,
+    label: (row.labelKey && String(pricing[row.labelKey] || "").trim()) || row.label,
     amount: round2(pricing[row.key] || 0),
   })).filter((row) => row.amount !== 0);
 

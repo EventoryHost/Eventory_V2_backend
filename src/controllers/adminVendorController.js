@@ -1,5 +1,9 @@
 import mongoose from "mongoose";
+import axios from "axios";
 import Vendor from "../models/Vendor.js";
+import Transaction from "../models/Transaction.js";
+import generateUniqueId from "../utils/generateId.js";
+import { buildPayoutsHeaders, getPayoutsBaseUrl } from "../utils/cashfreePayoutsHelper.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import { computeCompletion, completionSummary } from "../utils/profileCompletion.js";
 import {
@@ -9,6 +13,12 @@ import {
   statusFilter,
 } from "../utils/vendorVerificationLegacy.js";
 import { LEGACY_SECTION_STEPS } from "../constants/vendorSteps.js";
+import {
+  HIDDEN_VENDOR_FILTER,
+  VISIBLE_VENDOR_FILTER,
+  customerVisibility,
+  invalidateHiddenVendors,
+} from "../utils/customerVisibility.js";
 import { VERIFICATION_STATUSES } from "../models/schemas/vendorVerificationSchema.js";
 import {
   reviewStep,
@@ -43,16 +53,22 @@ const sendError = (res, error) => {
 const str = (value) => (typeof value === "string" ? value.trim() : "");
 const reviewerOf = (body) => str(body?.reviewedBy) || str(body?.by) || "Admin";
 
-/** The vendor as the admin screens get it: document + completion, side by side. */
+/**
+ * The vendor as the admin screens get it: document + completion, side by
+ * side, plus whether customers can see them. customerVisibility reads the
+ * stored completionPercent — the figure the customer queries filter on.
+ */
 const vendorResponse = (vendor) => {
   const data = typeof vendor.toObject === "function" ? vendor.toObject() : { ...vendor };
+  const visibility = customerVisibility(data);
   if (!hasVerificationStatus(data)) data.verification = effectiveVerification(data);
   const profileCompletion = computeCompletion(data);
-  return { success: true, data: { ...data, profileCompletion }, profileCompletion };
+  return { success: true, data: { ...data, profileCompletion, customerVisibility: visibility }, profileCompletion };
 };
 
 /** A lean list row: effective verification plus the queue's completion summary. */
 const queueRow = (row) => {
+  row.customerVisibility = customerVisibility(row);
   if (!hasVerificationStatus(row)) {
     row.verification = effectiveVerification(row);
   }
@@ -424,13 +440,21 @@ export const reviewSection = async (req, res) => {
 // GET /api/admin/vendors/all
 export const getAllVendors = async (req, res) => {
   try {
-    const { page = 1, limit = 10, vendorType, isVerified, isDeactivated, city, state, search, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
+    const { page = 1, limit = 10, vendorType, isVerified, isDeactivated, customerVisible, city, state, search, sortBy = 'createdAt', sortOrder = 'desc' } = req.query;
     const skip = (page - 1) * limit;
 
     const query = {};
     if (vendorType) query.vendorType = vendorType;
     if (isVerified !== undefined && isVerified !== 'all') query.isVerified = isVerified === 'true';
-    if (isDeactivated !== undefined && isDeactivated !== 'all') query.isDeactivated = isDeactivated === 'true';
+    // $ne: true for "live" — most vendor documents predate the field and have
+    // no isDeactivated at all (same rule as customerDiscoveryController).
+    if (isDeactivated !== undefined && isDeactivated !== 'all') {
+      query.isDeactivated = isDeactivated === 'true' ? true : { $ne: true };
+    }
+    // Whether customers can see the vendor (utils/customerVisibility.js):
+    // not deactivated, not Unlive, at least 50% complete.
+    const visibilityClause =
+      customerVisible === 'true' ? VISIBLE_VENDOR_FILTER : customerVisible === 'false' ? HIDDEN_VENDOR_FILTER : null;
     if (city) query.city = { $regex: `^${escapeRegex(city)}$`, $options: 'i' };
     if (state) query.state = { $regex: `^${escapeRegex(state)}$`, $options: 'i' };
     
@@ -445,12 +469,12 @@ export const getAllVendors = async (req, res) => {
       ];
     }
 
+    // In $and: HIDDEN_VENDOR_FILTER is an $or, which `search` above owns.
+    if (visibilityClause) query.$and = [visibilityClause];
+
     const sort = {};
     sort[sortBy] = sortOrder === 'asc' ? 1 : -1;
 
-    console.log("[getAllVendors] req.query:", req.query);
-    console.log("[getAllVendors] Constructed query:", JSON.stringify(query));
-    
     const vendors = await Vendor.find(query)
       .sort(sort)
       .skip(skip)
@@ -460,7 +484,10 @@ export const getAllVendors = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: vendors,
+      data: vendors.map((v) => {
+        const row = v.toObject();
+        return { ...row, customerVisibility: customerVisibility(row) };
+      }),
       pagination: {
         total,
         page: parseInt(page),
@@ -469,6 +496,37 @@ export const getAllVendors = async (req, res) => {
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// PUT /api/admin/vendors/:id/visibility — admin Live / Unlive
+// Body: { hidden: boolean, reason? }
+// Unlive hides the vendor and every package of theirs from customers; the
+// vendor keeps their app login (unlike deactivation). Existing bookings are
+// untouched. A vendor under 50% complete stays hidden whatever this says.
+export const setVendorVisibility = async (req, res) => {
+  try {
+    const { hidden, reason } = req.body || {};
+    if (typeof hidden !== "boolean") {
+      return res.status(400).json({ success: false, message: "`hidden` must be true or false" });
+    }
+    const filter = mongoose.isValidObjectId(req.params.id)
+      ? { $or: [{ id: req.params.id }, { _id: req.params.id }] }
+      : { id: req.params.id };
+    const vendor = await Vendor.findOneAndUpdate(
+      filter,
+      {
+        $set: hidden
+          ? { hiddenByAdmin: true, hiddenByAdminAt: new Date(), hiddenByAdminReason: str(reason).slice(0, 500) || null }
+          : { hiddenByAdmin: false, hiddenByAdminAt: null, hiddenByAdminReason: null },
+      },
+      { new: true }
+    );
+    if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
+    invalidateHiddenVendors();
+    res.status(200).json(vendorResponse(vendor));
+  } catch (error) {
+    sendError(res, error);
   }
 };
 
@@ -503,5 +561,256 @@ export const assignEmToVendor = async (req, res) => {
     res.status(200).json({ success: true, data: vendor });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// POST /api/admin/vendors/:id/payout
+// Body: { amount, remarks, bankAccountId }
+export const initiateVendorPayout = async (req, res) => {
+  try {
+    const { amount, remarks, bankAccountId } = req.body || {};
+    const parsedAmount = Number(amount);
+    if (!parsedAmount || isNaN(parsedAmount) || parsedAmount <= 0) {
+      return res.status(400).json({ success: false, message: "Valid positive amount is required" });
+    }
+
+    const isObjectId = mongoose.isValidObjectId(req.params.id);
+    const filter = isObjectId
+      ? { $or: [{ id: req.params.id }, { _id: req.params.id }] }
+      : { id: req.params.id };
+
+    const vendor = await Vendor.findOne(filter);
+    if (!vendor) {
+      return res.status(404).json({ success: false, message: "Vendor not found" });
+    }
+
+    let bank = null;
+    if (bankAccountId && Array.isArray(vendor.bankDetails)) {
+      bank = vendor.bankDetails.find(
+        (b) => (b._id && b._id.toString() === String(bankAccountId)) || b.beneficiaryId === String(bankAccountId)
+      );
+    }
+    if (!bank && Array.isArray(vendor.bankDetails) && vendor.bankDetails.length > 0) {
+      if (!bankAccountId) {
+        bank = vendor.bankDetails[0];
+      }
+    }
+
+    if (!bank || !bank.accountNumber || !bank.ifscCode) {
+      return res.status(400).json({
+        success: false,
+        message: "No valid bank account details (account number and IFSC) found for payout",
+      });
+    }
+
+    let beneficiaryId = bank.beneficiaryId;
+
+    const pBase = getPayoutsBaseUrl();
+    const pHeaders = buildPayoutsHeaders();
+
+    // Check if beneficiary already exists in Cashfree
+    let exists = false;
+
+    // 1. First attempt: check by beneficiary_id if present
+    if (beneficiaryId) {
+      try {
+        const beneResp = await axios.get(`${pBase}/beneficiary`, {
+          headers: pHeaders,
+          params: { beneficiary_id: beneficiaryId },
+        });
+        if (beneResp?.status === 200) {
+          exists = true;
+        }
+      } catch (e) {
+        if (e?.response?.status !== 404) {
+          console.error(
+            `[VendorPayout] Cashfree beneficiary lookup by ID failed for ${beneficiaryId}:`,
+            e?.response?.data || e.message
+          );
+        }
+      }
+    }
+
+    // 2. Second attempt: check by bank_account_number and bank_ifsc
+    if (!exists) {
+      try {
+        const bankLookupResp = await axios.get(`${pBase}/beneficiary`, {
+          headers: pHeaders,
+          params: {
+            bank_account_number: bank.accountNumber,
+            bank_ifsc: bank.ifscCode,
+          },
+        });
+        const matchedId =
+          bankLookupResp?.data?.beneficiary_id ||
+          bankLookupResp?.data?.data?.beneficiary_id;
+
+        if (matchedId) {
+          beneficiaryId = matchedId;
+          bank.beneficiaryId = beneficiaryId;
+          await Vendor.updateOne(
+            { _id: vendor._id, "bankDetails._id": bank._id },
+            { $set: { "bankDetails.$.beneficiaryId": beneficiaryId } }
+          );
+          exists = true;
+        }
+      } catch (e) {
+        if (e?.response?.status !== 404) {
+          console.error(
+            `[VendorPayout] Cashfree beneficiary lookup by bank details failed:`,
+            e?.response?.data || e.message
+          );
+        }
+      }
+    }
+
+    // 3. Create beneficiary if not found in Cashfree
+    if (!exists) {
+      if (!beneficiaryId) {
+        beneficiaryId = generateUniqueId("BENE");
+        bank.beneficiaryId = beneficiaryId;
+        await Vendor.updateOne(
+          { _id: vendor._id, "bankDetails._id": bank._id },
+          { $set: { "bankDetails.$.beneficiaryId": beneficiaryId } }
+        );
+      }
+
+      try {
+        const benePhone = (vendor.pocPhone || vendor.phone || "9999999999")
+          .replace(/\D/g, "")
+          .slice(-10)
+          .padStart(10, "9");
+        const beneEmail = vendor.email || "noreply@eventory.in";
+        const beneName = bank.beneficiaryName || vendor.businessName || vendor.pocName || "Vendor";
+
+        await axios.post(
+          `${pBase}/beneficiary`,
+          {
+            beneficiary_id: beneficiaryId,
+            beneficiary_name: beneName,
+            beneficiary_instrument_details: {
+              bank_account_number: bank.accountNumber,
+              bank_ifsc: bank.ifscCode,
+            },
+            beneficiary_contact_details: {
+              beneficiary_email: beneEmail,
+              beneficiary_phone: benePhone,
+              beneficiary_country_code: "+91",
+            },
+          },
+          { headers: pHeaders }
+        );
+        exists = true;
+      } catch (beneErr) {
+        console.error(
+          `[VendorPayout] Failed to create beneficiary ${beneficiaryId}:`,
+          beneErr?.response?.data || beneErr.message
+        );
+
+        // Fallback: if already exists, fetch the existing beneficiary_id from Cashfree
+        const isConflict =
+          beneErr?.response?.status === 409 ||
+          JSON.stringify(beneErr?.response?.data || "").toLowerCase().includes("already exists") ||
+          (beneErr?.message || "").toLowerCase().includes("already exists");
+
+        if (isConflict) {
+          try {
+            const fallbackLookup = await axios.get(`${pBase}/beneficiary`, {
+              headers: pHeaders,
+              params: {
+                bank_account_number: bank.accountNumber,
+                bank_ifsc: bank.ifscCode,
+              },
+            });
+            const fallbackId =
+              fallbackLookup?.data?.beneficiary_id ||
+              fallbackLookup?.data?.data?.beneficiary_id;
+
+            if (fallbackId) {
+              beneficiaryId = fallbackId;
+              bank.beneficiaryId = beneficiaryId;
+              await Vendor.updateOne(
+                { _id: vendor._id, "bankDetails._id": bank._id },
+                { $set: { "bankDetails.$.beneficiaryId": beneficiaryId } }
+              );
+              exists = true;
+            }
+          } catch (lookupErr) {
+            console.error(
+              "[VendorPayout] Fallback beneficiary lookup failed:",
+              lookupErr?.response?.data || lookupErr.message
+            );
+          }
+        }
+
+        if (!exists) {
+          const errData = beneErr?.response?.data;
+          const errMsg = errData?.message || beneErr.message || "Failed to create Cashfree beneficiary";
+          return res.status(502).json({
+            success: false,
+            message: `Cashfree Beneficiary Error: ${errMsg}`,
+            details: errData,
+          });
+        }
+      }
+    }
+
+    // Generate unique transfer ID
+    const transferId = generateUniqueId("TRN");
+    const transferRemarks = str(remarks).slice(0, 70) || "Vendor Payout";
+
+    // Call Cashfree Payouts Transfers API
+    let tData;
+    try {
+      const tResp = await axios.post(
+        `${pBase}/transfers`,
+        {
+          transfer_id: transferId,
+          transfer_amount: parsedAmount,
+          beneficiary_details: { beneficiary_id: beneficiaryId },
+          transfer_mode: "imps",
+          transfer_remarks: transferRemarks,
+        },
+        { headers: pHeaders }
+      );
+      tData = tResp?.data || {};
+    } catch (tErr) {
+      console.error(
+        `[VendorPayout] Transfer failed for vendor ${vendor.id}:`,
+        tErr?.response?.data || tErr.message
+      );
+      const errData = tErr?.response?.data;
+      const errMsg = errData?.message || tErr.message || "Failed to initiate transfer";
+      return res.status(502).json({
+        success: false,
+        message: `Cashfree Transfer Error: ${errMsg}`,
+        details: errData,
+      });
+    }
+
+    // Create Transaction record in V2
+    try {
+      await Transaction.create({
+        vendorId: vendor.id,
+        amount: parsedAmount,
+        milestoneTitle: remarks || "Manual Payout",
+        status: "Received",
+        receivedDate: new Date(),
+        transferId: transferId,
+        cfTransferStatus: tData?.status || "SUCCESS",
+      });
+    } catch (txErr) {
+      console.error(`[VendorPayout] Failed to save Transaction record for ${transferId}:`, txErr);
+    }
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        transfer_id: transferId,
+        ...tData,
+      },
+    });
+  } catch (error) {
+    sendError(res, error);
   }
 };

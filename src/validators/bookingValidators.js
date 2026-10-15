@@ -12,6 +12,7 @@ const PRICING_AMOUNT_FIELDS = [
   "addonsAdded",
   "itemsRemoved",
   "addonsRemoved",
+  "additionalCharges",
   "discountAmount",
 ];
 
@@ -95,6 +96,14 @@ const checkPricing = (pricing, errors) => {
       pricing.taxRatePct > 100)
   ) {
     errors.push("pricing.taxRatePct must be a number between 0 and 100");
+  }
+  if (
+    pricing.additionalChargesLabel !== undefined &&
+    pricing.additionalChargesLabel !== null &&
+    (typeof pricing.additionalChargesLabel !== "string" ||
+      pricing.additionalChargesLabel.length > 100)
+  ) {
+    errors.push("pricing.additionalChargesLabel must be a string of at most 100 characters");
   }
 };
 

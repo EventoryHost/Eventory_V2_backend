@@ -13,6 +13,8 @@ import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { buildGroupFilter } from "../utils/packageGroupFilter.js";
 import { getPackageBasePrice, getEffectivePackagePrice } from "../utils/packagePrice.js";
 import { computeLineConvenienceFee } from "../services/convenienceFeeService.js";
+import { getLiveEventCategories } from "../utils/liveEventCategoriesCache.js";
+import { VISIBLE_VENDOR_FILTER, hiddenVendorKeys, visibleVendorIdClause } from "../utils/customerVisibility.js";
 
 /**
  * Public (no-auth), read-only discovery endpoints for the customer side:
@@ -96,7 +98,9 @@ export const browsePackages = async (req, res) => {
     const { q, eventCategory, vendorType, vendorId, city, guests, date, minPrice, maxPrice, sort, page, limit } =
       req.query;
 
-    const query = { packageStatus: "Live" };
+    // Hidden vendors' packages never list (utils/customerVisibility.js). In
+    // $and because the vendorId / city filters below overwrite query.vendorId.
+    const query = { packageStatus: "Live", $and: [await visibleVendorIdClause()] };
 
     // Free-text search — added 2026-08-29 for the landing-page search box
     // (frontend's /vendors?q= param already existed and was wired up, but
@@ -151,10 +155,26 @@ export const browsePackages = async (req, res) => {
       query.vendorId = vendor ? { $in: [vendor._id, vendor.id].filter(Boolean) } : "__no_such_vendor__";
     }
 
+    // Comma-separated = OR across several categories (the sidebar's
+    // multi-select checkboxes) — a single value still works exactly as
+    // before. Real bug fixed 2026-10-14: the frontend used to apply a
+    // multi-select event-type filter entirely client-side, against
+    // whichever single page of "newest"/default results happened to already
+    // be loaded — a real, Live package tagged with the picked category
+    // could easily not be on that page, showing "no packages found" for a
+    // category that was never actually empty. Matching server-side means
+    // every selectable category (itself only ever offered because at least
+    // one Live package has it — see liveEventCategoriesCache.js) reliably
+    // finds its real packages regardless of pagination/sort.
     if (eventCategory) {
-      query["step1_eventAndCrew.eventCategories"] = {
-        $elemMatch: { $regex: `^${escapeRegex(eventCategory)}$`, $options: "i" },
-      };
+      const categories = String(eventCategory)
+        .split(",")
+        .map((c) => c.trim())
+        .filter(Boolean);
+      if (categories.length) {
+        const pattern = categories.map((c) => `^${escapeRegex(c)}$`).join("|");
+        query["step1_eventAndCrew.eventCategories"] = { $elemMatch: { $regex: pattern, $options: "i" } };
+      }
     }
 
     if (guests) {
@@ -350,8 +370,9 @@ export const getPopularPackages = async (req, res) => {
       "step3_policiesAndCharges.guestTiers step4_sampleMedia.media createdAt";
 
     const rankedIds = ranked.map((r) => r._id);
+    const visibleVendor = await visibleVendorIdClause();
     const rankedPackages = rankedIds.length
-      ? await Package.find({ _id: { $in: rankedIds }, packageStatus: "Live" })
+      ? await Package.find({ _id: { $in: rankedIds }, packageStatus: "Live", ...visibleVendor })
           .select(PACKAGE_FIELDS)
           .lean()
       : [];
@@ -378,6 +399,7 @@ export const getPopularPackages = async (req, res) => {
       const fillerPackages = await Package.find({
         packageStatus: "Live",
         _id: { $nin: [...usedIds] },
+        ...visibleVendor,
       })
         .select(PACKAGE_FIELDS)
         .sort({ createdAt: -1 })
@@ -418,14 +440,37 @@ export const getPackageDetail = async (req, res) => {
     // as Vendor.id rather than Vendor._id, which real-world testing found
     // is true of every currently-seeded Live package. Fetch raw + resolve
     // manually instead.
-    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" })
+    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live", ...(await visibleVendorIdClause()) })
       .select("-__v")
       .lean();
 
     if (!pkg) {
       return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
     }
-    pkg.vendorId = await resolveVendorForPackage(pkg.vendorId);
+    // gstNumber added to the usual public projection ONLY to gate GST
+    // below — stripped back off before this vendor object reaches the
+    // response (publicFields.js deliberately excludes it from every
+    // customer-facing read; the response still needs to be governed by
+    // that same whitelist, not just carry an extra field).
+    pkg.vendorId = await resolveVendorForPackage(pkg.vendorId, `${PUBLIC_VENDOR_FIELDS} gstNumber`);
+    const vendorHasGst = Boolean(pkg.vendorId?.gstNumber);
+    if (pkg.vendorId) delete pkg.vendorId.gstNumber;
+
+    // PM-reported 2026-10-15: a vendor can set gstRatePercent/gstInclusive
+    // on a package without ever having registered a real GSTIN (Vendor.
+    // gstNumber) — nothing vendor-side enforces the two together, and GST
+    // was showing/charging on the PDP, cart and checkout for vendors who
+    // never actually registered one. Neutralized directly on the raw
+    // package object HERE, not just in computePricingPreview below —
+    // getPackageDetail.ts (frontend) reads step3_policiesAndCharges.
+    // gstRatePercent/gstInclusive straight off this same `package` field in
+    // the response for its own PDP price estimate, independently of
+    // pricingPreview, so gating pricingPreview alone wouldn't have reached
+    // that code path.
+    if (!vendorHasGst && pkg.step3_policiesAndCharges) {
+      pkg.step3_policiesAndCharges.gstInclusive = false;
+      pkg.step3_policiesAndCharges.gstRatePercent = null;
+    }
     normalizePackagePricing(pkg);
 
     const { date, guests, time } = req.query;
@@ -473,8 +518,7 @@ export const getPackageSlots = async (req, res) => {
     if (!mongoose.Types.ObjectId.isValid(packageId)) {
       return res.status(400).json({ status: "FAILED", message: "Invalid packageId" });
     }
-    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" })
-      // price fields feed the auto-slot length (getEffectivePackagePrice)
+    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live", ...(await visibleVendorIdClause()) })
       .select(
         "vendorId vendorType availabilitySettings availabilityCalendar bookingCapacity " +
           "step2_productsAndPricing.setups.price step3_policiesAndCharges.packagePricing " +
@@ -536,7 +580,9 @@ export const getPackageServiceability = async (req, res) => {
     if (!pincode) {
       return res.status(400).json({ status: "FAILED", message: "A 6-digit pincode is required (send pincode, or a location string containing one)" });
     }
-    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live" }).select("vendorId").lean();
+    const pkg = await Package.findOne({ _id: packageId, packageStatus: "Live", ...(await visibleVendorIdClause()) })
+      .select("vendorId")
+      .lean();
     if (!pkg) {
       return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
     }
@@ -642,7 +688,10 @@ function computePricingPreview(pkg, { date, guests }) {
   // the price NOT inclusive of GST and set a real rate. When gstInclusive is
   // true, GST is already baked into the price — not a separate charge, so it
   // must not be shown at all (gstRatePercent/gstAmount both null here, same
-  // as "no GST configured"), not just left out of `total`.
+  // as "no GST configured"), not just left out of `total`. (The caller —
+  // getPackageDetail above — has already zeroed both fields on `pricing`
+  // when the vendor has no real GSTIN on file, so there's nothing extra to
+  // check here for that case.)
   let gstAmount = null;
   let total = subtotal;
   const gstRatePercent = gstInclusive ? null : rawGstRatePercent;
@@ -788,7 +837,7 @@ export const getPackageGroupVariants = async (req, res) => {
     // this endpoint was effectively 404-ing for every real package until
     // this was found and fixed while building the "Most booked" work below.
     const groupFilter = await buildGroupFilter(packageGroupId);
-    const packages = await Package.find({ ...groupFilter, packageStatus: "Live" })
+    const packages = await Package.find({ ...groupFilter, packageStatus: "Live", ...(await visibleVendorIdClause()) })
       .select(PACKAGE_FIELDS)
       .sort({ createdAt: 1 })
       .lean();
@@ -876,9 +925,11 @@ export const getVendorDetail = async (req, res) => {
       return res.status(400).json({ status: "FAILED", message: "Invalid vendorId" });
     }
 
+    // Deactivated, Unlive and under-50%-complete vendors 404 — see
+    // utils/customerVisibility.js.
     const query = mongoose.Types.ObjectId.isValid(vendorId)
-      ? { $or: [{ _id: vendorId }, { id: vendorId }], isDeactivated: { $ne: true } }
-      : { id: vendorId, isDeactivated: { $ne: true } };
+      ? { $or: [{ _id: vendorId }, { id: vendorId }], ...VISIBLE_VENDOR_FILTER }
+      : { id: vendorId, ...VISIBLE_VENDOR_FILTER };
 
     const vendor = await Vendor.findOne(query)
       .select(PUBLIC_VENDOR_FIELDS)
@@ -928,7 +979,8 @@ export const getVendorReviews = async (req, res) => {
       ? [String(vendor._id), vendor.id].filter(Boolean)
       : [String(vendorId)];
 
-    const match = { vendorId: { $in: vendorIdForms }, status: "Published" };
+    // A hidden vendor (utils/customerVisibility.js) lists no reviews.
+    const match = { vendorId: { $in: vendorIdForms, $nin: await hiddenVendorKeys() }, status: "Published" };
     if (minRating) match.rating = { $gte: minRating };
 
     const sortMap = {
@@ -979,7 +1031,7 @@ export const getPackageReviews = async (req, res) => {
     }
 
     const { minRating, sort, page, limit } = req.query;
-    const match = { packageId: String(packageId), status: "Published" };
+    const match = { packageId: String(packageId), status: "Published", ...(await visibleVendorIdClause()) };
     if (minRating) match.rating = { $gte: minRating };
 
     const sortMap = {
@@ -1046,7 +1098,7 @@ export const getPackageReviews = async (req, res) => {
 export const getFeaturedReviews = async (req, res) => {
   try {
     const { limit, minRating } = req.query;
-    const match = { status: "Published" };
+    const match = { status: "Published", ...(await visibleVendorIdClause()) };
     if (minRating) match.rating = { $gte: minRating };
 
     const reviews = await Review.find(match)
@@ -1083,37 +1135,43 @@ export const getFeaturedReviews = async (req, res) => {
  */
 export const getPackageFilters = async (req, res) => {
   try {
-    const [facets] = await Package.aggregate([
-      { $match: { packageStatus: "Live" } },
-      {
-        $facet: {
-          eventCategories: [
-            { $unwind: "$step1_eventAndCrew.eventCategories" },
-            { $group: { _id: "$step1_eventAndCrew.eventCategories" } },
-            { $sort: { _id: 1 } },
-          ],
-          vendorTypes: [{ $group: { _id: "$vendorType" } }, { $sort: { _id: 1 } }],
-          priceRange: [
-            {
-              $group: {
-                _id: null,
-                min: { $min: "$step3_policiesAndCharges.packagePricing.price" },
-                max: { $max: "$step3_policiesAndCharges.packagePricing.price" },
+    // Optional — a category tab (e.g. the package listing's Decorator tab)
+    // asks for this to get an Event Type list scoped to just ITS OWN vendor
+    // type, so it never offers an option (like "Workshop", Photographer-
+    // only) that can only ever resolve to "no packages found" for that tab.
+    // Omitted entirely by the page's initial "All" load.
+    const { vendorType: scopeVendorType } = req.query;
+    // An aggregate $match is not cast; the hidden keys are strings, like
+    // every stored Package.vendorId.
+    const [eventCategories, [facets]] = await Promise.all([
+      getLiveEventCategories(scopeVendorType || undefined),
+      Package.aggregate([
+        { $match: { packageStatus: "Live", ...(await visibleVendorIdClause()) } },
+        {
+          $facet: {
+            vendorTypes: [{ $group: { _id: "$vendorType" } }, { $sort: { _id: 1 } }],
+            priceRange: [
+              {
+                $group: {
+                  _id: null,
+                  min: { $min: "$step3_policiesAndCharges.packagePricing.price" },
+                  max: { $max: "$step3_policiesAndCharges.packagePricing.price" },
+                },
               },
-            },
-          ],
-          guestRange: [
-            {
-              $group: {
-                _id: null,
-                minGuests: { $min: "$step1_eventAndCrew.capacity.minGuests" },
-                maxGuests: { $max: "$step1_eventAndCrew.capacity.maxGuests" },
+            ],
+            guestRange: [
+              {
+                $group: {
+                  _id: null,
+                  minGuests: { $min: "$step1_eventAndCrew.capacity.minGuests" },
+                  maxGuests: { $max: "$step1_eventAndCrew.capacity.maxGuests" },
+                },
               },
-            },
-          ],
-          vendorIds: [{ $group: { _id: "$vendorId" } }],
+            ],
+            vendorIds: [{ $group: { _id: "$vendorId" } }],
+          },
         },
-      },
+      ]),
     ]);
 
     // .filter(Boolean) alone isn't enough here — it drops null/undefined
@@ -1147,13 +1205,13 @@ export const getPackageFilters = async (req, res) => {
     if (rawVendorIds.length) vendorIdMatches.push({ id: { $in: rawVendorIds.map(String) } });
 
     const cities = vendorIdMatches.length
-      ? await Vendor.distinct("city", { $or: vendorIdMatches, city: { $nin: [null, ""] } })
+      ? await Vendor.distinct("city", { $or: vendorIdMatches, city: { $nin: [null, ""] }, ...VISIBLE_VENDOR_FILTER })
       : [];
 
     return res.status(200).json({
       status: "SUCCESS",
       filters: {
-        eventCategories: facets.eventCategories.map((f) => f._id),
+        eventCategories,
         vendorTypes: facets.vendorTypes.map((f) => f._id),
         cities: cities.sort(),
         priceRange: facets.priceRange[0] || { min: null, max: null },
@@ -1182,30 +1240,39 @@ export const getServiceableCities = async (req, res) => {
 
 export const getVendorFilters = async (req, res) => {
   try {
-    const [facets] = await Vendor.aggregate([
-      { $match: { isDeactivated: { $ne: true } } },
-      {
-        $facet: {
-          vendorTypes: [
-            { $match: { vendorType: { $nin: [null, ""] } } },
-            { $group: { _id: "$vendorType" } },
-            { $sort: { _id: 1 } },
-          ],
-          eventCategories: [
-            { $unwind: "$eventCategories" },
-            { $group: { _id: "$eventCategories" } },
-            { $sort: { _id: 1 } },
-          ],
-          cities: [{ $match: { city: { $nin: [null, ""] } } }, { $group: { _id: "$city" } }, { $sort: { _id: 1 } }],
+    // Optional — a category tab (e.g. the vendor listing's Decorator tab)
+    // asks for this to get an Event Type list scoped to just ITS OWN vendor
+    // type, same as getPackageFilters' own vendorType param, so a tab never
+    // offers an event type that only exists on a different vendor type's
+    // Live packages. Omitted entirely by the page's initial "All" load.
+    const { vendorType: scopeVendorType } = req.query;
+    const [eventCategories, [facets]] = await Promise.all([
+      // Sourced from LIVE PACKAGES, not Vendor.eventCategories (what a
+      // vendor self-declared at onboarding) — a vendor can claim a category
+      // with zero Live packages actually tagged that way, which used to
+      // make this filter offer an option that always landed on "no
+      // packages found". See liveEventCategoriesCache.js's own comment.
+      getLiveEventCategories(scopeVendorType || undefined),
+      Vendor.aggregate([
+        { $match: VISIBLE_VENDOR_FILTER },
+        {
+          $facet: {
+            vendorTypes: [
+              { $match: { vendorType: { $nin: [null, ""] } } },
+              { $group: { _id: "$vendorType" } },
+              { $sort: { _id: 1 } },
+            ],
+            cities: [{ $match: { city: { $nin: [null, ""] } } }, { $group: { _id: "$city" } }, { $sort: { _id: 1 } }],
+          },
         },
-      },
+      ]),
     ]);
 
     return res.status(200).json({
       status: "SUCCESS",
       filters: {
         vendorTypes: facets.vendorTypes.map((f) => f._id),
-        eventCategories: facets.eventCategories.map((f) => f._id),
+        eventCategories,
         cities: facets.cities.map((f) => f._id),
         sortOptions: ["rating", "newest"],
         // "response-rate" sort is NOT offered: Vendor.js has no responseRate
@@ -1227,21 +1294,53 @@ export const browseVendors = async (req, res) => {
   try {
     const { q, vendorType, eventCategory, city, sort, page, limit } = req.query;
 
-    // $ne: true (not a strict isDeactivated: false) — most existing Vendor
-    // documents predate this field and simply don't have it set, and an
-    // absent field must not be read as "deactivated".
-    const query = { isDeactivated: { $ne: true } };
+    // Only vendors customers may see: not deactivated, not Unlive, at least
+    // 50% complete — see utils/customerVisibility.js.
+    const query = { ...VISIBLE_VENDOR_FILTER };
 
     if (vendorType) query.vendorType = { $regex: vendorTypePattern(vendorType), $options: "i" };
-    if (eventCategory) {
-      query.eventCategories = { $elemMatch: { $regex: `^${escapeRegex(eventCategory)}$`, $options: "i" } };
-    }
 
     // `city` and `q` are each a set of alternatives, so neither can own the
     // top-level $or — with both applied, the second would overwrite the
     // first and silently widen the results. Collected into $and instead, so
     // they intersect the way the two separate controls imply.
     const and = [];
+
+    // Sourced from LIVE PACKAGES, not Vendor.eventCategories (what a vendor
+    // self-declared at onboarding) — same fix as getVendorFilters/
+    // liveEventCategoriesCache.js, and for the same reason: a vendor can
+    // claim "Baby Shower Decoration" with zero Live packages actually
+    // tagged that way, which would otherwise surface (or hide) vendors that
+    // don't actually match what the filter option promises. Comma-separated
+    // = OR across several categories (the sidebar's multi-select), same
+    // convention as browsePackages' own eventCategory handling.
+    if (eventCategory) {
+      const categories = String(eventCategory)
+        .split(",")
+        .map((c) => c.trim())
+        .filter(Boolean);
+      if (categories.length) {
+        const pattern = categories.map((c) => `^${escapeRegex(c)}$`).join("|");
+        const matchingPackages = await Package.find({
+          packageStatus: "Live",
+          "step1_eventAndCrew.eventCategories": { $elemMatch: { $regex: pattern, $options: "i" } },
+        })
+          .select("vendorId")
+          .lean();
+        const rawVendorIds = [...new Set(matchingPackages.map((p) => String(p.vendorId)).filter(Boolean))];
+        // Package.vendorId is inconsistently stored (real Vendor._id on
+        // newer documents, the business-facing "VEN..." id string on seeded
+        // ones) — same dual-match pattern getPackageFilters' own vendorId
+        // resolution already uses, see that function's comment.
+        const castableIds = rawVendorIds.filter((id) => mongoose.Types.ObjectId.isValid(id));
+        const vendorIdMatches = [];
+        if (castableIds.length) vendorIdMatches.push({ _id: { $in: castableIds } });
+        if (rawVendorIds.length) vendorIdMatches.push({ id: { $in: rawVendorIds } });
+        // No matching package at all must exclude every vendor, not silently
+        // widen to "no eventCategory filter applied".
+        and.push(vendorIdMatches.length ? { $or: vendorIdMatches } : { _id: "__no_such_vendor__" });
+      }
+    }
 
     if (city) {
       and.push({
