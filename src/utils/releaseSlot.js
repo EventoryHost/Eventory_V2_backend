@@ -1,5 +1,5 @@
 import Package from "../models/Package.js";
-import Booking, { SLOT_OCCUPYING_STATUSES } from "../models/Booking.js";
+import Booking, { slotOccupyingFilter } from "../models/Booking.js";
 import { utcDayRange } from "./dateRange.js";
 
 /**
@@ -41,7 +41,7 @@ export async function releaseSlotIfUnused(packageId, eventDate, { excludeBooking
   const stillOccupied = await Booking.countDocuments({
     packageId: String(packageId),
     eventDate: { $gte: start, $lt: end },
-    status: { $in: SLOT_OCCUPYING_STATUSES },
+    ...slotOccupyingFilter(),
     ...(excludeBookingId ? { _id: { $ne: excludeBookingId } } : {}),
   });
   if (stillOccupied > 0) return;

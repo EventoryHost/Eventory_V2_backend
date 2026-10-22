@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { generateISTId } from "../utils/idGenerator.js";
+import { normalizePhone } from "../utils/phone.js";
 import {
   CHANGE_REQUEST_STATUSES,
   ChangeRequestSchema,
@@ -215,6 +216,18 @@ const IssueSchema = new mongoose.Schema(
 //   - Cancelled/Declined — as before.
 export const SLOT_OCCUPYING_STATUSES = ["Confirmed"];
 
+// A confirmed booking the customer reopened with follow-up requests goes back
+// to InDiscussion but keeps its confirmedAt — and keeps its date: the vendor
+// committed to it, and only the details are being renegotiated. Every query
+// for "bookings holding a date" uses this filter rather than
+// SLOT_OCCUPYING_STATUSES alone.
+export const slotOccupyingFilter = () => ({
+  $or: [
+    { status: { $in: SLOT_OCCUPYING_STATUSES } },
+    { status: "InDiscussion", confirmedAt: { $ne: null } },
+  ],
+});
+
 // PDP "Customize items" workshop requests — added 2026-08-27 per the
 // frontend team's exact request (their suggested shape, used verbatim).
 // DELIBERATELY SEPARATE from ChangeRequestSchema/changeRequests above,
@@ -257,6 +270,8 @@ const CustomizeRequestSchema = new mongoose.Schema(
     // field; ones sent later from "Still needs changes" on Review Proposal
     // carry it, so the vendor can tell a follow-up round apart.
     requestedAt: { type: Date, default: null },
+    // The vendor's optional reason when rejecting — see ChangeRequestSchema.
+    vendorNote: { type: String, default: null, trim: true, maxlength: 500 },
   },
   // `_id: true` — was false until 2026-09-22. The vendor's accept/decline
   // addresses one request by id, so ids must be STABLE: Mongoose mints a
@@ -505,6 +520,12 @@ const BookingSchema = new mongoose.Schema(
       status: { type: String, enum: [...PROPOSAL_RESPONSE_STATUSES, null], default: null },
       respondedAt: { type: Date, default: null },
     },
+    // Bumped every time the vendor changes the proposal (decisions, pricing
+    // or the payment plan). The customer's Accept Proposal carries the
+    // version they were shown, so accepting a proposal the vendor has since
+    // changed is refused instead of locking in terms nobody reviewed.
+    proposalVersion: { type: Number, default: 0 },
+    proposalSentAt: { type: Date, default: null },
 
     // PDP item-details colour picks — see ColourPreferenceSchema's own
     // comment above. Not a request; informational only for the vendor.
@@ -623,8 +644,12 @@ BookingSchema.pre("save", async function autoLinkCustomer() {
   try {
     const normalized = normalizePhone(this.customer.phone);
     if (!normalized) return;
-    const match = await Customer.findOne({ phone: normalized }).select("_id id").lean();
-    if (match) this.customerId = match.id || match._id;
+    // Looked up through the registry rather than imported: Customer is not
+    // otherwise needed here, and a static import risks a model import cycle.
+    // Customer routes scope bookings by the account's Mongo _id (see
+    // bookingLookupQuery), so that is what gets stored — not the public id.
+    const match = await mongoose.model("Customer").findOne({ phone: normalized }).select("_id").lean();
+    if (match) this.customerId = String(match._id);
   } catch (err) {
     console.warn("[Booking.autoLinkCustomer] lookup failed, continuing without a link:", err.message);
   }
