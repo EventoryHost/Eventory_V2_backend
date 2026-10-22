@@ -1,6 +1,6 @@
 import mongoose from "mongoose";
 import Vendor from "../models/Vendor.js";
-import Booking, { PRE_ACCEPTANCE_STATUSES, TERMINAL_STATUSES } from "../models/Booking.js";
+import Booking, { PRE_ACCEPTANCE_STATUSES, TERMINAL_STATUSES, isEventDay } from "../models/Booking.js";
 import Package from "../models/Package.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { releaseSlotIfUnused } from "../utils/releaseSlot.js";
@@ -567,5 +567,59 @@ export const addCustomizeRequests = async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to send requests", error: error.message });
+  }
+};
+
+// Cap on day requests per booking — far above any real event day, there only
+// so a stuck client can't grow the booking document without bound.
+const MAX_DAY_REQUESTS = 50;
+
+/**
+ * POST /api/customer/bookings/:bookingId/day-requests — the customer asks
+ * for a change on the event day ("move the stage left"). Lands Pending; the
+ * vendor answers it from the app (POST /api/bookings/:bookingId/event-day/
+ * day-requests/:requestId/update). Same booking guards as the vendor's
+ * event-day actions: Confirmed (400 otherwise) and on its event day (409).
+ */
+export const addDayRequest = async (req, res) => {
+  try {
+    const query = bookingLookupQuery(req.params.bookingId, req.customer._id);
+    if (!query) return res.status(400).json({ status: "FAILED", message: "Invalid bookingId" });
+
+    const booking = await Booking.findOne(query);
+    if (!booking) return res.status(404).json({ status: "FAILED", message: "Booking not found" });
+
+    if (booking.status !== "Confirmed") {
+      return res.status(400).json({
+        status: "FAILED",
+        message: `Day requests are only available on a confirmed booking (this one is ${booking.status.toLowerCase()})`,
+      });
+    }
+    const now = new Date();
+    if (!isEventDay(booking, now)) {
+      return res.status(409).json({ status: "FAILED", message: "Requests can only be sent on the event day" });
+    }
+    if (booking.dayRequests.length >= MAX_DAY_REQUESTS) {
+      return res.status(409).json({ status: "FAILED", message: "This booking has reached its limit of day requests" });
+    }
+
+    booking.dayRequests.push({ text: req.body.text, addedAt: now, status: "Pending" });
+    booking.lastCustomerActivityAt = now;
+    await booking.save();
+
+    // No notification system exists in this codebase yet — logged so the
+    // request is visible server-side, same as addCustomizeRequests.
+    console.warn(
+      `[addDayRequest] Booking ${booking.bookingId} (vendor ${booking.vendorId}): customer sent a day request. No vendor notification sent — no notification system exists yet.`
+    );
+
+    return res.status(201).json({
+      status: "SUCCESS",
+      message: "Request sent to the vendor",
+      dayRequest: booking.dayRequests[booking.dayRequests.length - 1],
+      dayRequests: booking.dayRequests,
+    });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to send request", error: error.message });
   }
 };

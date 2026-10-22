@@ -73,3 +73,14 @@ export const vendorLeadLimiter = rateLimit({
   legacyHeaders: false,
   message: { success: false, message: "Too many submissions from this device. Please try again later." },
 });
+
+// GET /api/ground/:code — public, keyed only by the code in the URL. The
+// code is random enough that guessing is hopeless, but this also caps how
+// fast anyone could try.
+export const groundLinkLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { status: "FAILED", message: "Too many requests. Please slow down." },
+});
