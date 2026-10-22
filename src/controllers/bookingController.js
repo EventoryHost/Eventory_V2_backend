@@ -33,25 +33,28 @@ import {
 const RESPONSE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 // ─── Helpers ────────────────────────────────────────────────
+// findBooking and the response helpers are exported for the other vendor
+// booking controllers (eventDayController.js), so every /api/bookings route
+// looks bookings up and answers failures the same way.
 
 /**
  * Look a booking up by either its human-readable bookingId (EVT...) or its
  * MongoDB _id.
  */
-const findBooking = async (bookingId) =>
+export const findBooking = async (bookingId) =>
   bookingId.startsWith("EVT")
     ? Booking.findOne({ bookingId })
     : Booking.findById(bookingId);
 
-const notFound = (res, message) =>
+export const notFound = (res, message) =>
   res.status(404).json({ status: "FAILED", message });
 
-const invalid = (res, errors) =>
+export const invalid = (res, errors) =>
   res
     .status(400)
     .json({ status: "FAILED", message: "Validation failed", errors });
 
-const failed = (res, message, error) => {
+export const failed = (res, message, error) => {
   console.error(`${message}:`, error);
   return res.status(500).json({ status: "ERROR", message, error: error.message });
 };

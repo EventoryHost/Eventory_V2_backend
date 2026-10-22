@@ -14,6 +14,16 @@ import {
   raiseVendorBookingIssue,
   completeBooking,
 } from "../controllers/bookingController.js";
+import {
+  checkIn,
+  completeSetup,
+  requestPayment,
+  deferPayment,
+  completeTeardown,
+  setGroundContact,
+  removeGroundContact,
+  updateDayRequest,
+} from "../controllers/eventDayController.js";
 
 /**
  * @swagger
@@ -91,6 +101,60 @@ import {
  *         status:
  *           type: string
  *           enum: [Pending, Accepted, Rejected]
+ *     GroundStaff:
+ *       type: object
+ *       nullable: true
+ *       description: |
+ *         The vendor's on-ground contact for the event day. null until one
+ *         is assigned. `code` keys the public read-only page; it is
+ *         regenerated whenever the contact is replaced.
+ *       properties:
+ *         name:
+ *           type: string
+ *           maxLength: 60
+ *         phone:
+ *           type: string
+ *           example: "+919876543210"
+ *         code:
+ *           type: string
+ *           example: "q3Zr8LwT0aE"
+ *         link:
+ *           type: string
+ *           description: Derived, never stored — PUBLIC_WEB_URL (default https://eventory.in) + "/g/" + code.
+ *           example: "https://eventory.in/g/q3Zr8LwT0aE"
+ *         assignedAt:
+ *           type: string
+ *           format: date-time
+ *     DayRequest:
+ *       type: object
+ *       description: A change the customer asked for on the event day.
+ *       properties:
+ *         _id:
+ *           type: string
+ *         text:
+ *           type: string
+ *           maxLength: 500
+ *         addedAt:
+ *           type: string
+ *           format: date-time
+ *         status:
+ *           type: string
+ *           enum: [Pending, Updated]
+ *         update:
+ *           type: object
+ *           nullable: true
+ *           description: The vendor's latest answer; null while Pending.
+ *           properties:
+ *             message:
+ *               type: string
+ *               nullable: true
+ *             photos:
+ *               type: array
+ *               items:
+ *                 type: string
+ *             sentAt:
+ *               type: string
+ *               format: date-time
  *     PricingBreakdown:
  *       type: object
  *       description: |
@@ -316,6 +380,41 @@ import {
  *             every booking until a customer-side flow produces one.
  *         calendarNote:
  *           type: string
+ *         checkedInAt:
+ *           type: string
+ *           format: date-time
+ *           nullable: true
+ *           description: Event day — the vendor checked in at the venue.
+ *         setupPhotos:
+ *           type: array
+ *           maxItems: 10
+ *           items:
+ *             type: string
+ *           description: Event day — proof-of-setup photo URLs.
+ *         setupCompletedAt:
+ *           type: string
+ *           format: date-time
+ *           nullable: true
+ *         paymentRequestedAt:
+ *           type: string
+ *           format: date-time
+ *           nullable: true
+ *           description: Event day — the vendor's latest ask for the balance.
+ *         paymentDeferredAt:
+ *           type: string
+ *           format: date-time
+ *           nullable: true
+ *           description: Event day — the vendor chose "Collect later".
+ *         teardownCompletedAt:
+ *           type: string
+ *           format: date-time
+ *           nullable: true
+ *         groundStaff:
+ *           $ref: '#/components/schemas/GroundStaff'
+ *         dayRequests:
+ *           type: array
+ *           items:
+ *             $ref: '#/components/schemas/DayRequest'
  *         createdAt:
  *           type: string
  *           format: date-time
@@ -951,5 +1050,222 @@ router.put("/:bookingId/complete", completeBooking);
  *       409: { description: Booking not confirmed/completed, or the issue window has closed }
  */
 router.post("/:bookingId/issues", raiseVendorBookingIssue);
+
+// ============================================================
+//  EVENT DAY
+// ============================================================
+// Shared rules: the booking must be Confirmed (400 otherwise); a step taken
+// out of order is a 409. Every success returns the updated booking.
+
+/**
+ * @swagger
+ * /api/bookings/{bookingId}/event-day/check-in:
+ *   post:
+ *     summary: Check in at the venue
+ *     description: >
+ *       Stamps checkedInAt. Only on the event day — the event's IST calendar
+ *       day, extended to the end of a slot that runs past midnight — and
+ *       only once. Every later event-day step requires it.
+ *     tags: [Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Checked in }
+ *       400: { description: Booking is not Confirmed }
+ *       404: { description: Booking not found }
+ *       409: { description: Not the event day, or already checked in }
+ */
+router.post("/:bookingId/event-day/check-in", checkIn);
+
+/**
+ * @swagger
+ * /api/bookings/{bookingId}/event-day/setup:
+ *   post:
+ *     summary: Submit proof-of-setup photos (marks setup done)
+ *     description: >
+ *       Replaces setupPhotos and stamps setupCompletedAt. Photos are
+ *       uploaded client-side first; only http(s) URLs are accepted.
+ *     tags: [Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [photos]
+ *             properties:
+ *               photos:
+ *                 type: array
+ *                 minItems: 1
+ *                 maxItems: 10
+ *                 items: { type: string, format: uri }
+ *     responses:
+ *       200: { description: Setup completed }
+ *       400: { description: Validation failed, or booking is not Confirmed }
+ *       404: { description: Booking not found }
+ *       409: { description: Not checked in }
+ */
+router.post("/:bookingId/event-day/setup", completeSetup);
+
+/**
+ * @swagger
+ * /api/bookings/{bookingId}/event-day/payment-request:
+ *   post:
+ *     summary: Ask the customer for the balance
+ *     description: >
+ *       Stamps paymentRequestedAt (asking again refreshes it). Nothing is
+ *       sent to the customer — no SMS/push system exists; the app shares the
+ *       ask itself.
+ *     tags: [Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Payment requested }
+ *       400: { description: Booking is not Confirmed }
+ *       404: { description: Booking not found }
+ *       409: { description: Not checked in, or already fully paid }
+ */
+router.post("/:bookingId/event-day/payment-request", requestPayment);
+
+/**
+ * @swagger
+ * /api/bookings/{bookingId}/event-day/payment-defer:
+ *   post:
+ *     summary: Collect the balance later
+ *     description: Stamps paymentDeferredAt — the vendor chose "Collect later".
+ *     tags: [Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Payment collection deferred }
+ *       400: { description: Booking is not Confirmed }
+ *       404: { description: Booking not found }
+ *       409: { description: Not checked in }
+ */
+router.post("/:bookingId/event-day/payment-defer", deferPayment);
+
+/**
+ * @swagger
+ * /api/bookings/{bookingId}/event-day/teardown:
+ *   post:
+ *     summary: Mark the venue cleared
+ *     description: >
+ *       Stamps teardownCompletedAt. Needs setup done, and not before the
+ *       event starts (the slot's start time, or the event day's IST midnight
+ *       when no slot was booked).
+ *     tags: [Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Teardown completed }
+ *       400: { description: Booking is not Confirmed }
+ *       404: { description: Booking not found }
+ *       409: { description: Not checked in, setup not done, or the event hasn't started }
+ */
+router.post("/:bookingId/event-day/teardown", completeTeardown);
+
+/**
+ * @swagger
+ * /api/bookings/{bookingId}/event-day/ground-contact:
+ *   put:
+ *     summary: Assign or replace the on-ground contact
+ *     description: >
+ *       Sets groundStaff with a fresh unguessable code, so replacing the
+ *       contact retires the previous link. The phone is stored as
+ *       "+91XXXXXXXXXX". Nothing is sent to the contact — the app shares
+ *       groundStaff.link itself.
+ *     tags: [Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name, phone]
+ *             properties:
+ *               name: { type: string, minLength: 1, maxLength: 60 }
+ *               phone:
+ *                 type: string
+ *                 description: 10-digit Indian mobile; "+91"/"0" prefixes, spaces and dashes are accepted.
+ *                 example: "98765 43210"
+ *     responses:
+ *       200: { description: Ground contact assigned }
+ *       400: { description: Validation failed, or booking is not Confirmed }
+ *       404: { description: Booking not found }
+ *   delete:
+ *     summary: Remove the on-ground contact
+ *     description: Clears groundStaff; the contact's link stops working.
+ *     tags: [Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       200: { description: Ground contact removed }
+ *       400: { description: Booking is not Confirmed }
+ *       404: { description: Booking not found }
+ */
+router.put("/:bookingId/event-day/ground-contact", setGroundContact);
+router.delete("/:bookingId/event-day/ground-contact", removeGroundContact);
+
+/**
+ * @swagger
+ * /api/bookings/{bookingId}/event-day/day-requests/{requestId}/update:
+ *   post:
+ *     summary: Answer one of the customer's day requests
+ *     description: >
+ *       Sets the request's update (replacing any earlier one) and moves it to
+ *       Updated. Send a message, photos, or both.
+ *     tags: [Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *       - in: path
+ *         name: requestId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               message: { type: string, maxLength: 1000 }
+ *               photos:
+ *                 type: array
+ *                 maxItems: 10
+ *                 items: { type: string, format: uri }
+ *     responses:
+ *       200: { description: Update sent }
+ *       400: { description: Validation failed, or booking is not Confirmed }
+ *       404: { description: Booking or day request not found }
+ */
+router.post("/:bookingId/event-day/day-requests/:requestId/update", updateDayRequest);
 
 export default router;

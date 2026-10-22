@@ -7,10 +7,15 @@ import {
   raiseIssue,
   acceptProposal,
   addCustomizeRequests,
+  addDayRequest,
 } from "../controllers/customerBookingController.js";
 import { protectCustomer } from "../middlewares/customerAuth.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
-import { bookingsQuerySchema, addCustomizeRequestsSchema } from "../validators/customerBookingValidators.js";
+import {
+  bookingsQuerySchema,
+  addCustomizeRequestsSchema,
+  addDayRequestSchema,
+} from "../validators/customerBookingValidators.js";
 import { getBookingReview, submitBookingReview } from "../controllers/customerReviewController.js";
 import { submitReviewSchema } from "../validators/customerReviewValidators.js";
 
@@ -198,6 +203,41 @@ router.post(
  *       409: { description: Booking not confirmed/completed, or the issue window has closed }
  */
 router.post("/:bookingId/issues", protectCustomer, raiseIssue);
+
+/**
+ * @swagger
+ * /api/customer/bookings/{bookingId}/day-requests:
+ *   post:
+ *     summary: Ask the vendor for a change on the event day
+ *     description: |
+ *       Appends a Pending entry to the booking's dayRequests; the vendor
+ *       answers it from the app with a message and/or photos, which moves
+ *       it to Updated. Only on a Confirmed booking, and only on its event
+ *       day (the event's IST calendar day, extended to the end of a slot
+ *       that runs past midnight). No vendor notification is sent — no
+ *       notification system exists yet.
+ *     tags: [Customer Bookings]
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema: { type: string }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [text]
+ *             properties:
+ *               text: { type: string, minLength: 1, maxLength: 500 }
+ *     responses:
+ *       201: { description: 'Request sent — returns dayRequest (the new entry) and dayRequests (all of them)' }
+ *       400: { description: Validation failed, invalid bookingId, or the booking is not Confirmed }
+ *       404: { description: Not found (or not owned by this customer) }
+ *       409: { description: Not the event day, or the booking's day-request limit (50) is reached }
+ */
+router.post("/:bookingId/day-requests", protectCustomer, validateRequest(addDayRequestSchema), addDayRequest);
 
 /**
  * @swagger
