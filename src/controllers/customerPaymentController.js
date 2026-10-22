@@ -9,6 +9,7 @@ import { createBookingsFromCheckoutSession } from "../services/bookingCreationSe
 import { applyMilestonePaymentToBooking } from "../services/milestonePaymentService.js";
 import { normalizePhone } from "../utils/phone.js";
 import { generatePaymentId } from "../utils/generateId.js";
+import { bookingLookupQuery } from "./customerBookingController.js";
 
 /**
  * Cashfree Payment Gateway integration — Phase 4 Step 18. Researched from
@@ -242,7 +243,12 @@ export const createMilestonePayment = async (req, res) => {
   try {
     const { bookingId, milestoneId } = req.body;
 
-    const booking = await Booking.findOne({ _id: bookingId, customerId: req.customer._id });
+    // Either the public "EVT…" id or the Mongo _id, like every other
+    // customer booking route. A bare _id lookup cast "EVT…" to an ObjectId
+    // and threw, so paying from the booking page always failed with a 500.
+    const query = typeof bookingId === "string" ? bookingLookupQuery(bookingId, req.customer._id) : null;
+    if (!query) return res.status(400).json({ status: "FAILED", message: "Invalid bookingId" });
+    const booking = await Booking.findOne(query);
     if (!booking) return res.status(404).json({ status: "FAILED", message: "Booking not found" });
 
     if (["Cancelled", "Declined"].includes(booking.status)) {
@@ -267,7 +273,13 @@ export const createMilestonePayment = async (req, res) => {
       milestoneId: milestone._id,
       status: { $in: ["PENDING", "PAID"] },
     }).sort({ createdAt: -1 });
-    const existing = existingRaw ? await reusableExistingPayment(existingRaw) : null;
+    const reusable = existingRaw ? await reusableExistingPayment(existingRaw) : null;
+    // A pending order for an amount the vendor has since changed must not be
+    // reused: paying it would mark the milestone Received for the old amount.
+    const existing =
+      reusable && (reusable.status === "PAID" || Math.abs((reusable.amount || 0) - milestone.amount) < 0.01)
+        ? reusable
+        : null;
     if (existing) {
       return res.status(200).json({
         status: "SUCCESS",

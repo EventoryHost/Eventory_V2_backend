@@ -25,6 +25,7 @@ const round2 = (value) => Math.round(value * 100) / 100;
 // payment — see utils/additionalCharges.js.
 const ADDITION_ROWS = [
   { key: "itemsAdded", label: "Items Added" },
+  { key: "substituteItemsAdded", label: "Substitute Items Added" },
   { key: "addonsAdded", label: "Add-ons added" },
   { key: "additionalCharges", label: "Additional Charges", labelKey: "additionalChargesLabel" },
 ];

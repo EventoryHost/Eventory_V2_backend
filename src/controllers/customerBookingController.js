@@ -1,9 +1,12 @@
 import mongoose from "mongoose";
 import Vendor from "../models/Vendor.js";
-import Booking, { PRE_ACCEPTANCE_STATUSES, TERMINAL_STATUSES, isEventDay } from "../models/Booking.js";
+import Booking, { PRE_ACCEPTANCE_STATUSES, TERMINAL_STATUSES, isEventDay, slotOccupyingFilter } from "../models/Booking.js";
 import Package from "../models/Package.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { releaseSlotIfUnused } from "../utils/releaseSlot.js";
+import { parseSlotRange } from "../utils/packageAvailability.js";
+import { utcDayRange } from "../utils/dateRange.js";
+import { syncPackageBooked } from "./bookingController.js";
 import { getOrCreateInvoiceForBooking, renderInvoicePdf } from "../services/invoiceService.js";
 import { withPricingBreakdown } from "../utils/pricingBreakdown.js";
 import { round2 } from "../utils/money.js";
@@ -54,7 +57,25 @@ const STATUS_BY_TAB = {
 // nothing vendor-private is exposed by carrying them here.
 const BOOKING_LIST_FIELDS =
   "bookingId vendorId packageId eventType eventDate location packageSnapshot paymentType status " +
-  "totalAmount totalReceived createdAt changeRequests customizeRequests confirmedAt proposalResponse";
+  "totalAmount totalReceived createdAt changeRequests customizeRequests confirmedAt proposalResponse " +
+  "proposalVersion cancelledBy";
+
+/**
+ * Fill the defaults .lean() skips on the negotiation fields. Requests stored
+ * before `status` existed read as Pending everywhere else — the vendor sees
+ * them through a hydrated document, and acceptProposal checks them the same
+ * way — so the customer must see them Pending too, or Review Proposal offers
+ * an Accept the server then refuses.
+ */
+function withNegotiationDefaults(booking) {
+  const pending = (request) => ({ ...request, status: request.status || "Pending" });
+  return {
+    ...booking,
+    changeRequests: (booking.changeRequests || []).map(pending),
+    customizeRequests: (booking.customizeRequests || []).map(pending),
+    proposalVersion: booking.proposalVersion || 0,
+  };
+}
 
 function escapeRegex(str) {
   return String(str).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -166,7 +187,7 @@ export const getBookings = async (req, res) => {
     );
 
     const enriched = bookings.map((b) => ({
-      ...b,
+      ...withNegotiationDefaults(b),
       // Same shape .populate() produced — the resolved vendor object in
       // place of the raw id, or null when no vendor can be found (a
       // missing vendor must not 500 the list).
@@ -203,8 +224,9 @@ export const getBookingDetail = async (req, res) => {
     const query = bookingLookupQuery(bookingId, req.customer._id);
     if (!query) return res.status(400).json({ status: "FAILED", message: "Invalid bookingId" });
 
-    const booking = await Booking.findOne(query).lean();
-    if (!booking) return res.status(404).json({ status: "FAILED", message: "Booking not found" });
+    const stored = await Booking.findOne(query).lean();
+    if (!stored) return res.status(404).json({ status: "FAILED", message: "Booking not found" });
+    const booking = withNegotiationDefaults(stored);
 
     // Same vendorId String/ObjectId mismatch as getBookings above — .populate()
     // here 500s every booking detail page whose vendorId holds a "VEN..."
@@ -362,6 +384,9 @@ export const cancelBooking = async (req, res) => {
     // this one (backs the vendor-side status-transition trail/message card).
     booking.cancelledAt = new Date();
     booking.cancelledBy = "Customer";
+    // The vendor sees why on their booking screen.
+    const reason = typeof req.body?.reason === "string" ? req.body.reason.trim().slice(0, 500) : "";
+    booking.cancellationReason = reason || null;
     await booking.save();
 
     // Release the package's "Booked" date if this booking was holding it
@@ -473,6 +498,33 @@ function allRequestsOf(booking) {
 }
 
 /**
+ * Whether the vendor's capacity for this booking's slot is already used up by
+ * other bookings holding a date — the same count computeAvailability makes at
+ * checkout (overlapping slots vs bookingCapacity.simultaneousBookings). A
+ * booking without a stored slot only conflicts with other slot-less ones.
+ */
+async function slotTaken(booking) {
+  const pkg = await Package.findById(booking.packageId).select("bookingCapacity").lean();
+  const capacity = pkg?.bookingCapacity?.simultaneousBookings ?? 1;
+  const { start, end } = utcDayRange(booking.eventDate);
+  const sameDay = await Booking.find({
+    _id: { $ne: booking._id },
+    vendorId: booking.vendorId,
+    eventDate: { $gte: start, $lt: end },
+    ...slotOccupyingFilter(),
+  })
+    .select("startTime endTime")
+    .lean();
+  const mine = parseSlotRange(booking.startTime, booking.endTime);
+  const overlapping = sameDay.filter((other) => {
+    const theirs = parseSlotRange(other.startTime, other.endTime);
+    if (!mine || !theirs) return !mine && !theirs;
+    return theirs.s < mine.e && theirs.e > mine.s;
+  }).length;
+  return overlapping >= capacity;
+}
+
+/**
  * POST /api/customer/bookings/:bookingId/proposal/accept — the customer
  * accepts the vendor's decisions on their requests (Review Proposal →
  * "Accept Proposal"). Only once every request has an answer: accepting a
@@ -504,20 +556,61 @@ export const acceptProposal = async (req, res) => {
       });
     }
 
-    booking.proposalResponse = { status: "Accepted", respondedAt: new Date() };
-    booking.lastCustomerActivityAt = new Date();
+    // The customer must be accepting the proposal they were shown. The
+    // vendor may have changed it since the page loaded; accepting then would
+    // lock in terms the customer never saw. Older clients send no version.
+    const shownVersion = req.body?.proposalVersion;
+    if (shownVersion !== undefined && shownVersion !== null && Number(shownVersion) !== (booking.proposalVersion || 0)) {
+      return res.status(409).json({
+        status: "FAILED",
+        code: "PROPOSAL_CHANGED",
+        message: "The vendor has updated this proposal since you opened it. Please review the latest version.",
+      });
+    }
+
+    // Accepting is what confirms the booking (the vendor's Update Package
+    // only sends the proposal). A booking reopened by follow-up requests is
+    // confirmed again; one already Confirmed stays as it is.
+    const confirming = PRE_ACCEPTANCE_STATUSES.includes(booking.status);
+    if (confirming && !booking.confirmedAt && (await slotTaken(booking))) {
+      return res.status(409).json({
+        status: "FAILED",
+        code: "SLOT_TAKEN",
+        message: "The vendor is already booked for this date and time. Please contact support to pick another slot.",
+      });
+    }
+
+    const now = new Date();
+    booking.proposalResponse = { status: "Accepted", respondedAt: now };
+    booking.lastCustomerActivityAt = now;
+    if (confirming) {
+      booking.status = "Confirmed";
+      booking.confirmedAt = booking.confirmedAt || now;
+    }
     await booking.save();
+
+    if (confirming) {
+      // Best-effort, like the cancel path's release: the acceptance itself
+      // already succeeded.
+      try {
+        await syncPackageBooked(booking.packageId, booking.eventDate);
+      } catch (err) {
+        console.error(`[acceptProposal] Failed to mark slot booked for package ${booking.packageId}:`, err.message);
+      }
+    }
 
     // No notification system exists in this codebase yet — logged so the
     // answer is visible server-side, same as cancelBooking.
     console.warn(
-      `[acceptProposal] Booking ${booking.bookingId} (vendor ${booking.vendorId}): customer accepted the proposal. No vendor notification sent — no notification system exists yet.`
+      `[acceptProposal] Booking ${booking.bookingId} (vendor ${booking.vendorId}): customer accepted the proposal${confirming ? " — booking confirmed" : ""}. No vendor notification sent — no notification system exists yet.`
     );
 
     return res.status(200).json({
       status: "SUCCESS",
-      message: "Proposal accepted",
+      message: confirming ? "Proposal accepted — your booking is confirmed" : "Proposal accepted",
       proposalResponse: booking.proposalResponse,
+      bookingStatus: booking.status,
+      booking: withPricingBreakdown(booking),
     });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to accept proposal", error: error.message });
@@ -553,6 +646,10 @@ export const addCustomizeRequests = async (req, res) => {
     }
     booking.proposalResponse = { status: "ChangesRequested", respondedAt: now };
     booking.lastCustomerActivityAt = now;
+    // New requests reopen negotiation: the booking is back in discussion
+    // until the customer accepts the vendor's answer. A confirmed booking
+    // keeps confirmedAt — and its date (see slotOccupyingFilter).
+    booking.status = "InDiscussion";
     await booking.save();
 
     console.warn(
@@ -564,6 +661,7 @@ export const addCustomizeRequests = async (req, res) => {
       message: `${req.body.requests.length} request(s) sent to the vendor`,
       customizeRequests: booking.customizeRequests,
       proposalResponse: booking.proposalResponse,
+      bookingStatus: booking.status,
     });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to send requests", error: error.message });

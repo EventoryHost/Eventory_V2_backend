@@ -155,10 +155,55 @@ const milestonesFromPackage = (pkg, total) => {
   }));
 };
 
-const syncTotalReceived = (booking) => {
-  booking.totalReceived = booking.paymentMilestones
+const receivedMilestonesTotal = (booking) =>
+  booking.paymentMilestones
     .filter((m) => m.status === "Received")
     .reduce((sum, m) => sum + (m.amount || 0), 0);
+
+/**
+ * Money already taken that no Received milestone accounts for — usually the
+ * checkout token, which is only matched to a milestone when the two amounts
+ * are equal (services/bookingCreationService.js). Read it BEFORE changing the
+ * plan and hand it to syncTotalReceived, or re-deriving the total from the
+ * milestones alone silently drops a payment the customer made.
+ */
+const unattributedReceived = (booking) =>
+  Math.max(0, (booking.totalReceived || 0) - receivedMilestonesTotal(booking));
+
+const syncTotalReceived = (booking, unattributed = 0) => {
+  booking.totalReceived = receivedMilestonesTotal(booking) + unattributed;
+};
+
+const allRequests = (booking) => [
+  ...(booking.changeRequests || []),
+  ...(booking.customizeRequests || []),
+];
+
+const pendingRequestCount = (booking) =>
+  allRequests(booking).filter((request) => request.status === "Pending").length;
+
+/**
+ * Why the vendor cannot confirm this booking themselves, or null when they
+ * can. Once the customer has asked for anything, the vendor's decisions are a
+ * proposal and the CUSTOMER confirms it (Accept Proposal on the customer
+ * site, customerBookingController.acceptProposal) — the vendor's own accept
+ * is only for a booking taken exactly as the package was sold.
+ */
+const vendorConfirmBlock = (booking) => {
+  const pending = pendingRequestCount(booking);
+  if (pending > 0) {
+    return {
+      code: "REQUESTS_PENDING",
+      message: `Accept or reject every request first (${pending} still pending).`,
+    };
+  }
+  if (allRequests(booking).length > 0 && booking.proposalResponse?.status !== "Accepted") {
+    return {
+      code: "CUSTOMER_MUST_ACCEPT",
+      message: "The customer asked for changes, so they confirm this booking by accepting your proposal.",
+    };
+  }
+  return null;
 };
 
 // ─── Controllers ────────────────────────────────────────────
@@ -359,8 +404,13 @@ export const acceptBooking = async (req, res) => {
       });
     }
 
+    const block = vendorConfirmBlock(booking);
+    if (block) {
+      return res.status(409).json({ status: "FAILED", ...block });
+    }
+
     booking.status = "Confirmed";
-    booking.confirmedAt = new Date();
+    booking.confirmedAt = booking.confirmedAt || new Date();
     await booking.save();
 
     await syncPackageBooked(booking.packageId, booking.eventDate);
@@ -415,7 +465,7 @@ export const cancelBooking = async (req, res) => {
     const booking = await findBooking(req.params.bookingId);
     if (!booking) return notFound(res, "Booking not found");
 
-    if (booking.status === "Cancelled" || booking.status === "Completed") {
+    if (TERMINAL_STATUSES.includes(booking.status)) {
       return res.status(400).json({
         status: "FAILED",
         message: `Cannot cancel booking with status "${booking.status}".`,
@@ -484,9 +534,11 @@ export const requestPackageChanges = async (req, res) => {
 
     booking.changeRequests.push(...requests);
     booking.lastCustomerActivityAt = new Date();
-    if (PRE_ACCEPTANCE_STATUSES.includes(booking.status)) {
-      booking.status = "InDiscussion";
-    }
+    // New requests reopen negotiation, a confirmed booking included: it goes
+    // back to InDiscussion (keeping confirmedAt, and with it the date — see
+    // slotOccupyingFilter) until the customer accepts the next proposal.
+    booking.status = "InDiscussion";
+    booking.proposalResponse = { status: "ChangesRequested", respondedAt: new Date() };
     await booking.save();
 
     return res.status(201).json({
@@ -499,9 +551,13 @@ export const requestPackageChanges = async (req, res) => {
   }
 };
 
+// Title of the milestone added when a repriced booking is already fully paid.
+const REVISED_PRICE_LABEL = "Revised Price Balance";
+
 const PRICING_FIELDS = [
   "basePrice",
   "itemsAdded",
+  "substituteItemsAdded",
   "addonsAdded",
   "itemsRemoved",
   "addonsRemoved",
@@ -513,7 +569,7 @@ const PRICING_FIELDS = [
 /**
  * @desc    Apply the vendor's edits to a booking
  * @route   PUT /api/bookings/:bookingId
- * @body    { changeRequests?: [{ id, status?, qty? }], customizeRequests?: [{ id, status? }], pricing?, paymentMilestones?, calendarNote? }
+ * @body    { changeRequests?: [{ id, status?, qty?, vendorNote? }], customizeRequests?: [{ id, status?, vendorNote? }], pricing?, paymentMilestones?: [{ id?, title, amount, ... }], calendarNote? }
  *
  * Everything the vendor changes on the details screen is saved in one call, so
  * a half-applied edit is not reachable: decisions and the price they were
@@ -543,10 +599,9 @@ export const updateBooking = async (req, res) => {
       confirm,
     } = req.body;
 
-    // `confirm` makes the vendor's answer final: the decisions below are
-    // their response to the customer's requests, and the booking is accepted
-    // with them in the same save. Only a booking still awaiting acceptance can
-    // be confirmed this way.
+    // `confirm` is kept for older clients, but the vendor can only confirm a
+    // booking taken as sold — once the customer asked for changes, they
+    // confirm by accepting the proposal (see vendorConfirmBlock).
     if (confirm && !PRE_ACCEPTANCE_STATUSES.includes(booking.status)) {
       return res.status(400).json({
         status: "FAILED",
@@ -554,48 +609,62 @@ export const updateBooking = async (req, res) => {
       });
     }
 
+    // Did this save change what the customer is being offered? Only then is
+    // it a new proposal round (see proposalVersion below).
+    let proposalChanged = false;
+
+    const applyDecision = (request, decision) => {
+      if (decision.status !== undefined && decision.status !== request.status) {
+        request.status = decision.status;
+        request.respondedAt = new Date();
+        proposalChanged = true;
+      }
+      // A note only explains a rejection; it goes with the decision.
+      const note =
+        request.status === "Rejected"
+          ? (decision.vendorNote !== undefined ? decision.vendorNote : request.vendorNote)
+          : null;
+      const trimmed = typeof note === "string" ? note.trim() || null : null;
+      if ((request.vendorNote ?? null) !== trimmed) {
+        request.vendorNote = trimmed;
+        proposalChanged = true;
+      }
+    };
+
     if (Array.isArray(changeRequests)) {
       for (const decision of changeRequests) {
         const request = booking.changeRequests.id(decision.id);
         if (!request) {
           return notFound(res, `Change request "${decision.id}" not found`);
         }
-        if (decision.qty !== undefined) request.qty = decision.qty;
-        if (decision.status !== undefined) {
-          request.status = decision.status;
-          request.respondedAt = new Date();
+        if (decision.qty !== undefined && decision.qty !== request.qty) {
+          request.qty = decision.qty;
+          proposalChanged = true;
         }
+        applyDecision(request, decision);
       }
     }
 
     // The vendor's decision on each PDP "Customize items" request. Only the
-    // status moves — the request body itself is the customer's and stays as
-    // sent. Like changeRequests, deciding one does not reprice anything on
-    // its own; the vendor carries the money on the pricing rows below.
+    // status (and the vendor's note) moves — the request body itself is the
+    // customer's and stays as sent. Like changeRequests, deciding one does
+    // not reprice anything on its own; the vendor carries the money on the
+    // pricing rows below.
     if (Array.isArray(customizeRequests)) {
       for (const decision of customizeRequests) {
         const request = booking.customizeRequests.id(decision.id);
         if (!request) {
           return notFound(res, `Customize request "${decision.id}" not found`);
         }
-        if (decision.status !== undefined) {
-          request.status = decision.status;
-          request.respondedAt = new Date();
-        }
+        applyDecision(request, decision);
       }
     }
 
-    // A fresh decision is a fresh proposal: the customer's earlier answer
-    // (accepted, or sent more changes) was to the previous round, so clear it
-    // and let their Review Proposal screen ask again.
-    const decidedSomething = [...(changeRequests || []), ...(customizeRequests || [])].some(
-      (decision) => decision.status !== undefined
-    );
-    if (decidedSomething) {
-      booking.proposalResponse = { status: null, respondedAt: null };
-    }
-
+    // Read before the plan or the price moves — see unattributedReceived.
+    const unattributed = unattributedReceived(booking);
+    const previousTotal = booking.totalAmount || 0;
     const previousAdditionalCharges = booking.pricing?.additionalCharges || 0;
+
     if (pricing) {
       for (const field of PRICING_FIELDS) {
         if (pricing[field] !== undefined) booking.pricing[field] = pricing[field];
@@ -616,36 +685,61 @@ export const updateBooking = async (req, res) => {
         (m) => m.status === "Received"
       );
       const receivedTitles = received.map((m) => m.title.toLowerCase());
+      // Unpaid milestones the client sends back by id keep that id: a
+      // customer may be part-way through paying one (a Cashfree order
+      // carries the milestone id), and minting a new id would leave that
+      // payment with nothing to credit.
+      const unpaidById = new Map(
+        booking.paymentMilestones
+          .filter((m) => m.status !== "Received")
+          .map((m) => [String(m._id), m])
+      );
 
       booking.paymentMilestones = [
         ...received.map((m) => m.toObject()),
         ...paymentMilestones
           .filter((m) => !receivedTitles.includes(m.title.trim().toLowerCase()))
-          .map((m) => ({
-            title: m.title.trim(),
-            percentage: m.percentage ?? null,
-            amount: m.amount,
-            dueDate: m.dueDate ? new Date(m.dueDate) : null,
-            status: m.status === "PaymentDue" ? "PaymentDue" : "Pending",
-          })),
+          .map((m) => {
+            const previous = m.id ? unpaidById.get(String(m.id)) : null;
+            return {
+              ...(previous ? { _id: previous._id } : {}),
+              title: m.title.trim(),
+              percentage: m.percentage ?? null,
+              amount: m.amount,
+              dueDate: m.dueDate ? new Date(m.dueDate) : null,
+              status: m.status === "PaymentDue" ? "PaymentDue" : "Pending",
+            };
+          }),
       ];
+      proposalChanged = true;
     }
 
     if (calendarNote !== undefined) {
       booking.calendarNote = calendarNote || null;
     }
 
-    syncTotalReceived(booking);
     applyPricingBreakdown(booking);
+    const totalDelta = Math.round(((booking.totalAmount || 0) - previousTotal) * 100) / 100;
+    if (pricing && totalDelta !== 0) proposalChanged = true;
 
-    // Additional charges are collected with the final payment — unless this
-    // request sent the plan itself (utils/additionalCharges.js).
-    if (!Array.isArray(paymentMilestones)) {
+    // A price change without a new plan: keep the plan adding up to the
+    // total by moving the difference onto the final unpaid milestone.
+    // Additional charges were always collected that way
+    // (utils/additionalCharges.js); every other row now is too, so a booking
+    // can no longer read "fully paid" while short of its total.
+    // Only when this save sent pricing: a save that only touches, say, the
+    // calendar note must never move money around.
+    if (pricing && !Array.isArray(paymentMilestones) && booking.paymentMilestones.length) {
+      const chargesDelta = additionalChargesDelta(booking, previousAdditionalCharges);
       mergeAdditionalChargesIntoFinal(
         booking,
-        additionalChargesDelta(booking, previousAdditionalCharges),
-        booking.pricing?.additionalChargesLabel
+        totalDelta,
+        chargesDelta === totalDelta ? booking.pricing?.additionalChargesLabel : REVISED_PRICE_LABEL
       );
+    }
+
+    if (Array.isArray(paymentMilestones)) {
+      syncTotalReceived(booking, unattributed);
     }
 
     // The schedule must account for the whole (possibly just repriced)
@@ -658,35 +752,40 @@ export const updateBooking = async (req, res) => {
       booking.paymentMilestones.length &&
       booking.totalAmount > 0
     ) {
-      const scheduled = booking.paymentMilestones.reduce(
-        (sum, m) => sum + (m.amount || 0),
-        0
-      );
+      const scheduled =
+        booking.paymentMilestones.reduce((sum, m) => sum + (m.amount || 0), 0) +
+        unattributed;
       const drift = Math.abs(scheduled - (booking.totalAmount || 0));
       if (drift > booking.paymentMilestones.length) {
         return invalid(res, [
-          `payment milestones add up to ${Math.round(scheduled)} but the booking total is ${Math.round(booking.totalAmount || 0)}`,
+          unattributed > 0
+            ? `payment milestones plus the ${Math.round(unattributed)} already paid add up to ${Math.round(scheduled)} but the booking total is ${Math.round(booking.totalAmount || 0)}`
+            : `payment milestones add up to ${Math.round(scheduled)} but the booking total is ${Math.round(booking.totalAmount || 0)}`,
         ]);
       }
     }
 
+    // A changed proposal is a new round. Before acceptance the customer's
+    // earlier answer (accepted, or sent more changes) was to the previous
+    // round, so clear it and let their Review Proposal screen ask again. A
+    // confirmed booking stays confirmed — its version still moves, so an
+    // Accept carrying the old version is refused.
+    if (proposalChanged) {
+      booking.proposalVersion = (booking.proposalVersion || 0) + 1;
+      booking.proposalSentAt = new Date();
+      if (PRE_ACCEPTANCE_STATUSES.includes(booking.status)) {
+        booking.proposalResponse = { status: null, respondedAt: null };
+      }
+    }
+
     if (confirm) {
-      // Every request needs an answer before the booking is locked in: a
-      // request left Pending on a confirmed booking would never be decided,
-      // and the customer would see it awaiting the vendor forever.
-      const undecided = [
-        ...booking.changeRequests,
-        ...booking.customizeRequests,
-      ].filter((request) => request.status === "Pending").length;
-      if (undecided > 0) {
-        return res.status(409).json({
-          status: "FAILED",
-          message: `Accept or decline every request before confirming (${undecided} still pending).`,
-        });
+      const block = vendorConfirmBlock(booking);
+      if (block) {
+        return res.status(409).json({ status: "FAILED", ...block });
       }
 
       booking.status = "Confirmed";
-      booking.confirmedAt = new Date();
+      booking.confirmedAt = booking.confirmedAt || new Date();
     }
 
     await booking.save();
@@ -720,6 +819,14 @@ export const completeBooking = async (req, res) => {
       return res.status(400).json({
         status: "FAILED",
         message: `Only a confirmed booking can be completed (this one is ${booking.status}).`,
+      });
+    }
+    const pending = pendingRequestCount(booking);
+    if (pending > 0) {
+      return res.status(409).json({
+        status: "FAILED",
+        code: "REQUESTS_PENDING",
+        message: `Answer the customer's requests before completing the booking (${pending} still pending).`,
       });
     }
     if (!isFullyPaid(booking)) {
@@ -860,10 +967,13 @@ export const updatePaymentMilestones = async (req, res) => {
       }
     }
 
+    // Payments no milestone accounts for (the checkout token) are already in
+    // — see unattributedReceived.
+    const unattributed = unattributedReceived(booking);
     const receivedAmount = received.reduce((sum, m) => sum + (m.amount || 0), 0);
     const outstanding = Math.max(
       0,
-      Math.round((booking.totalAmount || 0) - receivedAmount)
+      Math.round((booking.totalAmount || 0) - receivedAmount - unattributed)
     );
     const amounts = pending.map((m) =>
       Math.round((outstanding * m.percentage) / pendingShare)
@@ -889,7 +999,9 @@ export const updatePaymentMilestones = async (req, res) => {
       }),
     ];
 
-    syncTotalReceived(booking);
+    syncTotalReceived(booking, unattributed);
+    booking.proposalVersion = (booking.proposalVersion || 0) + 1;
+    booking.proposalSentAt = new Date();
     await booking.save();
 
     return res.status(200).json({
