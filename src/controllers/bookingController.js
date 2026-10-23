@@ -1,6 +1,7 @@
 import Booking, {
   PRE_ACCEPTANCE_STATUSES,
   TERMINAL_STATUSES,
+  eventDayStarted,
   isFullyPaid,
 } from "../models/Booking.js";
 import Package from "../models/Package.js";
@@ -169,6 +170,25 @@ const receivedMilestonesTotal = (booking) =>
  */
 const unattributedReceived = (booking) =>
   Math.max(0, (booking.totalReceived || 0) - receivedMilestonesTotal(booking));
+
+/**
+ * What the customer's schedule carries on top of the vendor's total: the
+ * checkout convenience fee and its round-up to the next ₹100, which the quote
+ * folds into the last milestone (services/cartPricingService.js) so the plan
+ * adds up to what the customer actually pays. Read it BEFORE changing the
+ * plan; a vendor re-planning in their own terms (milestones = totalAmount)
+ * gets it added back, so Eventory's fee is never silently dropped.
+ *
+ * Only bookings that came through checkout carry a fee. The observed gap is
+ * capped near that fee, so an older plan that simply drifted is not treated
+ * as one.
+ */
+const scheduleExtra = (booking, unattributed) => {
+  if (booking.convenienceFee == null) return 0;
+  const scheduled = booking.paymentMilestones.reduce((sum, m) => sum + (m.amount || 0), 0);
+  const gap = Math.round((scheduled + unattributed - (booking.totalAmount || 0)) * 100) / 100;
+  return Math.min(Math.max(0, gap), (booking.convenienceFee || 0) + 100);
+};
 
 const syncTotalReceived = (booking, unattributed = 0) => {
   booking.totalReceived = receivedMilestonesTotal(booking) + unattributed;
@@ -521,6 +541,15 @@ export const requestPackageChanges = async (req, res) => {
         message: `Cannot change a booking with status "${booking.status}".`,
       });
     }
+    // Same rule as the customer's customize-requests: once the event day
+    // has begun, reopening the booking would block every event-day step.
+    if (eventDayStarted(booking)) {
+      return res.status(409).json({
+        status: "FAILED",
+        code: "EVENT_DAY_STARTED",
+        message: "The event day has started, so the package can't be changed now.",
+      });
+    }
 
     const requests = req.body.changes.map((change) => ({
       changeType: change.changeType,
@@ -553,6 +582,8 @@ export const requestPackageChanges = async (req, res) => {
 
 // Title of the milestone added when a repriced booking is already fully paid.
 const REVISED_PRICE_LABEL = "Revised Price Balance";
+// Same, for the convenience fee when every instalment is already paid.
+const CONVENIENCE_FEE_LABEL = "Convenience Fee";
 
 const PRICING_FIELDS = [
   "basePrice",
@@ -660,8 +691,10 @@ export const updateBooking = async (req, res) => {
       }
     }
 
-    // Read before the plan or the price moves — see unattributedReceived.
+    // Read before the plan or the price moves — see unattributedReceived and
+    // scheduleExtra.
     const unattributed = unattributedReceived(booking);
+    const extra = scheduleExtra(booking, unattributed);
     const previousTotal = booking.totalAmount || 0;
     const previousAdditionalCharges = booking.pricing?.additionalCharges || 0;
 
@@ -752,15 +785,22 @@ export const updateBooking = async (req, res) => {
       booking.paymentMilestones.length &&
       booking.totalAmount > 0
     ) {
-      const scheduled =
+      let scheduled =
         booking.paymentMilestones.reduce((sum, m) => sum + (m.amount || 0), 0) +
         unattributed;
-      const drift = Math.abs(scheduled - (booking.totalAmount || 0));
-      if (drift > booking.paymentMilestones.length) {
+      const tolerance = booking.paymentMilestones.length;
+      // A plan made in the vendor's terms (adding up to their total) gets
+      // the customer's convenience fee put back on its final instalment.
+      if (extra > 0 && Math.abs(scheduled - (booking.totalAmount || 0)) <= tolerance) {
+        mergeAdditionalChargesIntoFinal(booking, extra, CONVENIENCE_FEE_LABEL);
+        scheduled += extra;
+      }
+      const drift = Math.abs(scheduled - ((booking.totalAmount || 0) + extra));
+      if (drift > tolerance) {
         return invalid(res, [
           unattributed > 0
-            ? `payment milestones plus the ${Math.round(unattributed)} already paid add up to ${Math.round(scheduled)} but the booking total is ${Math.round(booking.totalAmount || 0)}`
-            : `payment milestones add up to ${Math.round(scheduled)} but the booking total is ${Math.round(booking.totalAmount || 0)}`,
+            ? `payment milestones plus the ${Math.round(unattributed)} already paid add up to ${Math.round(scheduled - extra)} but the booking total is ${Math.round(booking.totalAmount || 0)}`
+            : `payment milestones add up to ${Math.round(scheduled - extra)} but the booking total is ${Math.round(booking.totalAmount || 0)}`,
         ]);
       }
     }
@@ -775,6 +815,11 @@ export const updateBooking = async (req, res) => {
       booking.proposalSentAt = new Date();
       if (PRE_ACCEPTANCE_STATUSES.includes(booking.status)) {
         booking.proposalResponse = { status: null, respondedAt: null };
+        // Answering the customer's requests starts the negotiation: a booking
+        // that arrived with requests reads "New Booking" only until the
+        // vendor's first proposal. One without requests has nothing to
+        // negotiate — the vendor just accepts it — so it stays as it is.
+        if (allRequests(booking).length > 0) booking.status = "InDiscussion";
       }
     }
 
@@ -968,12 +1013,14 @@ export const updatePaymentMilestones = async (req, res) => {
     }
 
     // Payments no milestone accounts for (the checkout token) are already in
-    // — see unattributedReceived.
+    // — see unattributedReceived. The customer's convenience fee stays on
+    // the plan — see scheduleExtra.
     const unattributed = unattributedReceived(booking);
+    const extra = scheduleExtra(booking, unattributed);
     const receivedAmount = received.reduce((sum, m) => sum + (m.amount || 0), 0);
     const outstanding = Math.max(
       0,
-      Math.round((booking.totalAmount || 0) - receivedAmount - unattributed)
+      Math.round((booking.totalAmount || 0) + extra - receivedAmount - unattributed)
     );
     const amounts = pending.map((m) =>
       Math.round((outstanding * m.percentage) / pendingShare)

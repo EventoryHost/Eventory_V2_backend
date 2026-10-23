@@ -766,13 +766,13 @@ export const saveDraft = async (req, res) => {
       enquiry.customiseData = customiseData;
     }
 
-    enquiry.proposal = {
-      ...enquiry.proposal,
-      pricing: pricing || enquiry.proposal?.pricing,
-      termsAndPolicies: termsAndPolicies || enquiry.proposal?.termsAndPolicies,
-      termsAttachmentUrl: termsAttachmentUrl || enquiry.proposal?.termsAttachmentUrl,
-      attachments: attachments || enquiry.proposal?.attachments || [],
-    };
+    // Only what this draft sent: spreading `undefined` over a proposal that
+    // has none yet failed validation, so a draft holding just the form state
+    // (customiseData) could never be saved.
+    if (pricing !== undefined) enquiry.set("proposal.pricing", pricing);
+    if (termsAndPolicies !== undefined) enquiry.set("proposal.termsAndPolicies", termsAndPolicies);
+    if (termsAttachmentUrl !== undefined) enquiry.set("proposal.termsAttachmentUrl", termsAttachmentUrl);
+    if (attachments !== undefined) enquiry.set("proposal.attachments", attachments);
 
     await enquiry.save();
 

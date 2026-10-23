@@ -117,6 +117,18 @@ export const eventStartOf = ({ eventDate, startTime }) => {
  * day, stretched to the event's end (eventEndOf) when the slot runs past
  * midnight, so an overnight event's small hours still count.
  */
+/**
+ * Whether the event day has begun (IST midnight of the event's day) — from
+ * then on the package is fixed: changes to it would reopen the booking and
+ * shut the vendor out of the event-day steps, which need it Confirmed. Asks
+ * on the day go through day requests instead.
+ */
+export const eventDayStarted = (booking, now = new Date()) => {
+  if (!booking?.eventDate) return false;
+  const [y, m, d] = istDayOf(booking.eventDate);
+  return new Date(now).getTime() >= Date.UTC(y, m, d) - IST_OFFSET_MS;
+};
+
 export const isEventDay = (booking, now = new Date()) => {
   if (!booking?.eventDate) return false;
   const [y, m, d] = istDayOf(booking.eventDate);
