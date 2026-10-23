@@ -1,6 +1,12 @@
 import mongoose from "mongoose";
 import Vendor from "../models/Vendor.js";
-import Booking, { PRE_ACCEPTANCE_STATUSES, TERMINAL_STATUSES, isEventDay, slotOccupyingFilter } from "../models/Booking.js";
+import Booking, {
+  PRE_ACCEPTANCE_STATUSES,
+  TERMINAL_STATUSES,
+  eventDayStarted,
+  isEventDay,
+  slotOccupyingFilter,
+} from "../models/Booking.js";
 import Package from "../models/Package.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { releaseSlotIfUnused } from "../utils/releaseSlot.js";
@@ -637,6 +643,13 @@ export const addCustomizeRequests = async (req, res) => {
       return res.status(409).json({
         status: "FAILED",
         message: `This booking is ${booking.status.toLowerCase()} — it can't take new requests`,
+      });
+    }
+    if (eventDayStarted(booking)) {
+      return res.status(409).json({
+        status: "FAILED",
+        code: "EVENT_DAY_STARTED",
+        message: "Your event day has started, so the package can't be changed now. Send the vendor a day request instead.",
       });
     }
 

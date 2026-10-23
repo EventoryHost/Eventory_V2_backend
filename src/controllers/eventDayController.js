@@ -116,8 +116,9 @@ export const completeSetup = async (req, res) => {
  * @desc    Ask the customer for the balance
  * @route   POST /api/bookings/:bookingId/event-day/payment-request
  *
- * Only stamps the booking — no SMS/push system exists, so the app shares
- * the ask itself. Asking again refreshes paymentRequestedAt.
+ * Marks every unpaid milestone due now, so the customer's booking page
+ * offers to pay it. No SMS/push system exists, so the app shares the ask
+ * itself. Asking again refreshes paymentRequestedAt.
  */
 export const requestPayment = async (req, res) => {
   try {
@@ -128,7 +129,17 @@ export const requestPayment = async (req, res) => {
       return rejected(res, 409, "This booking is already fully paid.");
     }
 
-    booking.paymentRequestedAt = new Date();
+    const now = new Date();
+    booking.paymentRequestedAt = now;
+    // The ask is what the customer acts on: every unpaid instalment becomes
+    // due now, which is what puts "Pay" in front of them on their booking
+    // page. Stamping paymentRequestedAt alone left the balance reading "not
+    // scheduled yet" with nothing to pay.
+    for (const milestone of booking.paymentMilestones) {
+      if (milestone.status === "Received") continue;
+      milestone.status = "PaymentDue";
+      if (!milestone.dueDate || milestone.dueDate > now) milestone.dueDate = now;
+    }
     return await saveAndRespond(res, booking, "Payment requested");
   } catch (error) {
     return failed(res, "Failed to request payment", error);
