@@ -33,3 +33,9 @@ export const addCustomizeRequestsSchema = z.object({
   requests: z.array(customizeRequestSchema).min(1).max(50),
 });
 
+
+// A change the customer asks for on the event day — see Booking.js's
+// DayRequestSchema. Always lands Pending; the vendor answers with an update.
+export const addDayRequestSchema = z.object({
+  text: z.string().trim().min(1).max(500),
+});

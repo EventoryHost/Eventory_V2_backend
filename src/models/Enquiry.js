@@ -146,6 +146,11 @@ const EnquirySchema = new mongoose.Schema(
       enum: ENQUIRY_STATUSES,
       default: "NewEnquiry",
     },
+    // The vendor app's in-progress Customise Proposal form (PUT /:id/draft),
+    // stored as the app sends it so the vendor can pick up where they left
+    // off. Not read by anything server-side. Was missing from the schema, so
+    // strict mode silently dropped every draft.
+    customiseData: { type: mongoose.Schema.Types.Mixed, default: null },
     // If converted, link to booking
     convertedBookingId: {
       type: String,

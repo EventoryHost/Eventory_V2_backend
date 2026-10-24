@@ -40,8 +40,28 @@ export async function applyMilestonePaymentToBooking(payment) {
     return booking;
   }
 
-  milestone.status = "Received";
-  milestone.receivedDate = payment.paidAt || new Date();
+  const paidAt = payment.paidAt || new Date();
+  const shortBy = round2((milestone.amount || 0) - (payment.amount || 0));
+  if (shortBy > 0.01) {
+    // The vendor raised this milestone after the customer's order was made,
+    // so the order paid the old, smaller amount. Credit what was paid as its
+    // own Received part and leave the difference due on the milestone,
+    // rather than marking the whole (larger) instalment paid.
+    milestone.amount = shortBy;
+    milestone.percentage = null;
+    booking.paymentMilestones.push({
+      title: `${milestone.title} (part paid)`,
+      percentage: null,
+      amount: round2(payment.amount),
+      dueDate: milestone.dueDate || null,
+      status: "Received",
+      receivedDate: paidAt,
+    });
+    console.warn(`[milestonePaymentService] Payment ${payment._id} covered ${payment.amount} of milestone ${milestone._id} on Booking ${booking._id}; ${shortBy} is still due.`);
+  } else {
+    milestone.status = "Received";
+    milestone.receivedDate = paidAt;
+  }
 
   booking.totalReceived = round2((booking.totalReceived || 0) + payment.amount);
   // Once the running total covers the full booking amount, reflect that on

@@ -1,4 +1,4 @@
-import Booking, { SLOT_OCCUPYING_STATUSES } from "../models/Booking.js";
+import Booking, { slotOccupyingFilter } from "../models/Booking.js";
 import { utcDayRange } from "./dateRange.js";
 import { resolveVendorRefId } from "./resolveVendor.js";
 
@@ -65,7 +65,7 @@ export async function computeAvailability(pkg, { date, guests, time, timeSlot })
       ? await Booking.countDocuments({
           vendorId: vendorRefId,
           eventDate: { $gte: start, $lt: end },
-          status: { $in: SLOT_OCCUPYING_STATUSES },
+          ...slotOccupyingFilter(),
         })
       : 0;
     availability.activeBookingsOnDate = activeBookingsOnDate;
@@ -81,7 +81,7 @@ export async function computeAvailability(pkg, { date, guests, time, timeSlot })
       const sameDay = await Booking.find({
         vendorId: vendorRefId,
         eventDate: { $gte: start, $lt: end },
-        status: { $in: SLOT_OCCUPYING_STATUSES },
+        ...slotOccupyingFilter(),
       })
         .select("startTime endTime")
         .lean();
@@ -275,7 +275,7 @@ export async function computeSlotsForDate(pkg, date) {
     ? await Booking.find({
         vendorId: vendorRefId,
         eventDate: { $gte: start, $lt: end },
-        status: { $in: SLOT_OCCUPYING_STATUSES },
+        ...slotOccupyingFilter(),
       })
         .select("startTime endTime")
         .lean()
