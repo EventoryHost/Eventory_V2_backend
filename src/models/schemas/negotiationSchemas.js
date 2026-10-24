@@ -56,6 +56,9 @@ export const ChangeRequestSchema = new mongoose.Schema(
     },
     requestedAt: { type: Date, default: Date.now },
     respondedAt: { type: Date, default: null },
+    // The vendor's optional reason when rejecting, shown to the customer on
+    // Review Proposal. Cleared when the decision moves off Rejected.
+    vendorNote: { type: String, default: null, trim: true, maxlength: 500 },
   },
   { _id: true }
 );
@@ -74,6 +77,9 @@ export const PricingSchema = new mongoose.Schema(
     basePrice: { type: Number, default: null },
 
     itemsAdded: { type: Number, default: 0, min: 0 },
+    // Items swapped in for ones the package listed — priced and taxed exactly
+    // like itemsAdded, shown as its own breakdown row.
+    substituteItemsAdded: { type: Number, default: 0, min: 0 },
     addonsAdded: { type: Number, default: 0, min: 0 },
 
     itemsRemoved: { type: Number, default: 0, min: 0 },

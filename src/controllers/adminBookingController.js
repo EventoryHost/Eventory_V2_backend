@@ -325,9 +325,12 @@ export const reassignBooking = async (req, res) => {
 // PUT /api/admin/bookings/:bookingId/force-accept
 export const forceAccept = async (req, res) => {
   try {
+    // "Confirmed" — "Accepted" is not a booking status since the 2026-08-27
+    // enum rewrite, and findByIdAndUpdate skips validation, so the old value
+    // was written as-is and the booking vanished from every list.
     const booking = await Booking.findByIdAndUpdate(
       req.params.bookingId,
-      { status: "Accepted" },
+      { status: "Confirmed", confirmedAt: new Date() },
       { new: true }
     );
     if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });

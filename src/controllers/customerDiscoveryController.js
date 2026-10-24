@@ -130,6 +130,23 @@ export const browsePackages = async (req, res) => {
         { "step1_eventAndCrew.packageName": qRegex },
         { "step1_eventAndCrew.eventCategories": { $elemMatch: qRegex } },
         ...(qVendorIds.length ? [{ vendorId: { $in: qVendorIds } }] : []),
+        // Packages page "Popular Package Categories" chips ("Balloons",
+        // "Table Decoration", ...) link here as `q=<chip title>` — those are
+        // package SETUP CONTENTS, not package names/event categories, so
+        // without this a chip like "Balloons" matched nothing unless a
+        // vendor happened to put the word in the package title. Matches
+        // Decorator's step2 setup/item fields (name, itemType, subCategory,
+        // themes, structures) PLUS every vendor type's shared `included`
+        // field (step2_productsAndPricing.included — the vendor's own "part
+        // of this package" list). A vendor type whose schema doesn't have a
+        // given field just never matches on it — harmless, not an error.
+        { "step2_productsAndPricing.setups.name": qRegex },
+        { "step2_productsAndPricing.setups.items.name": qRegex },
+        { "step2_productsAndPricing.setups.items.itemType": qRegex },
+        { "step2_productsAndPricing.setups.items.subCategory": qRegex },
+        { "step2_productsAndPricing.setups.themes": { $elemMatch: qRegex } },
+        { "step2_productsAndPricing.setups.structures": { $elemMatch: qRegex } },
+        { "step2_productsAndPricing.included": { $elemMatch: qRegex } },
       ];
     }
 

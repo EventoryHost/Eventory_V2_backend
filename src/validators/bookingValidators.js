@@ -9,6 +9,7 @@ import { ENQUIRY_PRIORITIES, MATCH_STRENGTHS } from "../models/Enquiry.js";
 
 const PRICING_AMOUNT_FIELDS = [
   "itemsAdded",
+  "substituteItemsAdded",
   "addonsAdded",
   "itemsRemoved",
   "addonsRemoved",
@@ -19,6 +20,19 @@ const PRICING_AMOUNT_FIELDS = [
 // ─── Shared field validators ────────────────────────────────
 // Bookings and enquiries negotiate over the same shapes, so the rules for the
 // vendor's decisions, pricing rows and instalment plan are written once.
+
+const VENDOR_NOTE_MAX = 500;
+
+// The vendor's optional note on a decision (their reason when rejecting).
+const checkVendorNote = (decision, field, errors) => {
+  if (
+    decision?.vendorNote !== undefined &&
+    decision.vendorNote !== null &&
+    (typeof decision.vendorNote !== "string" || decision.vendorNote.length > VENDOR_NOTE_MAX)
+  ) {
+    errors.push(`${field}.vendorNote must be a string of at most ${VENDOR_NOTE_MAX} characters`);
+  }
+};
 
 const checkChangeRequestDecisions = (changeRequests, errors) => {
   if (!Array.isArray(changeRequests)) {
@@ -43,6 +57,7 @@ const checkChangeRequestDecisions = (changeRequests, errors) => {
     ) {
       errors.push(`changeRequests[${i}].qty must be a number >= 1`);
     }
+    checkVendorNote(decision, `changeRequests[${i}]`, errors);
   });
 };
 
@@ -66,6 +81,7 @@ const checkCustomizeRequestDecisions = (customizeRequests, errors) => {
         `customizeRequests[${i}].status must be one of: ${CHANGE_REQUEST_STATUSES.join(", ")}`
       );
     }
+    checkVendorNote(decision, `customizeRequests[${i}]`, errors);
   });
 };
 

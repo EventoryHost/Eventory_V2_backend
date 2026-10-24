@@ -16,6 +16,8 @@
  * lists and the transactions module can read a total without recomputing it.
  */
 
+import { withGroundLink } from "./groundLink.js";
+
 const round2 = (value) => Math.round(value * 100) / 100;
 
 // `labelKey` names a vendor-authored label on `pricing` that overrides the
@@ -23,6 +25,7 @@ const round2 = (value) => Math.round(value * 100) / 100;
 // payment — see utils/additionalCharges.js.
 const ADDITION_ROWS = [
   { key: "itemsAdded", label: "Items Added" },
+  { key: "substituteItemsAdded", label: "Substitute Items Added" },
   { key: "addonsAdded", label: "Add-ons added" },
   { key: "additionalCharges", label: "Additional Charges", labelKey: "additionalChargesLabel" },
 ];
@@ -107,10 +110,22 @@ export const applyPricingBreakdown = (record) => {
   return breakdown;
 };
 
-/** Attaches the breakdown to a record about to be sent over the wire. */
+/**
+ * Attaches the breakdown to a record about to be sent over the wire.
+ *
+ * Also derives a booking's ground-contact `link` (never stored — see
+ * utils/groundLink.js). This is the one serialisation path every vendor
+ * booking response shares, documents and lean rows alike, which a schema
+ * virtual would miss (toObject() here doesn't include virtuals, and lean
+ * rows have none). Enquiries carry no groundStaff and pass through as-is.
+ */
 export const withPricingBreakdown = (record) => {
   const plain =
     typeof record?.toObject === "function" ? record.toObject() : record;
   if (!plain) return plain;
-  return { ...plain, pricingBreakdown: buildPricingBreakdown(plain) };
+  return {
+    ...plain,
+    ...("groundStaff" in plain ? { groundStaff: withGroundLink(plain.groundStaff) } : {}),
+    pricingBreakdown: buildPricingBreakdown(plain),
+  };
 };

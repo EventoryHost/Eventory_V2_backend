@@ -1,5 +1,5 @@
+import mongoose from "mongoose";
 import Enquiry, {
-  ENQUIRY_STATUSES,
   PRE_PROPOSAL_STATUSES,
   TERMINAL_ENQUIRY_STATUSES,
 } from "../models/Enquiry.js";
@@ -315,16 +315,23 @@ export const getEnquiryById = async (req, res) => {
 /**
  * @desc    Update enquiry status
  * @route   PUT /api/enquiries/:enquiryId/status
- * @body    { status: "Viewed" | "InDiscussion" | "AwaitingResponse" | ... }
+ * @body    { status: "Viewed" | "InDiscussion" | "AwaitingResponse" }
+ *
+ * Only the plain progress statuses. ProposalSent, Converted and Declined each
+ * have their own route, which also writes what that status implies (the
+ * proposal, the booking, the reason) — setting them bare here left an
+ * enquiry "Converted" with no booking or "ProposalSent" with no proposal.
  */
+const DIRECTLY_SETTABLE_STATUSES = ["Viewed", "InDiscussion", "AwaitingResponse"];
+
 export const updateEnquiryStatus = async (req, res) => {
   try {
     const { status: newStatus } = req.body;
 
-    if (!newStatus || !ENQUIRY_STATUSES.includes(newStatus)) {
+    if (!newStatus || !DIRECTLY_SETTABLE_STATUSES.includes(newStatus)) {
       return res.status(400).json({
         status: "FAILED",
-        message: `status must be one of: ${ENQUIRY_STATUSES.join(", ")}`,
+        message: `status must be one of: ${DIRECTLY_SETTABLE_STATUSES.join(", ")}`,
       });
     }
 
@@ -602,7 +609,23 @@ export const convertEnquiryToBooking = async (req, res) => {
       enquiry.packageSnapshot ??
       snapshotPackage(pkg);
 
+    // Claim the enquiry before creating anything, so a double tap (or two
+    // devices) cannot turn one enquiry into two bookings: only the request
+    // that sets convertedBookingId goes on.
+    const bookingObjectId = new mongoose.Types.ObjectId();
+    const claim = await Enquiry.updateOne(
+      { _id: enquiry._id, convertedBookingId: null, status: { $nin: ["Converted", "Declined"] } },
+      { $set: { convertedBookingId: bookingObjectId } }
+    );
+    if (!claim.modifiedCount) {
+      return res.status(409).json({
+        status: "FAILED",
+        message: "This enquiry is already being converted to a booking",
+      });
+    }
+
     const booking = new Booking({
+      _id: bookingObjectId,
       bookingId: generateISTId("EVT"),
       vendorId: enquiry.vendorId,
       packageId: pkg._id,
@@ -624,9 +647,13 @@ export const convertEnquiryToBooking = async (req, res) => {
       changeRequests: enquiry.changeRequests.map((request) =>
         request.toObject ? request.toObject() : request
       ),
+      // basePrice falls back to the package price (in the breakdown), never
+      // to proposal.customPrice: that is the proposal's FINAL amount —
+      // additions and tax included — and the rows copied here would be added
+      // and taxed on top of it a second time.
       pricing: {
         ...(enquiry.pricing?.toObject?.() ?? enquiry.pricing ?? {}),
-        basePrice: enquiry.pricing?.basePrice ?? enquiry.proposal?.customPrice ?? null,
+        basePrice: enquiry.pricing?.basePrice ?? null,
       },
       paymentMilestones:
         req.body.paymentMilestones?.length
@@ -640,7 +667,16 @@ export const convertEnquiryToBooking = async (req, res) => {
 
     applyPricingBreakdown(booking);
     if (req.body.totalAmount != null) booking.totalAmount = req.body.totalAmount;
-    await booking.save();
+    try {
+      await booking.save();
+    } catch (error) {
+      // Release the claim so the vendor can retry.
+      await Enquiry.updateOne(
+        { _id: enquiry._id, convertedBookingId: bookingObjectId },
+        { $set: { convertedBookingId: null } }
+      );
+      throw error;
+    }
 
     enquiry.status = "Converted";
     enquiry.convertedBookingId = booking._id;
@@ -716,17 +752,27 @@ export const saveDraft = async (req, res) => {
       });
     }
 
+    // The draft is stored in `proposal` itself, so once a proposal has gone
+    // to the customer a "draft" would silently rewrite what they were sent.
+    // Revisions go through PUT /:enquiryId/proposal instead.
+    if (enquiry.status === "ProposalSent") {
+      return res.status(409).json({
+        status: "FAILED",
+        message: "This proposal has already been sent — send an updated proposal instead of saving a draft",
+      });
+    }
+
     if (customiseData) {
       enquiry.customiseData = customiseData;
     }
 
-    enquiry.proposal = {
-      ...enquiry.proposal,
-      pricing: pricing || enquiry.proposal?.pricing,
-      termsAndPolicies: termsAndPolicies || enquiry.proposal?.termsAndPolicies,
-      termsAttachmentUrl: termsAttachmentUrl || enquiry.proposal?.termsAttachmentUrl,
-      attachments: attachments || enquiry.proposal?.attachments || [],
-    };
+    // Only what this draft sent: spreading `undefined` over a proposal that
+    // has none yet failed validation, so a draft holding just the form state
+    // (customiseData) could never be saved.
+    if (pricing !== undefined) enquiry.set("proposal.pricing", pricing);
+    if (termsAndPolicies !== undefined) enquiry.set("proposal.termsAndPolicies", termsAndPolicies);
+    if (termsAttachmentUrl !== undefined) enquiry.set("proposal.termsAttachmentUrl", termsAttachmentUrl);
+    if (attachments !== undefined) enquiry.set("proposal.attachments", attachments);
 
     await enquiry.save();
 
