@@ -8,17 +8,28 @@ import { round2 } from "../utils/money.js";
  * checkout, and the booking's payment-summary.
  *
  * Built from three data tables the user supplied (Eventory_S3_Data_*.pdf) —
- * transcribed here verbatim, NOT re-derived. All three are lookup tables;
- * the ONLY thing not in any of them is the final arithmetic that combines
- * their outputs, which the user explicitly confirmed:
+ * transcribed here verbatim, NOT re-derived. All three are lookup tables.
  *
- *     lineConvenienceFee = baseFee + (linePrice * percentage/100 * weight)
+ * FORMULA (matched to the Business v1 admin tool's CustomOrderForm.tsx
+ * EXACTLY, on explicit request, so both tools quote the same fee for the
+ * same package/category/day-bucket — re-applied 2026-10-24 after a brief
+ * revert; the 18% below is intentional, not a stray leftover):
  *
- *   - baseFee     : CATEGORY_FEE_TABLE, by (criticality, category)          [File 2]
+ *     rawFee             = linePrice * percentage/100
+ *     lineConvenienceFee = rawFee * 1.18   (v1 taxes the fee itself at 18%,
+ *                          its own "Tax on Convenience" line, baked into
+ *                          one number here instead of two)
+ *
  *   - percentage  : FEE_TABLE[category][priceSlab][daysBucket]              [File 1]
- *   - weight      : FEE_TABLE[category][priceSlab].weight                   [File 1]
  *   - category    : from a 3–15 vendor score + the service's criticality    [File 2 + 3]
  *   - vendorScore : sum of 3 sub-scores (bookings/yr, years, team size)     [File 3]
+ *   - daysLeft    : Math.ceil(daysToEvent), matching v1's calculateDaysLeft
+ *                   (NOT Math.floor — see daysUntilEvent() below)
+ *
+ * NOTE: baseFee (CATEGORY_FEE_TABLE, File 2) and weight (FEE_TABLE[...].weight,
+ * File 1) are still looked up and returned in the breakdown for visibility,
+ * but are NOT part of the fee arithmetic — Business v1's tool never applies
+ * them either, only the bare percentage × linePrice, then +18% on that.
  *
  * ----------------------------------------------------------------------------
  * ASSUMPTIONS made where the tables are silent — all flagged to the user,
@@ -27,8 +38,11 @@ import { round2 } from "../utils/money.js";
  *   1. linePrice = the line's PRE-GST subtotal (package base + team &
  *      equipment + add-ons + chargeable items). Convenience % is applied to
  *      the pre-tax amount, not tax-inclusive.
- *   2. The convenience fee itself is added to grandTotal AFTER gst and is
- *      NOT itself taxed. (Real GST question for finance.)
+ *   2. The convenience fee itself now DOES include an 18% tax baked into its
+ *      own amount (`fee = rawFee * 1.18`), matching v1's "Tax on
+ *      Convenience" line — it is NOT also run through the package's own
+ *      gstInclusive/gstRatePercent config, which stays entirely separate
+ *      (cartPricingService.js `gstAmount`).
  *   3. Price >= 300000 clamps to the top slab (250k–300k row).
  *   4. Day buckets (daysLeft = whole days from "now" to the event date):
  *        >= 25        -> 25_plus_days
@@ -276,15 +290,21 @@ function resolvePriceSlab(price) {
 }
 
 /**
- * Whole days from now to the event. Returns null when eventDate is missing
- * or unparseable (assumption #6 — the fee then can't be computed).
+ * Days from now to the event. Returns null when eventDate is missing or
+ * unparseable (assumption #6 — the fee then can't be computed).
+ *
+ * Uses Math.ceil, matching Business v1's calculateDaysLeft() exactly
+ * (csvDataService.ts) — NOT Math.floor. This matters: it can push a line
+ * into the next day-bucket up compared to a floor-based count for the same
+ * two dates, which is why the fee must use the same rounding direction as
+ * v1 to produce the same number for the same inputs.
  */
 export function daysUntilEvent(eventDate, now = new Date()) {
   if (!eventDate) return null;
   const d = new Date(eventDate);
   if (isNaN(d.getTime())) return null;
   const MS_PER_DAY = 24 * 60 * 60 * 1000;
-  return Math.floor((d.getTime() - now.getTime()) / MS_PER_DAY);
+  return Math.ceil((d.getTime() - now.getTime()) / MS_PER_DAY);
 }
 
 function resolveDayBucket(daysLeft) {
@@ -338,9 +358,17 @@ export function computeLineConvenienceFee({ vendorType, vendor, linePrice, event
   const percentage = cell.pct[bucketIndex];
   const weight = cell.weight;
 
-  // The one formula the user confirmed:
-  const variablePart = round2(((linePrice || 0) * percentage) / 100 * weight);
-  const fee = round2(cat.baseFee + variablePart);
+  // Matched to the Business (v1) admin tool's method EXACTLY —
+  // CustomOrderForm.tsx computes:
+  //   rawFee   = serviceCost * (ccfRate / 100)   — NO baseFee, NO weight
+  //   gstOnFee = rawFee * 0.18                   — v1 DOES tax the fee
+  //   fee (as it affects the customer total) = rawFee + gstOnFee
+  // baseFee (CATEGORY_FEE_TABLE) and weight (FEE_TABLE[...].weight) are
+  // still looked up and returned below for visibility/debugging only —
+  // neither is part of the arithmetic, matching v1 exactly.
+  const rawFee = round2(((linePrice || 0) * percentage) / 100);
+  const gstOnFee = round2(rawFee * 0.18);
+  const fee = round2(rawFee + gstOnFee);
 
   return {
     configured: true,
@@ -360,8 +388,9 @@ export function computeLineConvenienceFee({ vendorType, vendor, linePrice, event
       percentage,
       weight,
       linePrice: round2(linePrice || 0),
-      variablePart,
-      formula: "baseFee + linePrice * percentage/100 * weight",
+      rawFee,
+      gstOnFee,
+      formula: "(linePrice * percentage/100) * 1.18 — matches Business v1 admin tool exactly (baseFee/weight not applied; fee itself is taxed at 18%, same as v1's 'Tax on Convenience')",
     },
   };
 }
