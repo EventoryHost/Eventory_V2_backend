@@ -8,17 +8,30 @@ import { round2 } from "../utils/money.js";
  * checkout, and the booking's payment-summary.
  *
  * Built from three data tables the user supplied (Eventory_S3_Data_*.pdf) —
- * transcribed here verbatim, NOT re-derived. All three are lookup tables;
- * the ONLY thing not in any of them is the final arithmetic that combines
- * their outputs, which the user explicitly confirmed:
+ * transcribed here verbatim, NOT re-derived. All three are lookup tables.
  *
- *     lineConvenienceFee = baseFee + (linePrice * percentage/100 * weight)
+ * FORMULA (updated 2026-10-24 to match the Business v1 admin tool's
+ * CustomOrderForm.tsx percentage math, on explicit request, so both tools
+ * quote the same fee for the same package/category/day-bucket):
  *
- *   - baseFee     : CATEGORY_FEE_TABLE, by (criticality, category)          [File 2]
+ *     lineConvenienceFee = linePrice * percentage/100
+ *
  *   - percentage  : FEE_TABLE[category][priceSlab][daysBucket]              [File 1]
- *   - weight      : FEE_TABLE[category][priceSlab].weight                   [File 1]
  *   - category    : from a 3–15 vendor score + the service's criticality    [File 2 + 3]
  *   - vendorScore : sum of 3 sub-scores (bookings/yr, years, team size)     [File 3]
+ *   - daysLeft    : Math.ceil(daysToEvent), matching v1's calculateDaysLeft
+ *                   (NOT Math.floor — see daysUntilEvent() below)
+ *
+ * NOTE: baseFee (CATEGORY_FEE_TABLE, File 2) and weight (FEE_TABLE[...].weight,
+ * File 1) are still looked up and returned in the breakdown for visibility,
+ * but are NOT part of the fee arithmetic — Business v1's tool never applies
+ * them either, only the bare percentage × linePrice.
+ *
+ * NO hardcoded 18% is applied to this fee (reverted 2026-10-24 — explicitly
+ * asked not to hardcode a GST rate here). GST, where it applies, stays on
+ * the package's own gstInclusive/gstRatePercent config (cartPricingService.js
+ * `gstAmount`), exactly as it worked before any of today's changes — the
+ * convenience fee is a separate, untaxed number.
  *
  * ----------------------------------------------------------------------------
  * ASSUMPTIONS made where the tables are silent — all flagged to the user,
@@ -28,7 +41,8 @@ import { round2 } from "../utils/money.js";
  *      equipment + add-ons + chargeable items). Convenience % is applied to
  *      the pre-tax amount, not tax-inclusive.
  *   2. The convenience fee itself is added to grandTotal AFTER gst and is
- *      NOT itself taxed. (Real GST question for finance.)
+ *      NOT itself taxed — GST applies only via the package's own
+ *      gstInclusive/gstRatePercent config, unrelated to this fee.
  *   3. Price >= 300000 clamps to the top slab (250k–300k row).
  *   4. Day buckets (daysLeft = whole days from "now" to the event date):
  *        >= 25        -> 25_plus_days
@@ -276,15 +290,21 @@ function resolvePriceSlab(price) {
 }
 
 /**
- * Whole days from now to the event. Returns null when eventDate is missing
- * or unparseable (assumption #6 — the fee then can't be computed).
+ * Days from now to the event. Returns null when eventDate is missing or
+ * unparseable (assumption #6 — the fee then can't be computed).
+ *
+ * Uses Math.ceil, matching Business v1's calculateDaysLeft() exactly
+ * (csvDataService.ts) — NOT Math.floor. This matters: it can push a line
+ * into the next day-bucket up compared to a floor-based count for the same
+ * two dates, which is why the fee must use the same rounding direction as
+ * v1 to produce the same number for the same inputs.
  */
 export function daysUntilEvent(eventDate, now = new Date()) {
   if (!eventDate) return null;
   const d = new Date(eventDate);
   if (isNaN(d.getTime())) return null;
   const MS_PER_DAY = 24 * 60 * 60 * 1000;
-  return Math.floor((d.getTime() - now.getTime()) / MS_PER_DAY);
+  return Math.ceil((d.getTime() - now.getTime()) / MS_PER_DAY);
 }
 
 function resolveDayBucket(daysLeft) {
@@ -338,9 +358,16 @@ export function computeLineConvenienceFee({ vendorType, vendor, linePrice, event
   const percentage = cell.pct[bucketIndex];
   const weight = cell.weight;
 
-  // The one formula the user confirmed:
-  const variablePart = round2(((linePrice || 0) * percentage) / 100 * weight);
-  const fee = round2(cat.baseFee + variablePart);
+  // 2026-10-24: matched to the Business (v1) admin tool's percentage math —
+  // CustomOrderForm.tsx computes `serviceCost * (ccfRate / 100)`, with NO
+  // baseFee and NO weight applied even though both exist on this same
+  // FEE_TABLE/CATEGORY_FEE data. No hardcoded tax rate is applied here
+  // (explicitly asked not to) — this fee is untaxed, same as before. GST,
+  // where configured, stays entirely separate (the package's own
+  // gstInclusive/gstRatePercent in cartPricingService.js). baseFee and
+  // weight are still looked up and returned below for visibility/debugging
+  // only — neither is part of the arithmetic.
+  const fee = round2(((linePrice || 0) * percentage) / 100);
 
   return {
     configured: true,
@@ -360,8 +387,7 @@ export function computeLineConvenienceFee({ vendorType, vendor, linePrice, event
       percentage,
       weight,
       linePrice: round2(linePrice || 0),
-      variablePart,
-      formula: "baseFee + linePrice * percentage/100 * weight",
+      formula: "linePrice * percentage/100 (matches Business v1 admin tool's percentage math; baseFee/weight not applied; no tax added to this fee)",
     },
   };
 }
