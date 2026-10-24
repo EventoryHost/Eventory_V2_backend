@@ -37,11 +37,10 @@ import { hiddenVendorKeys } from "../utils/customerVisibility.js";
 // now supplied the real model (Eventory_S3_Data_*.pdf, 3 lookup tables) —
 // it's a PER-VENDOR-LINE fee computed from the vendor's score -> category,
 // the line's price slab, and days-to-event. See convenienceFeeService.js
-// for the tables and resolvers. Formula (updated 2026-10-24 to match the
-// Business v1 admin tool's CustomOrderForm.tsx percentage math): fee =
-// linePrice * percentage/100 — baseFee and weight are looked up but not
-// applied. No tax is added to this fee; GST stays entirely on the
-// package's own gstInclusive/gstRatePercent config, unrelated to this fee.
+// for the tables and resolvers. Formula (matched to the Business v1 admin
+// tool's CustomOrderForm.tsx exactly): fee = (linePrice * percentage/100) *
+// 1.18 — baseFee and weight are looked up but not applied; the 18% is v1's
+// own "Tax on Convenience" baked into one number.
 //
 // Master kill-switch: set CONVENIENCE_FEE_DISABLED=true to suppress the fee
 // everywhere (computed as 0, flagged) without a code change — a dark-launch

@@ -10,11 +10,15 @@ import { round2 } from "../utils/money.js";
  * Built from three data tables the user supplied (Eventory_S3_Data_*.pdf) —
  * transcribed here verbatim, NOT re-derived. All three are lookup tables.
  *
- * FORMULA (updated 2026-10-24 to match the Business v1 admin tool's
- * CustomOrderForm.tsx percentage math, on explicit request, so both tools
- * quote the same fee for the same package/category/day-bucket):
+ * FORMULA (matched to the Business v1 admin tool's CustomOrderForm.tsx
+ * EXACTLY, on explicit request, so both tools quote the same fee for the
+ * same package/category/day-bucket — re-applied 2026-10-24 after a brief
+ * revert; the 18% below is intentional, not a stray leftover):
  *
- *     lineConvenienceFee = linePrice * percentage/100
+ *     rawFee             = linePrice * percentage/100
+ *     lineConvenienceFee = rawFee * 1.18   (v1 taxes the fee itself at 18%,
+ *                          its own "Tax on Convenience" line, baked into
+ *                          one number here instead of two)
  *
  *   - percentage  : FEE_TABLE[category][priceSlab][daysBucket]              [File 1]
  *   - category    : from a 3–15 vendor score + the service's criticality    [File 2 + 3]
@@ -25,13 +29,7 @@ import { round2 } from "../utils/money.js";
  * NOTE: baseFee (CATEGORY_FEE_TABLE, File 2) and weight (FEE_TABLE[...].weight,
  * File 1) are still looked up and returned in the breakdown for visibility,
  * but are NOT part of the fee arithmetic — Business v1's tool never applies
- * them either, only the bare percentage × linePrice.
- *
- * NO hardcoded 18% is applied to this fee (reverted 2026-10-24 — explicitly
- * asked not to hardcode a GST rate here). GST, where it applies, stays on
- * the package's own gstInclusive/gstRatePercent config (cartPricingService.js
- * `gstAmount`), exactly as it worked before any of today's changes — the
- * convenience fee is a separate, untaxed number.
+ * them either, only the bare percentage × linePrice, then +18% on that.
  *
  * ----------------------------------------------------------------------------
  * ASSUMPTIONS made where the tables are silent — all flagged to the user,
@@ -40,9 +38,11 @@ import { round2 } from "../utils/money.js";
  *   1. linePrice = the line's PRE-GST subtotal (package base + team &
  *      equipment + add-ons + chargeable items). Convenience % is applied to
  *      the pre-tax amount, not tax-inclusive.
- *   2. The convenience fee itself is added to grandTotal AFTER gst and is
- *      NOT itself taxed — GST applies only via the package's own
- *      gstInclusive/gstRatePercent config, unrelated to this fee.
+ *   2. The convenience fee itself now DOES include an 18% tax baked into its
+ *      own amount (`fee = rawFee * 1.18`), matching v1's "Tax on
+ *      Convenience" line — it is NOT also run through the package's own
+ *      gstInclusive/gstRatePercent config, which stays entirely separate
+ *      (cartPricingService.js `gstAmount`).
  *   3. Price >= 300000 clamps to the top slab (250k–300k row).
  *   4. Day buckets (daysLeft = whole days from "now" to the event date):
  *        >= 25        -> 25_plus_days
@@ -358,16 +358,17 @@ export function computeLineConvenienceFee({ vendorType, vendor, linePrice, event
   const percentage = cell.pct[bucketIndex];
   const weight = cell.weight;
 
-  // 2026-10-24: matched to the Business (v1) admin tool's percentage math —
-  // CustomOrderForm.tsx computes `serviceCost * (ccfRate / 100)`, with NO
-  // baseFee and NO weight applied even though both exist on this same
-  // FEE_TABLE/CATEGORY_FEE data. No hardcoded tax rate is applied here
-  // (explicitly asked not to) — this fee is untaxed, same as before. GST,
-  // where configured, stays entirely separate (the package's own
-  // gstInclusive/gstRatePercent in cartPricingService.js). baseFee and
-  // weight are still looked up and returned below for visibility/debugging
-  // only — neither is part of the arithmetic.
-  const fee = round2(((linePrice || 0) * percentage) / 100);
+  // Matched to the Business (v1) admin tool's method EXACTLY —
+  // CustomOrderForm.tsx computes:
+  //   rawFee   = serviceCost * (ccfRate / 100)   — NO baseFee, NO weight
+  //   gstOnFee = rawFee * 0.18                   — v1 DOES tax the fee
+  //   fee (as it affects the customer total) = rawFee + gstOnFee
+  // baseFee (CATEGORY_FEE_TABLE) and weight (FEE_TABLE[...].weight) are
+  // still looked up and returned below for visibility/debugging only —
+  // neither is part of the arithmetic, matching v1 exactly.
+  const rawFee = round2(((linePrice || 0) * percentage) / 100);
+  const gstOnFee = round2(rawFee * 0.18);
+  const fee = round2(rawFee + gstOnFee);
 
   return {
     configured: true,
@@ -387,7 +388,9 @@ export function computeLineConvenienceFee({ vendorType, vendor, linePrice, event
       percentage,
       weight,
       linePrice: round2(linePrice || 0),
-      formula: "linePrice * percentage/100 (matches Business v1 admin tool's percentage math; baseFee/weight not applied; no tax added to this fee)",
+      rawFee,
+      gstOnFee,
+      formula: "(linePrice * percentage/100) * 1.18 — matches Business v1 admin tool exactly (baseFee/weight not applied; fee itself is taxed at 18%, same as v1's 'Tax on Convenience')",
     },
   };
 }
