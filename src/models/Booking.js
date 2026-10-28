@@ -498,6 +498,29 @@ const BookingSchema = new mongoose.Schema(
     cancelledAt: { type: Date, default: null },
     cancelledBy: { type: String, enum: ["Vendor", "Customer"], default: null },
     cancellationReason: { type: String, default: null },
+    // The refund owed on a customer cancellation, from the package's
+    // cancellation template (utils/cancellationTerms.js). Processed by the
+    // team by hand; they move `status` along via the admin endpoint.
+    // amount null = the team decides (custom policy, or Standard's 14–30 day band).
+    refund: {
+      type: new mongoose.Schema(
+        {
+          paid: { type: Number, default: 0 },
+          amount: { type: Number, default: null },
+          charges: { type: Number, default: null },
+          policy: { type: String, default: null },
+          status: {
+            type: String,
+            enum: ["team_review", "pending", "started", "completed", "none"],
+            default: "pending",
+          },
+          startedAt: { type: Date, default: null },
+          completedAt: { type: Date, default: null },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
     // Stamped by the save hook below whenever the booking becomes Completed.
     completedAt: { type: Date, default: null },
     // First time the vendor opened the booking (NewBooking -> Viewed).

@@ -14,6 +14,10 @@ import {
   listHelpConversations,
   getHelpConversation,
   saveHelpConversation,
+  continueHelpOnWhatsApp,
+  createBookingHelpRequest,
+  markHelpRequestSorted,
+  noteVendorContact,
 } from "../controllers/customerChatController.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
 import {
@@ -23,6 +27,9 @@ import {
   areaCheckQuerySchema,
   areaWaitlistSchema,
   helpConversationSaveSchema,
+  helpRequestWhatsAppSchema,
+  bookingHelpRequestSchema,
+  vendorContactSchema,
 } from "../validators/customerHelpValidators.js";
 
 const router = express.Router();
@@ -221,10 +228,59 @@ router.post("/help-request/:enquiryId/messages", validateRequest(helpRequestMess
  *             properties:
  *               anon_id: { type: string }
  *               phone: { type: string }
+ *               window: { type: string, description: "Call-time option, e.g. 'This evening, 6–9 PM'; omitted = as soon as possible" }
+ *               note: { type: string, description: "What it's about" }
  *     responses:
  *       201: { description: "{ request } with callBack set" }
  */
 router.post("/help-request/:enquiryId/call-back", validateRequest(helpRequestCallBackSchema), requestHelpCallBack);
+
+/**
+ * @swagger
+ * /api/customer/chat/help-request/{enquiryId}/whatsapp:
+ *   post:
+ *     summary: The customer opened WhatsApp from this ticket — noted once and the team told on Slack
+ *     tags: [Customer Chat]
+ *     responses:
+ *       200: { description: "{ request } with whatsappAt set" }
+ */
+router.post("/help-request/:enquiryId/whatsapp", validateRequest(helpRequestWhatsAppSchema), continueHelpOnWhatsApp);
+
+/**
+ * @swagger
+ * /api/customer/chat/booking-help:
+ *   post:
+ *     summary: Signed-in customer's request about their own bookings (change, vendor question, invoice…), for the booking's Event Manager
+ *     tags: [Customer Chat]
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [bookingRefs, topic, text]
+ *     responses:
+ *       201: { description: "{ enquiryId, request } — same thread, polling and call back as the brief" }
+ *       401: { description: Not signed in }
+ */
+router.post("/booking-help", validateRequest(bookingHelpRequestSchema), createBookingHelpRequest);
+
+/**
+ * @swagger
+ * /api/customer/chat/booking-help/contact:
+ *   post:
+ *     summary: Event day — the customer opened a vendor's on-ground number; the Event Manager is told on Slack
+ *     tags: [Customer Chat]
+ */
+router.post("/booking-help/contact", validateRequest(vendorContactSchema), noteVendorContact);
+
+/**
+ * @swagger
+ * /api/customer/chat/help-request/{enquiryId}/sorted:
+ *   post:
+ *     summary: Event-day report — the customer says it's sorted; the team closes it after checking
+ *     tags: [Customer Chat]
+ */
+router.post("/help-request/:enquiryId/sorted", markHelpRequestSorted);
 
 /**
  * @swagger

@@ -17,6 +17,8 @@ import { getOrCreateInvoiceForBooking, renderInvoicePdf } from "../services/invo
 import { withPricingBreakdown } from "../utils/pricingBreakdown.js";
 import { round2 } from "../utils/money.js";
 import { raiseBookingIssue } from "../services/bookingIssueService.js";
+import { cancellationTerms } from "../utils/cancellationTerms.js";
+import { notifyBookingCancelled } from "../services/chatSlackNotifier.js";
 
 /**
  * "My Bookings" dashboard — Phase 5 Step 20. Pure read-only projection over
@@ -377,10 +379,29 @@ export const cancelBooking = async (req, res) => {
     }
 
     const cancellationPolicy = await getLiveCancellationPolicy(booking.packageId);
+    // The refund follows the package's cancellation template (see
+    // utils/cancellationTerms.js); online cancelling closes at 11:59 PM IST
+    // the day before the event.
+    const terms = cancellationTerms(booking, cancellationPolicy.cancellationPolicy);
+    if (!terms.canSelfCancel) {
+      return res.status(409).json({
+        status: "FAILED",
+        message: "Online cancellation has closed for this booking. Please contact your Event Manager.",
+      });
+    }
     const refundEstimate = {
-      amount: booking.totalReceived || 0,
-      note:
-        "This is the full amount paid so far, NOT a policy-computed refund — the stored cancellation policy is a vendor-set document/template/written text, not structured rules this system can apply automatically. The actual refund amount is subject to the policy shown below and is not processed automatically by this endpoint.",
+      amount: terms.refund,
+      note: terms.teamDecides
+        ? "The team confirms the refund under the package's cancellation policy."
+        : "From the package's cancellation policy. Refunds are processed by the team.",
+    };
+    // What's owed; the team moves the status along as they process it.
+    booking.refund = {
+      paid: terms.paid,
+      amount: terms.refund,
+      charges: terms.charges,
+      policy: terms.policy,
+      status: terms.teamDecides ? "team_review" : terms.refund > 0 ? "pending" : "none",
     };
 
     booking.status = "Cancelled";
@@ -409,8 +430,11 @@ export const cancelBooking = async (req, res) => {
       console.error(`[cancelBooking] Failed to release slot for package ${booking.packageId}:`, err.message);
     }
 
-    // No notification system exists in this codebase yet (no email/SMS,
-    // no EM/Admin portal) — logged so it's visible, not silently dropped.
+    // The team hears about it on Slack (the refund to process); there's
+    // still no vendor-side notification beyond the booking's own status.
+    notifyBookingCancelled(booking).catch((err) =>
+      console.error(`[cancelBooking] Slack notify failed for ${booking.bookingId}:`, err.message)
+    );
     console.warn(
       `[cancelBooking] Booking ${booking.bookingId} (vendor ${booking.vendorId}) cancelled by customer ${req.customer._id}. ` +
         `Refund estimate: ${refundEstimate.amount}. No vendor/admin notification sent — no notification system exists yet.`
@@ -422,10 +446,37 @@ export const cancelBooking = async (req, res) => {
       bookingId: booking.bookingId,
       bookingStatus: booking.status,
       refundEstimate,
+      refund: booking.refund,
       cancellationPolicy,
     });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to cancel booking", error: error.message });
+  }
+};
+
+/**
+ * @desc What cancelling would cost right now, without cancelling: the
+ * refund from the package's cancellation template, the free-cancellation
+ * (and free-change) cut-off, and whether it can still be cancelled online.
+ * @route GET /api/customer/bookings/:bookingId/cancellation-preview
+ */
+export const getCancellationPreview = async (req, res) => {
+  try {
+    const query = bookingLookupQuery(req.params.bookingId, req.customer._id);
+    if (!query) return res.status(400).json({ status: "FAILED", message: "Invalid bookingId" });
+    const booking = await Booking.findOne(query).lean();
+    if (!booking) return res.status(404).json({ status: "FAILED", message: "Booking not found" });
+    const cancellationPolicy = await getLiveCancellationPolicy(booking.packageId);
+    const terms = cancellationTerms(booking, cancellationPolicy.cancellationPolicy);
+    return res.status(200).json({
+      status: "SUCCESS",
+      bookingId: booking.bookingId,
+      cancellable: !TERMINAL_STATUSES.includes(booking.status) && terms.canSelfCancel,
+      terms,
+      refund: booking.refund ?? null,
+    });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to load cancellation terms", error: error.message });
   }
 };
 
@@ -574,11 +625,15 @@ export const acceptProposal = async (req, res) => {
       });
     }
 
-    // Accepting is what confirms the booking (the vendor's Update Package
-    // only sends the proposal). A booking reopened by follow-up requests is
-    // confirmed again; one already Confirmed stays as it is.
-    const confirming = PRE_ACCEPTANCE_STATUSES.includes(booking.status);
-    if (confirming && !booking.confirmedAt && (await slotTaken(booking))) {
+    // Accepting records the customer's agreement; the vendor then confirms
+    // (or declines) the booking from their app — PUT /api/bookings/:id/accept
+    // allows it once the proposal is Accepted. Only a booking that was
+    // already confirmed and reopened by follow-up requests is confirmed
+    // again here: its date was locked, so there is no new decision to make.
+    const reconfirming = PRE_ACCEPTANCE_STATUSES.includes(booking.status) && Boolean(booking.confirmedAt);
+    // A proposal for a slot that has since gone can never be confirmed, so
+    // it is refused here rather than left for the vendor to trip over.
+    if (!booking.confirmedAt && (await slotTaken(booking))) {
       return res.status(409).json({
         status: "FAILED",
         code: "SLOT_TAKEN",
@@ -589,13 +644,10 @@ export const acceptProposal = async (req, res) => {
     const now = new Date();
     booking.proposalResponse = { status: "Accepted", respondedAt: now };
     booking.lastCustomerActivityAt = now;
-    if (confirming) {
-      booking.status = "Confirmed";
-      booking.confirmedAt = booking.confirmedAt || now;
-    }
+    if (reconfirming) booking.status = "Confirmed";
     await booking.save();
 
-    if (confirming) {
+    if (reconfirming) {
       // Best-effort, like the cancel path's release: the acceptance itself
       // already succeeded.
       try {
@@ -608,12 +660,14 @@ export const acceptProposal = async (req, res) => {
     // No notification system exists in this codebase yet — logged so the
     // answer is visible server-side, same as cancelBooking.
     console.warn(
-      `[acceptProposal] Booking ${booking.bookingId} (vendor ${booking.vendorId}): customer accepted the proposal${confirming ? " — booking confirmed" : ""}. No vendor notification sent — no notification system exists yet.`
+      `[acceptProposal] Booking ${booking.bookingId} (vendor ${booking.vendorId}): customer accepted the proposal${reconfirming ? " — booking confirmed again" : " — awaiting vendor confirmation"}. No vendor notification sent — no notification system exists yet.`
     );
 
     return res.status(200).json({
       status: "SUCCESS",
-      message: confirming ? "Proposal accepted — your booking is confirmed" : "Proposal accepted",
+      message: reconfirming
+        ? "Proposal accepted — your booking is confirmed"
+        : "Proposal accepted — waiting for the vendor to confirm",
       proposalResponse: booking.proposalResponse,
       bookingStatus: booking.status,
       booking: withPricingBreakdown(booking),

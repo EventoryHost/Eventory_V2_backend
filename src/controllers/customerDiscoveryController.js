@@ -202,15 +202,16 @@ export const browsePackages = async (req, res) => {
     }
 
     // City lives on Vendor, not Package — resolve matching vendors first,
-    // then scope the package query to their ids.
+    // then scope the package query to their ids. Both Vendor._id and
+    // Vendor.id, since Package.vendorId is stored as either (see `q` above).
     if (city) {
-      const vendorIds = await Vendor.find({
+      const vendors = await Vendor.find({
         $or: [
           { city: { $regex: `^${escapeRegex(city)}$`, $options: "i" } },
           ...serviceAreaRegexClauses({ $regex: escapeRegex(city), $options: "i" }),
         ],
-      }).select("_id");
-      query.vendorId = { $in: vendorIds.map((v) => v._id) };
+      }).select("_id id");
+      query.vendorId = { $in: vendors.flatMap((v) => [v._id, v.id]).filter(Boolean) };
     }
 
     // step2_productsAndPricing.included — added 2026-09-04, frontend-reported
@@ -238,7 +239,9 @@ export const browsePackages = async (req, res) => {
       "step3_policiesAndCharges.packagePricing step3_policiesAndCharges.teamAndEquipment " +
       "step3_policiesAndCharges.overallPriceOfPackage " +
       "step3_policiesAndCharges.gstInclusive step3_policiesAndCharges.gstRatePercent " +
-      "step3_policiesAndCharges.guestTiers step4_sampleMedia.media createdAt";
+      "step3_policiesAndCharges.guestTiers step4_sampleMedia.media createdAt " +
+      // Token/advance settings, for the help panel card's "₹X to book".
+      "bookingSettings.paymentType bookingSettings.token";
 
     let packages;
     const total = await Package.countDocuments(query);

@@ -113,6 +113,8 @@ const ChatEnquirySchema = new mongoose.Schema(
           phone: { type: String, required: true },
           // The brief's call-time chip, e.g. "This evening, 6–9 PM"; null = ASAP.
           window: { type: String, default: null },
+          // "What's it about?" from the call back screen.
+          note: { type: String, default: null },
           requestedAt: { type: Date, default: Date.now },
           callBy: { type: Date, required: true },
         },
@@ -120,6 +122,25 @@ const ChatEnquirySchema = new mongoose.Schema(
       ),
       default: null,
     },
+    // Booking help (help panel on a booking page): the bookings it's about,
+    // what it's about ("Change guest count"), and who it's for — the
+    // booking's assigned Event Manager when there is one.
+    bookingRefs: { type: [String], default: undefined },
+    topic: { type: String, default: null },
+    assignedEmName: { type: String, default: null },
+    // "report" = an event-day problem report (GRV ref); else a request.
+    kind: { type: String, enum: ["request", "report", null], default: null },
+    // Event-day report details: issue key, booking it's about, urgency.
+    report: { type: mongoose.Schema.Types.Mixed, default: null },
+    // The customer said "It's sorted now"; the team closes it after checking.
+    customerSortedAt: { type: Date, default: null },
+    // The team marked the ticket resolved (ticketStatus "closed").
+    resolvedAt: { type: Date, default: null },
+    // Last time the customer had this ticket's chat open — an Event
+    // Manager message after it is "New reply" in Your chats.
+    customerSeenAt: { type: Date, default: null },
+    // The customer opened WhatsApp from this ticket; the team was told once.
+    whatsappAt: { type: Date, default: null },
 
     // Set once the Slack notification for this lead has actually been
     // posted (see chatSlackNotifier.js) — separate from `status` so a
