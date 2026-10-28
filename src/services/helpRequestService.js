@@ -77,6 +77,7 @@ export async function checkLate(enquiry) {
     : enquiry.createdAt.getTime() + REPLY_PROMISE_MINUTES * 60 * 1000;
   const late =
     !enquiry.firstReplyAt &&
+    !enquiry.resolvedAt &&
     !enquiry.callBack &&
     enquiry.replyMode !== "call-me" &&
     Date.now() >= due;
@@ -104,6 +105,14 @@ export async function nextTicket() {
     .collection("customer_help_ticket_counters")
     .findOneAndUpdate({ _id: "ticket" }, { $inc: { seq: 1 } }, { upsert: true, returnDocument: "after" });
   return `TKT-${1000 + (doc?.seq ?? doc?.value?.seq ?? 0)}`;
+}
+
+/** Event-day problem reports have their own refs: "GRV-4001" onwards. */
+export async function nextGrievance() {
+  const doc = await mongoose.connection
+    .collection("customer_help_ticket_counters")
+    .findOneAndUpdate({ _id: "grievance" }, { $inc: { seq: 1 } }, { upsert: true, returnDocument: "after" });
+  return `GRV-${4000 + (doc?.seq ?? doc?.value?.seq ?? 0)}`;
 }
 
 /**
@@ -151,8 +160,9 @@ export async function recordTicketMessage(enquiry, { role, text, clientId, sende
     { upsert: true, returnDocument: "before", setDefaultsOnInsert: true }
   ).lean();
   const doc = await HelpMessage.findOne(filter).lean();
-  // Already a ticket message (a retried send): count it once.
-  if (before && before.via !== "transcript") return doc;
+  // Already a ticket message (a retried send): count it once, and tell
+  // the caller so Slack isn't told twice.
+  if (before && before.via !== "transcript") return { ...doc, isRetry: true };
 
   await ChatEnquiry.updateOne(
     { _id: enquiry._id },
@@ -263,11 +273,20 @@ export function serializeHelpRequest(enquiry, { late, messages = enquiry.helpMes
     offHours: enquiry.createdOffHours,
     late,
     replied: Boolean(enquiry.firstReplyAt),
+    /** The team marked it resolved; Your chats lists it under Resolved. */
+    resolved: enquiry.ticketStatus === "closed",
+    whatsappAt: enquiry.whatsappAt ?? null,
+    /** "request" or an event-day "report" (GRV ref). */
+    kind: enquiry.kind ?? "request",
+    report: enquiry.report ?? null,
+    /** The customer said it's sorted; the team closes it after checking. */
+    customerSortedAt: enquiry.customerSortedAt ?? null,
     callBack: enquiry.callBack
       ? {
           requestId: enquiry.callBack.requestId,
           ticket: enquiry.callBack.ticket || enquiry.callBack.requestId,
           window: enquiry.callBack.window || null,
+          note: enquiry.callBack.note || null,
           callBy: enquiry.callBack.callBy,
         }
       : null,

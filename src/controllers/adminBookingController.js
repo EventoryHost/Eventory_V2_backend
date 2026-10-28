@@ -543,6 +543,45 @@ export const assignEmToBooking = async (req, res) => {
   }
 };
 
+// ─── PUT /api/admin/bookings/:bookingId/refund — the team moves a refund along ───
+// A cancellation records what's owed (Booking.refund); refunds are paid by
+// hand, so the team marks them started / completed here — the customer's
+// help panel shows the tracker. `amount` sets it where the team decides
+// (custom policy, or Standard's 14–30 day band).
+export const updateRefundStatus = async (req, res) => {
+  try {
+    const { status, amount } = req.body || {};
+    if (!["started", "completed"].includes(status)) {
+      return res.status(400).json({ success: false, message: "status must be started or completed" });
+    }
+    const isObjectId = mongoose.isValidObjectId(req.params.bookingId);
+    const booking = await Booking.findOne(
+      isObjectId ? { $or: [{ bookingId: req.params.bookingId }, { _id: req.params.bookingId }] } : { bookingId: req.params.bookingId }
+    );
+    if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
+    if (!booking.refund) return res.status(409).json({ success: false, message: "This booking has no refund to process" });
+    if (amount != null) {
+      const n = Number(amount);
+      if (!Number.isFinite(n) || n < 0 || n > booking.refund.paid) {
+        return res.status(400).json({ success: false, message: "amount must be between 0 and what was paid" });
+      }
+      booking.refund.amount = n;
+      booking.refund.charges = booking.refund.paid - n;
+    }
+    if (booking.refund.amount == null) {
+      return res.status(409).json({ success: false, message: "Set the refund amount first" });
+    }
+    const now = new Date();
+    booking.refund.status = status;
+    if (!booking.refund.startedAt) booking.refund.startedAt = now;
+    if (status === "completed") booking.refund.completedAt = now;
+    await booking.save();
+    res.status(200).json({ success: true, refund: booking.refund });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
 // ─── PUT /api/admin/bookings/:bookingId — full admin edit ───
 
 // Booking fields a body key is written straight onto (after the Zod schema

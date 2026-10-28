@@ -3,6 +3,7 @@ import {
   getBookings,
   getBookingDetail,
   cancelBooking,
+  getCancellationPreview,
   getInvoicePdf,
   raiseIssue,
   acceptProposal,
@@ -113,6 +114,17 @@ router.get("/:bookingId", protectCustomer, getBookingDetail);
  *       409: { description: Booking is already Cancelled/Declined/Completed — cannot cancel }
  */
 router.post("/:bookingId/cancel", protectCustomer, cancelBooking);
+
+/**
+ * @swagger
+ * /api/customer/bookings/{bookingId}/cancellation-preview:
+ *   get:
+ *     summary: What cancelling would cost now (from the package's cancellation template), without cancelling
+ *     tags: [Customer Bookings]
+ *     responses:
+ *       200: { description: "{ cancellable, terms: { policy, paid, refund, charges, teamDecides, freeUntil, freeNow, noRefundFrom, selfCancelUntil, canSelfCancel }, refund }" }
+ */
+router.get("/:bookingId/cancellation-preview", protectCustomer, getCancellationPreview);
 
 /**
  * @swagger
