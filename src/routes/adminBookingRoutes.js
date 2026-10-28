@@ -11,6 +11,7 @@ import {
   getTodaysBookings,
   assignEmToBooking,
   updateBooking,
+  updateRefundStatus,
 } from "../controllers/adminBookingController.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
 import { adminUpdateBookingSchema } from "../validators/adminBookingValidators.js";
@@ -27,6 +28,8 @@ router.get("/:bookingId", getBookingDetails);
 router.put("/:bookingId/reassign", reassignBooking);
 router.put("/:bookingId/force-accept", forceAccept);
 router.put("/:bookingId/assign-em", assignEmToBooking);
+// The team processes a cancellation refund: { status: "started" | "completed", amount? }.
+router.put("/:bookingId/refund", updateRefundStatus);
 // Full admin edit — registered after the action routes above.
 router.put("/:bookingId", validateRequest(adminUpdateBookingSchema, "body"), updateBooking);
 

@@ -105,7 +105,9 @@ export async function notifyHelpRequestLate(enquiry) {
 export async function notifyHelpCallBack(enquiry) {
   await post(
     `📞 *Call back requested ${enquiry.callBack.ticket || ""}* (request ${enquiry.ticket || enquiry.enquiryId})\n` +
-      `*Phone:* ${enquiry.callBack.phone}\n*Call by:* ${istTime(enquiry.callBack.callBy)}\n` +
+      `*Phone:* ${enquiry.callBack.phone}\n` +
+      `*When:* ${enquiry.callBack.window || "As soon as possible"} · call by ${istTime(enquiry.callBack.callBy)}\n` +
+      (enquiry.callBack.note ? `*About:* ${enquiry.callBack.note}\n` : "") +
       `${formatEnquiryBlock(enquiry)}`
   );
 }
@@ -123,6 +125,82 @@ export async function notifyAreaWaitlist(entry) {
   );
 }
 
+/** @desc Customer moved a help ticket to WhatsApp — reply there with the ticket in hand. */
+export async function notifyHelpWhatsApp(enquiry) {
+  await post(
+    `📱 *${enquiry.ticket || enquiry.enquiryId} continued on WhatsApp* — the customer opened WhatsApp from the help panel. ` +
+      `Reply there; the chat so far is on the ticket.`
+  );
+}
+
+/** @desc Booking help request, tagged with the booking's Event Manager. */
+export async function notifyBookingHelp(enquiry, { text, details, bookings }) {
+  const who = enquiry.assignedEmName
+    ? `*For:* ${enquiry.assignedEmName} (assigned Event Manager)`
+    : "*For:* Event Manager team (no Event Manager assigned)";
+  const pkgs = bookings.map((b) => `• ${b.name}${b.vendor ? ` by ${b.vendor}` : ""} (${b.ref})`).join("\n");
+  await post(
+    `🗂️ *Booking help ${enquiry.ticket}* — ${enquiry.topic}\n${who}\n` +
+      `*Customer:* ${enquiry.customerName || "—"}${enquiry.customer?.phone ? ` · ${enquiry.customer.phone}` : ""}\n` +
+      `*Event:* ${enquiry.eventType || "—"} · ${enquiry.eventDateRaw || "—"} · ${enquiry.city || "—"}\n` +
+      `*Packages:*\n${pkgs}\n` +
+      `> ${text}` +
+      (details.length ? `\n${details.map((d) => `• ${d}`).join("\n")}` : "")
+  );
+}
+
+/** @desc A customer cancelled a booking (help panel or booking page) — the refund to process. */
+export async function notifyBookingCancelled(booking) {
+  const r = booking.refund;
+  const refund = !r
+    ? "—"
+    : r.status === "team_review"
+      ? `to be decided by the team (₹${r.paid} paid, ${r.policy} policy)`
+      : r.status === "none"
+        ? `nothing (₹${r.paid} paid, ${r.policy} policy)`
+        : `₹${r.amount} of ₹${r.paid} paid (${r.policy} policy) — process it, then mark it started/completed`;
+  await post(
+    `❌ *Booking ${booking.bookingId} cancelled by the customer*\n` +
+      `*For:* ${booking.assignedEmName || "Event Manager team (no Event Manager assigned)"}\n` +
+      `*Package:* ${booking.packageSnapshot?.name || "—"} · ${booking.eventType || "—"} on ${booking.eventDate ? new Date(booking.eventDate).toDateString() : "—"}\n` +
+      `*Reason:* ${booking.cancellationReason || "Not given"}\n` +
+      `*Refund:* ${refund}`
+  );
+}
+
+/** @desc Event-day problem report; urgent ones (no-show, safety) alert the duty manager. */
+export async function notifyEventDayReport(enquiry, { text, details, bookings }) {
+  const r = enquiry.report || {};
+  const pkg = bookings.find((b) => b.ref === r.packageRef);
+  await post(
+    `${r.urgent ? "🚨 *URGENT — duty manager, please pick this up*\n" : ""}` +
+      `⚠️ *Event-day report ${enquiry.ticket}* — ${r.label || enquiry.topic}\n` +
+      `*For:* ${enquiry.assignedEmName || "Event Manager team (no Event Manager assigned)"}\n` +
+      `*Customer:* ${enquiry.customerName || "—"}${enquiry.customer?.phone ? ` · ${enquiry.customer.phone}` : ""}\n` +
+      `*About:* ${pkg ? `${pkg.name}${pkg.vendor ? ` by ${pkg.vendor}` : ""} (${pkg.ref})` : "Not sure / the venue"}\n` +
+      `*Event:* ${enquiry.eventType || "—"} · ${enquiry.city || "—"}\n` +
+      `> ${text}` +
+      (r.missing?.length ? `\n*Missing:* ${r.missing.join(", ")}` : "") +
+      (r.photoUrl ? `\n*Photo:* ${r.photoUrl}` : "") +
+      (details.length ? `\n${details.map((d) => `• ${d}`).join("\n")}` : "")
+  );
+}
+
+/** @desc Event day: the customer is contacting a vendor's on-ground person directly. */
+export async function notifyVendorContact(booking, customer) {
+  await post(
+    `📞 *${customer.name || "The customer"} is contacting the vendor directly* on the event day\n` +
+      `*For:* ${booking.assignedEmName || "Event Manager team"}\n` +
+      `*Booking:* ${booking.bookingId} · ${booking.packageSnapshot?.name || "—"}` +
+      (booking.groundStaff ? ` · on-ground: ${booking.groundStaff.name} ${booking.groundStaff.phone}` : "")
+  );
+}
+
+/** @desc The customer says an event-day report is sorted — check with the vendor, then close it. */
+export async function notifyHelpSorted(enquiry) {
+  await post(`✅ *${enquiry.ticket}: the customer says it's sorted* — check with the vendor, then resolve the ticket.`);
+}
+
 /** @desc Customer wrote again in the help panel thread. */
 export async function notifyHelpMessage(enquiry, text) {
   await post(`💬 *New message on help request ${enquiry.ticket || enquiry.enquiryId}*\n> ${text}`);
@@ -136,5 +214,11 @@ export default {
   notifyHelpRequestLate,
   notifyHelpCallBack,
   notifyHelpMessage,
+  notifyHelpWhatsApp,
   notifyAreaWaitlist,
+  notifyBookingHelp,
+  notifyBookingCancelled,
+  notifyEventDayReport,
+  notifyVendorContact,
+  notifyHelpSorted,
 };
