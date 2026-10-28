@@ -27,8 +27,14 @@ const TRANSITIONS = {
     to: "Under Review",
   },
   Approved: { from: ["Under Review"], to: "Approved" },
-  ActionRaised: { from: ["Under Review"], to: "Action Required" },
-  Rejected: { from: ["Under Review"], to: "Deleted" },
+  ActionRaised: {
+    from: ["Under Review", "Approved", "Live"],
+    to: "Action Required",
+  },
+  Rejected: {
+    from: ["Under Review", "Approved", "Live"],
+    to: "Deleted",
+  },
   WentLive: { from: ["Approved"], to: "Live" },
 };
 

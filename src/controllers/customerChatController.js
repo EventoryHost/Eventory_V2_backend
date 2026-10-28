@@ -5,8 +5,21 @@ import ChatSession from "../models/ChatSession.js";
 import ChatMessage from "../models/ChatMessage.js";
 import ChatEnquiry from "../models/ChatEnquiry.js";
 import { handleBotTurn } from "../services/chatBotEngine.js";
-import { notifyHelpRequest, notifyHelpCallBack, notifyHelpMessage, notifyAreaWaitlist } from "../services/chatSlackNotifier.js";
+import {
+  notifyHelpRequest,
+  notifyHelpCallBack,
+  notifyHelpMessage,
+  notifyHelpWhatsApp,
+  notifyAreaWaitlist,
+  notifyBookingHelp,
+  notifyEventDayReport,
+  notifyVendorContact,
+  notifyHelpSorted,
+} from "../services/chatSlackNotifier.js";
 import AreaWaitlist from "../models/AreaWaitlist.js";
+import Booking from "../models/Booking.js";
+import Vendor from "../models/Vendor.js";
+import { raiseBookingIssue } from "../services/bookingIssueService.js";
 import HelpConversation from "../models/HelpConversation.js";
 import { lookupArea } from "../services/areaLookupService.js";
 import { resolveArea } from "../utils/helpServiceAreas.js";
@@ -18,6 +31,7 @@ import {
   isOffHours,
   loadTicketMessages,
   nextTicket,
+  nextGrievance,
   recordTicketMessage,
   recordTranscript,
   serializeHelpRequest,
@@ -362,7 +376,7 @@ export const createHelpRequest = async (req, res) => {
       guestCount: b.guests,
       budgetOption: "Yes",
       budgetRange: b.budget,
-      servicesNeeded: [b.vendorType],
+      servicesNeeded: [b.vendorType || "Not sure yet"],
       city: b.area || null,
       eventDateRaw: b.date || null,
       replyMode: b.replyMode,
@@ -390,9 +404,24 @@ export const createHelpRequest = async (req, res) => {
           : null,
     });
 
-    // The chat now carries its ticket, even before the panel's next save.
+    // The chat now carries its ticket, even before the panel's next save —
+    // and exists from now on, so it's in Your chats if that save never lands.
     if (conversationId) {
-      await HelpConversation.updateOne({ conversationId }, { $set: { enquiryId: enquiry.enquiryId, ticket } });
+      await HelpConversation.updateOne(
+        { conversationId },
+        {
+          $set: { enquiryId: enquiry.enquiryId, ticket },
+          $setOnInsert: {
+            conversationId,
+            ...(identity.customerId ? { customerId: String(identity.customerId), anonId: null } : { anonId: identity.anonId, customerId: null }),
+            title: `${b.occasion} · ${b.guests} guests · ${b.budget}`,
+            preview: "Sent to the Event Manager team",
+            items: [],
+            lastMessageAt: new Date(),
+          },
+        },
+        { upsert: true }
+      );
     }
 
     // Saved first; Slack is only a notification. Fire-and-forget, same as
@@ -410,6 +439,189 @@ export const createHelpRequest = async (req, res) => {
   } catch (error) {
     console.error("createHelpRequest error:", error);
     return res.status(500).json({ success: false, message: "Could not send your request" });
+  }
+};
+
+/**
+ * @desc Booking help (help panel on a booking page): a request about the
+ * customer's own bookings — a change, a question for a vendor, an invoice
+ * update — for the booking's assigned Event Manager (the Event Manager
+ * team when none is assigned). Same ticket, thread, polling and call back
+ * as the brief; one ticket per chat.
+ * @route POST /api/customer/chat/booking-help
+ */
+export const createBookingHelpRequest = async (req, res) => {
+  try {
+    const customer = await resolveLoggedInCustomer(req);
+    if (!customer) return res.status(401).json({ success: false, message: "Sign in to ask about a booking" });
+    const b = req.body;
+
+    const bookings = await Booking.find({ customerId: customer._id, bookingId: { $in: b.bookingRefs } }).lean();
+    if (bookings.length !== new Set(b.bookingRefs).size) {
+      return res.status(404).json({ success: false, message: "Booking not found" });
+    }
+
+    // One ticket per chat: sending again returns the same one.
+    let conversationId = null;
+    if (b.conversationId) {
+      const chat = await HelpConversation.findOne({ conversationId: b.conversationId }, { customerId: 1 }).lean();
+      if (!chat || String(chat.customerId) === String(customer._id)) {
+        conversationId = b.conversationId;
+        const existing = await ChatEnquiry.findOne({ source: "help_panel", conversationId, customerId: customer._id });
+        if (existing) {
+          return res.status(200).json({
+            success: true,
+            enquiryId: existing.enquiryId,
+            request: serializeHelpRequest(existing, { late: false, messages: await loadTicketMessages(existing) }),
+          });
+        }
+      }
+    }
+
+    const first = bookings[0];
+    const emName = bookings.map((x) => x.assignedEmName).find(Boolean) || null;
+    // Event-day problem reports carry their own GRV refs.
+    const report = b.report ?? null;
+    const ticket = report ? await nextGrievance() : await nextTicket();
+    const enquiry = await ChatEnquiry.create({
+      ticket,
+      customerId: customer._id,
+      conversationId,
+      customer: customerSnapshot(customer),
+      customerName: customer.name || null,
+      ticketStatus: "open",
+      source: "help_panel",
+      kind: report ? "report" : "request",
+      report,
+      bookingRefs: bookings.map((x) => x.bookingId),
+      topic: b.topic,
+      assignedEmName: emName,
+      eventType: first.eventType || null,
+      eventDateRaw: first.eventDate ? new Date(first.eventDate).toDateString() : null,
+      city: first.location || null,
+      replyMode: "reply-here",
+      pageUrl: b.pageUrl || null,
+      transcript: [...(b.transcript || []), ...(b.details || []).map((d) => `Detail: ${d}`)].slice(-20),
+      status: "STEP_8_HANDOFF",
+      createdOffHours: isOffHours(),
+    });
+    // The chat is listed in Your chats from now on, even if the panel's own
+    // save never lands (they closed the page): created here when it's new.
+    if (conversationId) {
+      await HelpConversation.updateOne(
+        { conversationId },
+        {
+          $set: { enquiryId: enquiry.enquiryId, ticket },
+          $setOnInsert: {
+            conversationId,
+            customerId: String(customer._id),
+            anonId: null,
+            title: b.topic,
+            preview: b.text.slice(0, 200),
+            items: [],
+            lastMessageAt: new Date(),
+          },
+        },
+        { upsert: true }
+      );
+    }
+    // The request itself is the ticket's first message.
+    await recordTicketMessage(enquiry, {
+      role: "customer",
+      text: b.text,
+      clientId: b.clientId,
+      senderId: customer.id ?? null,
+      senderName: customer.name ?? null,
+      via: "help_request",
+    });
+
+    const vendorIds = bookings.map((x) => x.vendorId).filter(Boolean).map(String);
+    const vendors = await Vendor.find(
+      { $or: [{ id: { $in: vendorIds } }, { _id: { $in: vendorIds.filter((v) => /^[a-f0-9]{24}$/i.test(v)) } }] },
+      { id: 1, businessName: 1 }
+    ).lean();
+    const vendorName = (v) =>
+      vendors.find((x) => x.id === String(v) || String(x._id) === String(v))?.businessName || null;
+    // A report is also the booking's own issue record (Booking.issues).
+    if (report?.packageRef) {
+      try {
+        const doc = await Booking.findOne({ customerId: customer._id, bookingId: report.packageRef });
+        const category = ["noshow", "late", "behav"].includes(report.issue)
+          ? "Booking"
+          : report.issue === "extra"
+            ? "Payment"
+            : ["missing", "wrong", "quality"].includes(report.issue)
+              ? "Items"
+              : "Other";
+        const raised = doc && raiseBookingIssue(doc, { category, description: `${report.label} (${ticket}): ${b.text}` }, "Customer");
+        if (raised && !raised.error) await doc.save();
+      } catch (err) {
+        console.error("[createBookingHelpRequest] issue record failed:", err.message);
+      }
+    }
+    const summary = {
+      text: b.text,
+      details: b.details || [],
+      bookings: bookings.map((x) => ({
+        ref: x.bookingId,
+        name: x.packageSnapshot?.name || "Package",
+        vendor: vendorName(x.vendorId),
+      })),
+    };
+    (report ? notifyEventDayReport(enquiry, summary) : notifyBookingHelp(enquiry, summary))
+      .then(() => ChatEnquiry.updateOne({ _id: enquiry._id }, { $set: { slackNotifiedAt: new Date() } }))
+      .catch((err) => console.error("[createBookingHelpRequest] Slack notify failed:", err.message));
+
+    const fresh = await ChatEnquiry.findById(enquiry._id);
+    return res.status(201).json({
+      success: true,
+      enquiryId: enquiry.enquiryId,
+      request: serializeHelpRequest(fresh, { late: false, messages: await loadTicketMessages(fresh) }),
+    });
+  } catch (error) {
+    console.error("createBookingHelpRequest error:", error);
+    return res.status(500).json({ success: false, message: "Could not send your request" });
+  }
+};
+
+/**
+ * @desc Event-day report: the customer says it's sorted. The team closes
+ * the ticket once they've checked with the vendor.
+ * @route POST /api/customer/chat/help-request/:enquiryId/sorted
+ */
+export const markHelpRequestSorted = async (req, res) => {
+  try {
+    const enquiry = await findOwnHelpRequest(req, req.body || {});
+    if (!enquiry) return res.status(404).json({ success: false, message: "Request not found" });
+    if (!enquiry.customerSortedAt) {
+      enquiry.customerSortedAt = new Date();
+      await enquiry.save();
+      notifyHelpSorted(enquiry).catch((err) => console.error("[markHelpRequestSorted] Slack notify failed:", err.message));
+    }
+    const late = await checkLate(enquiry);
+    return res.json({ success: true, request: serializeHelpRequest(enquiry, { late, messages: await loadTicketMessages(enquiry) }) });
+  } catch (error) {
+    console.error("markHelpRequestSorted error:", error);
+    return res.status(500).json({ success: false, message: "Could not update that" });
+  }
+};
+
+/**
+ * @desc Event day: the customer opened a vendor's on-ground number. The
+ * Event Manager is told, so they can step in.
+ * @route POST /api/customer/chat/booking-help/contact
+ */
+export const noteVendorContact = async (req, res) => {
+  try {
+    const customer = await resolveLoggedInCustomer(req);
+    if (!customer) return res.status(401).json({ success: false, message: "Sign in first" });
+    const booking = await Booking.findOne({ customerId: customer._id, bookingId: req.body.bookingRef }).lean();
+    if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
+    notifyVendorContact(booking, customer).catch((err) => console.error("[noteVendorContact] Slack notify failed:", err.message));
+    return res.json({ success: true, notedAt: new Date() });
+  } catch (error) {
+    console.error("noteVendorContact error:", error);
+    return res.status(500).json({ success: false, message: "Could not note that" });
   }
 };
 
@@ -441,6 +653,11 @@ export const getHelpRequest = async (req, res) => {
   try {
     const enquiry = await findOwnHelpRequest(req, req.query || {});
     if (!enquiry) return res.status(404).json({ success: false, message: "Request not found" });
+    // ?seen=1: the chat is open in front of them, so replies so far are read.
+    if (req.query.seen === "1") {
+      enquiry.customerSeenAt = new Date();
+      await ChatEnquiry.updateOne({ _id: enquiry._id }, { $set: { customerSeenAt: enquiry.customerSeenAt } });
+    }
     const late = await checkLate(enquiry);
     const messages = await loadTicketMessages(enquiry);
     return res.json({ success: true, request: serializeHelpRequest(enquiry, { late, messages }) });
@@ -467,9 +684,11 @@ export const postHelpRequestMessage = async (req, res) => {
       senderName: enquiry.customer?.name ?? enquiry.customerName ?? null,
       via: "help_request",
     });
-    notifyHelpMessage(enquiry, saved.text).catch((err) =>
-      console.error("[postHelpRequestMessage] Slack notify failed:", err.message)
-    );
+    if (!saved.isRetry) {
+      notifyHelpMessage(enquiry, saved.text).catch((err) =>
+        console.error("[postHelpRequestMessage] Slack notify failed:", err.message)
+      );
+    }
     return res.status(201).json({
       success: true,
       message: { messageId: saved.messageId, from: "customer", text: saved.text, sentAt: saved.sentAt },
@@ -491,11 +710,14 @@ export const requestHelpCallBack = async (req, res) => {
     const enquiry = await findOwnHelpRequest(req, req.body);
     if (!enquiry) return res.status(404).json({ success: false, message: "Request not found" });
     if (!enquiry.callBack) {
+      const window = req.body.window && req.body.window !== "As soon as possible" ? req.body.window : null;
       enquiry.callBack = {
         requestId: generateISTId("CB"),
         ticket: await nextTicket(),
         phone: req.body.phone,
-        callBy: callBackDeadline(),
+        window,
+        note: req.body.note || null,
+        callBy: callBackDeadline(window),
       };
       if (!enquiry.phoneNumber) enquiry.phoneNumber = req.body.phone;
       await enquiry.save();
@@ -508,6 +730,35 @@ export const requestHelpCallBack = async (req, res) => {
   } catch (error) {
     console.error("requestHelpCallBack error:", error);
     return res.status(500).json({ success: false, message: "Could not request a call back" });
+  }
+};
+
+/**
+ * @desc The customer opened WhatsApp from this ticket: noted on it once
+ * and the team told on Slack, so whoever answers on WhatsApp has it.
+ * @route POST /api/customer/chat/help-request/:enquiryId/whatsapp
+ */
+export const continueHelpOnWhatsApp = async (req, res) => {
+  try {
+    const enquiry = await findOwnHelpRequest(req, req.body);
+    if (!enquiry) return res.status(404).json({ success: false, message: "Request not found" });
+    if (!enquiry.whatsappAt) {
+      const now = new Date();
+      // Conditional, so a double tap only tells the team once.
+      const marked = await ChatEnquiry.updateOne({ _id: enquiry._id, whatsappAt: null }, { $set: { whatsappAt: now } });
+      if (marked.modifiedCount) {
+        enquiry.whatsappAt = now;
+        notifyHelpWhatsApp(enquiry).catch((err) =>
+          console.error("[continueHelpOnWhatsApp] Slack notify failed:", err.message)
+        );
+      }
+    }
+    const messages = await loadTicketMessages(enquiry);
+    const late = await checkLate(enquiry);
+    return res.json({ success: true, request: serializeHelpRequest(enquiry, { late, messages }) });
+  } catch (error) {
+    console.error("continueHelpOnWhatsApp error:", error);
+    return res.status(500).json({ success: false, message: "Could not note that" });
   }
 };
 
@@ -615,7 +866,31 @@ export const listHelpConversations = async (req, res) => {
       .sort({ lastMessageAt: -1 })
       .limit(30)
       .lean();
-    return res.json({ success: true, conversations: rows.map(conversationSummary) });
+    // Open = a ticket the team hasn't resolved; assistant-only chats and
+    // resolved tickets are Resolved. Unread = an Event Manager wrote after
+    // the customer last had the chat open.
+    const enquiryIds = rows.map((r) => r.enquiryId).filter(Boolean);
+    const tickets = enquiryIds.length
+      ? await ChatEnquiry.find(
+          { enquiryId: { $in: enquiryIds }, source: "help_panel" },
+          { enquiryId: 1, ticketStatus: 1, lastMessageAt: 1, lastMessageFrom: 1, customerSeenAt: 1 }
+        ).lean()
+      : [];
+    const byId = new Map(tickets.map((t) => [t.enquiryId, t]));
+    const conversations = rows.map((r) => {
+      const t = r.enquiryId ? byId.get(r.enquiryId) : null;
+      return {
+        ...conversationSummary(r),
+        status: t && t.ticketStatus !== "closed" ? "open" : "resolved",
+        unread: Boolean(
+          t &&
+            t.lastMessageFrom === "event_manager" &&
+            t.lastMessageAt &&
+            (!t.customerSeenAt || t.lastMessageAt > t.customerSeenAt)
+        ),
+      };
+    });
+    return res.json({ success: true, conversations });
   } catch (error) {
     console.error("listHelpConversations error:", error);
     return res.status(500).json({ success: false, message: "Could not load your chats" });

@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { generateISTId } from "../utils/idGenerator.js";
+import { normalizePhone } from "../utils/phone.js";
 import {
   CHANGE_REQUEST_STATUSES,
   ChangeRequestSchema,
@@ -66,6 +67,21 @@ export const ISSUE_WINDOW_HOURS = 48;
 
 // Slot times ("HH:MM") are Indian local time.
 const IST_OFFSET_MS = 330 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// The event's IST calendar day as [year, month, day] — eventDate is stored
+// as an instant, so shifting it by the IST offset before reading the UTC
+// parts gives the date the customer and vendor actually mean.
+const istDayOf = (eventDate) => {
+  const ist = new Date(new Date(eventDate).getTime() + IST_OFFSET_MS);
+  return [ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate()];
+};
+
+// "HH:MM" -> minutes past midnight, or null when absent/unparseable.
+const slotMinutes = (t) => {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(String(t ?? "").trim());
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+};
 
 /**
  * When the event finishes: the end of the booked slot on the event's IST
@@ -74,20 +90,108 @@ const IST_OFFSET_MS = 330 * 60 * 1000;
  */
 export const eventEndOf = ({ eventDate, startTime, endTime }) => {
   if (!eventDate) return null;
-  const ist = new Date(new Date(eventDate).getTime() + IST_OFFSET_MS);
-  const [y, m, d] = [ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate()];
-  const parse = (t) => {
-    const match = /^(\d{1,2}):(\d{2})$/.exec(String(t ?? "").trim());
-    return match ? Number(match[1]) * 60 + Number(match[2]) : null;
-  };
-  const end = parse(endTime);
-  const start = parse(startTime);
+  const [y, m, d] = istDayOf(eventDate);
+  const end = slotMinutes(endTime);
+  const start = slotMinutes(startTime);
   const minutes = end ?? 23 * 60 + 59;
   const overnight = end != null && start != null && end <= start;
   return new Date(
     Date.UTC(y, m, d + (overnight ? 1 : 0), 0, minutes) - IST_OFFSET_MS
   );
 };
+
+/**
+ * When the event starts: the start of the booked slot on the event's IST
+ * calendar day, or that day's IST midnight when no slot was booked. The
+ * vendor can't mark teardown before this.
+ */
+export const eventStartOf = ({ eventDate, startTime }) => {
+  if (!eventDate) return null;
+  const [y, m, d] = istDayOf(eventDate);
+  return new Date(Date.UTC(y, m, d, 0, slotMinutes(startTime) ?? 0) - IST_OFFSET_MS);
+};
+
+/**
+ * Whether `now` falls on the event day — the gate for the vendor's check-in
+ * and the customer's day requests. That is the event's whole IST calendar
+ * day, stretched to the event's end (eventEndOf) when the slot runs past
+ * midnight, so an overnight event's small hours still count.
+ */
+/**
+ * Whether the event day has begun (IST midnight of the event's day) — from
+ * then on the package is fixed: changes to it would reopen the booking and
+ * shut the vendor out of the event-day steps, which need it Confirmed. Asks
+ * on the day go through day requests instead.
+ */
+export const eventDayStarted = (booking, now = new Date()) => {
+  if (!booking?.eventDate) return false;
+  const [y, m, d] = istDayOf(booking.eventDate);
+  return new Date(now).getTime() >= Date.UTC(y, m, d) - IST_OFFSET_MS;
+};
+
+export const isEventDay = (booking, now = new Date()) => {
+  if (!booking?.eventDate) return false;
+  const [y, m, d] = istDayOf(booking.eventDate);
+  const dayStart = Date.UTC(y, m, d) - IST_OFFSET_MS;
+  const t = new Date(now).getTime();
+  if (t < dayStart) return false;
+  if (t < dayStart + DAY_MS) return true;
+  const end = eventEndOf(booking);
+  return !!end && t <= end.getTime();
+};
+
+// ─── Event day ──────────────────────────────────────────────
+// The vendor's on-the-day flow: check in at the venue, prove the setup with
+// photos, ask for the balance, clear the venue. Each step is a timestamp on
+// the booking (see BookingSchema below) rather than a status, because the
+// booking stays Confirmed throughout — completeBooking still closes it.
+
+// Proof-of-setup photos the vendor may attach.
+export const MAX_SETUP_PHOTOS = 10;
+
+// A day request is Pending until the vendor sends an update on it. There is
+// no "rejected": on the day, the vendor answers with a message instead.
+export const DAY_REQUEST_STATUSES = ["Pending", "Updated"];
+
+// The vendor's answer to a day request. Replaced wholesale if the vendor
+// sends another, so it always shows the latest word.
+const DayRequestUpdateSchema = new mongoose.Schema(
+  {
+    message: { type: String, default: null, trim: true, maxlength: 1000 },
+    photos: { type: [String], default: [] },
+    sentAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
+
+// A change the customer asks for on the event day ("move the stage left").
+// `_id: true` so the vendor's update can address one request by id.
+const DayRequestSchema = new mongoose.Schema(
+  {
+    text: { type: String, required: true, trim: true, maxlength: 500 },
+    addedAt: { type: Date, default: Date.now },
+    status: { type: String, enum: DAY_REQUEST_STATUSES, default: "Pending" },
+    update: { type: DayRequestUpdateSchema, default: null },
+  },
+  { _id: true }
+);
+
+// The vendor's on-ground contact for the day. `code` keys the public,
+// read-only page at /g/:code (GET /api/ground/:code); it is random and
+// regenerated whenever the contact is replaced, so a removed contact's link
+// stops working. `link` is not stored — it is derived from code when the
+// booking is serialised (utils/groundLink.js), so a change of web host
+// doesn't leave stale links in the database.
+const GroundStaffSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true, trim: true, maxlength: 60 },
+    // Canonical "+91XXXXXXXXXX", same as Customer.phone (utils/phone.js).
+    phone: { type: String, required: true },
+    code: { type: String, required: true },
+    assignedAt: { type: Date, default: Date.now },
+  },
+  { _id: false }
+);
 
 const IssueSchema = new mongoose.Schema(
   {
@@ -123,6 +227,18 @@ const IssueSchema = new mongoose.Schema(
 //     forward-looking availability sense.
 //   - Cancelled/Declined — as before.
 export const SLOT_OCCUPYING_STATUSES = ["Confirmed"];
+
+// A confirmed booking the customer reopened with follow-up requests goes back
+// to InDiscussion but keeps its confirmedAt — and keeps its date: the vendor
+// committed to it, and only the details are being renegotiated. Every query
+// for "bookings holding a date" uses this filter rather than
+// SLOT_OCCUPYING_STATUSES alone.
+export const slotOccupyingFilter = () => ({
+  $or: [
+    { status: { $in: SLOT_OCCUPYING_STATUSES } },
+    { status: "InDiscussion", confirmedAt: { $ne: null } },
+  ],
+});
 
 // PDP "Customize items" workshop requests — added 2026-08-27 per the
 // frontend team's exact request (their suggested shape, used verbatim).
@@ -166,6 +282,8 @@ const CustomizeRequestSchema = new mongoose.Schema(
     // field; ones sent later from "Still needs changes" on Review Proposal
     // carry it, so the vendor can tell a follow-up round apart.
     requestedAt: { type: Date, default: null },
+    // The vendor's optional reason when rejecting — see ChangeRequestSchema.
+    vendorNote: { type: String, default: null, trim: true, maxlength: 500 },
   },
   // `_id: true` — was false until 2026-09-22. The vendor's accept/decline
   // addresses one request by id, so ids must be STABLE: Mongoose mints a
@@ -380,6 +498,29 @@ const BookingSchema = new mongoose.Schema(
     cancelledAt: { type: Date, default: null },
     cancelledBy: { type: String, enum: ["Vendor", "Customer"], default: null },
     cancellationReason: { type: String, default: null },
+    // The refund owed on a customer cancellation, from the package's
+    // cancellation template (utils/cancellationTerms.js). Processed by the
+    // team by hand; they move `status` along via the admin endpoint.
+    // amount null = the team decides (custom policy, or Standard's 14–30 day band).
+    refund: {
+      type: new mongoose.Schema(
+        {
+          paid: { type: Number, default: 0 },
+          amount: { type: Number, default: null },
+          charges: { type: Number, default: null },
+          policy: { type: String, default: null },
+          status: {
+            type: String,
+            enum: ["team_review", "pending", "started", "completed", "none"],
+            default: "pending",
+          },
+          startedAt: { type: Date, default: null },
+          completedAt: { type: Date, default: null },
+        },
+        { _id: false }
+      ),
+      default: null,
+    },
     // Stamped by the save hook below whenever the booking becomes Completed.
     completedAt: { type: Date, default: null },
     // First time the vendor opened the booking (NewBooking -> Viewed).
@@ -414,6 +555,12 @@ const BookingSchema = new mongoose.Schema(
       status: { type: String, enum: [...PROPOSAL_RESPONSE_STATUSES, null], default: null },
       respondedAt: { type: Date, default: null },
     },
+    // Bumped every time the vendor changes the proposal (decisions, pricing
+    // or the payment plan). The customer's Accept Proposal carries the
+    // version they were shown, so accepting a proposal the vendor has since
+    // changed is refused instead of locking in terms nobody reviewed.
+    proposalVersion: { type: Number, default: 0 },
+    proposalSentAt: { type: Date, default: null },
 
     // PDP item-details colour picks — see ColourPreferenceSchema's own
     // comment above. Not a request; informational only for the vendor.
@@ -481,6 +628,29 @@ const BookingSchema = new mongoose.Schema(
     convenienceFee: { type: Number, default: null },
     convenienceFeeBreakdown: { type: mongoose.Schema.Types.Mixed, default: null },
 
+    // ─── Event day (see the "Event day" section above) ───
+    // Each step is stamped when the vendor completes it; null means not yet.
+    // Vendor arrived at the venue. Only possible on the event day
+    // (isEventDay); every later step requires it.
+    checkedInAt: { type: Date, default: null },
+    // Proof-of-setup photo URLs (uploaded client-side first), at most
+    // MAX_SETUP_PHOTOS. Submitting them is what marks setup done.
+    setupPhotos: { type: [String], default: [] },
+    setupCompletedAt: { type: Date, default: null },
+    // The vendor's latest ask for the balance — re-asking refreshes it.
+    // Only a stamp: no SMS/push system exists, the app shares the ask itself.
+    paymentRequestedAt: { type: Date, default: null },
+    // The vendor chose "Collect later" when asked about the balance before
+    // setup, so the app stops prompting for it.
+    paymentDeferredAt: { type: Date, default: null },
+    // Venue cleared. Allowed only after setup and once the event has started.
+    teardownCompletedAt: { type: Date, default: null },
+    // On-ground contact for the day — see GroundStaffSchema. null when the
+    // vendor hasn't assigned one (or removed them).
+    groundStaff: { type: GroundStaffSchema, default: null },
+    // Changes the customer asks for on the event day — see DayRequestSchema.
+    dayRequests: { type: [DayRequestSchema], default: [] },
+
     // Vendor-private note from the "Calendar Note" section
     calendarNote: {
       type: String,
@@ -509,8 +679,12 @@ BookingSchema.pre("save", async function autoLinkCustomer() {
   try {
     const normalized = normalizePhone(this.customer.phone);
     if (!normalized) return;
-    const match = await Customer.findOne({ phone: normalized }).select("_id id").lean();
-    if (match) this.customerId = match.id || match._id;
+    // Looked up through the registry rather than imported: Customer is not
+    // otherwise needed here, and a static import risks a model import cycle.
+    // Customer routes scope bookings by the account's Mongo _id (see
+    // bookingLookupQuery), so that is what gets stored — not the public id.
+    const match = await mongoose.model("Customer").findOne({ phone: normalized }).select("_id").lean();
+    if (match) this.customerId = String(match._id);
   } catch (err) {
     console.warn("[Booking.autoLinkCustomer] lookup failed, continuing without a link:", err.message);
   }
@@ -541,5 +715,11 @@ BookingSchema.index({ vendorId: 1, eventDate: 1 });
 // tabs, sorted/filtered by status or event date) once that endpoint exists.
 BookingSchema.index({ customerId: 1, status: 1 });
 BookingSchema.index({ customerId: 1, eventDate: 1 });
+// Resolves a ground-contact link (GET /api/ground/:code). Partial so the
+// many bookings without a ground contact don't collide on a missing code.
+BookingSchema.index(
+  { "groundStaff.code": 1 },
+  { unique: true, partialFilterExpression: { "groundStaff.code": { $type: "string" } } }
+);
 
 export default mongoose.model("Booking", BookingSchema);

@@ -138,6 +138,26 @@ export const replyToHelpRequest = async (req, res) => {
 };
 
 /**
+ * @desc The team resolves a ticket (or reopens it). Resolved tickets move
+ * to Resolved in the customer's Your chats and are never flagged late.
+ * @route POST /api/admin/help-requests/:enquiryId/status (enquiry id or "TKT-…")
+ */
+export const setHelpRequestStatus = async (req, res) => {
+  try {
+    const enquiry = await ChatEnquiry.findOne(ticketFilter(req.params.enquiryId));
+    if (!enquiry) return res.status(404).json({ success: false, message: "Request not found" });
+    const closing = req.body.status === "closed";
+    enquiry.ticketStatus = closing ? "closed" : enquiry.firstReplyAt ? "replied" : "open";
+    enquiry.resolvedAt = closing ? new Date() : null;
+    await enquiry.save();
+    return res.json({ success: true, request: await adminView(enquiry) });
+  } catch (error) {
+    console.error("setHelpRequestStatus error:", error);
+    return res.status(500).json({ success: false, message: "Could not update the request" });
+  }
+};
+
+/**
  * @desc Out-of-area "Notify me" leads, newest first, with a count per area
  * — who to message once Eventory reaches each one. ?area= filters (case-
  * insensitive), ?pending=true hides people already messaged.

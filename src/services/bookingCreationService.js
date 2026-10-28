@@ -58,14 +58,52 @@ function mapMilestonesToBookingSchema(quoteMilestones, tokenAmountPaid, paidAt, 
   // rather than assumed-first, same reasoning as before this rewrite.
   const tokenIndex = quoteMilestones.findIndex((m) => Math.abs((m.amount || 0) - tokenAmountPaid) < 0.01);
 
-  return quoteMilestones.map((m, i) => ({
-    title: m.title || `Milestone ${i + 1}`,
-    percentage: m.percentage ?? null,
-    amount: m.amount ?? 0,
-    dueDate: m.dueDate || null,
-    status: i === tokenIndex ? "Received" : "Pending",
-    receivedDate: i === tokenIndex ? paidAt : null,
-  }));
+  if (tokenIndex !== -1 || !(tokenAmountPaid > 0)) {
+    return quoteMilestones.map((m, i) => ({
+      title: m.title || `Milestone ${i + 1}`,
+      percentage: m.percentage ?? null,
+      amount: m.amount ?? 0,
+      dueDate: m.dueDate || null,
+      status: i === tokenIndex ? "Received" : "Pending",
+      receivedDate: i === tokenIndex ? paidAt : null,
+    }));
+  }
+
+  // The token matches no milestone (it comes from the package's own
+  // bookingSettings, separate from its milestone plan). It still has to
+  // count against the plan, or the customer is asked for the token AND every
+  // milestone in full: record it as its own Received milestone and take it
+  // off the earliest milestones, dropping any it covers entirely.
+  let remaining = round2(tokenAmountPaid);
+  const rest = [];
+  quoteMilestones.forEach((m, i) => {
+    const amount = m.amount ?? 0;
+    const covered = Math.min(amount, remaining);
+    remaining = round2(remaining - covered);
+    const left = round2(amount - covered);
+    if (left <= 0 && amount > 0) return;
+    rest.push({
+      title: m.title || `Milestone ${i + 1}`,
+      // A reduced instalment no longer follows the plan's percentage split.
+      percentage: covered > 0 ? null : m.percentage ?? null,
+      amount: left,
+      dueDate: m.dueDate || null,
+      status: "Pending",
+      receivedDate: null,
+    });
+  });
+
+  return [
+    {
+      title: "Token",
+      percentage: null,
+      amount: round2(tokenAmountPaid),
+      dueDate: null,
+      status: "Received",
+      receivedDate: paidAt,
+    },
+    ...rest,
+  ];
 }
 
 /**

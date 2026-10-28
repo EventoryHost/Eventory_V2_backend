@@ -325,9 +325,12 @@ export const reassignBooking = async (req, res) => {
 // PUT /api/admin/bookings/:bookingId/force-accept
 export const forceAccept = async (req, res) => {
   try {
+    // "Confirmed" — "Accepted" is not a booking status since the 2026-08-27
+    // enum rewrite, and findByIdAndUpdate skips validation, so the old value
+    // was written as-is and the booking vanished from every list.
     const booking = await Booking.findByIdAndUpdate(
       req.params.bookingId,
-      { status: "Accepted" },
+      { status: "Confirmed", confirmedAt: new Date() },
       { new: true }
     );
     if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
@@ -535,6 +538,45 @@ export const assignEmToBooking = async (req, res) => {
     if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
 
     res.status(200).json({ success: true, data: booking });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// ─── PUT /api/admin/bookings/:bookingId/refund — the team moves a refund along ───
+// A cancellation records what's owed (Booking.refund); refunds are paid by
+// hand, so the team marks them started / completed here — the customer's
+// help panel shows the tracker. `amount` sets it where the team decides
+// (custom policy, or Standard's 14–30 day band).
+export const updateRefundStatus = async (req, res) => {
+  try {
+    const { status, amount } = req.body || {};
+    if (!["started", "completed"].includes(status)) {
+      return res.status(400).json({ success: false, message: "status must be started or completed" });
+    }
+    const isObjectId = mongoose.isValidObjectId(req.params.bookingId);
+    const booking = await Booking.findOne(
+      isObjectId ? { $or: [{ bookingId: req.params.bookingId }, { _id: req.params.bookingId }] } : { bookingId: req.params.bookingId }
+    );
+    if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
+    if (!booking.refund) return res.status(409).json({ success: false, message: "This booking has no refund to process" });
+    if (amount != null) {
+      const n = Number(amount);
+      if (!Number.isFinite(n) || n < 0 || n > booking.refund.paid) {
+        return res.status(400).json({ success: false, message: "amount must be between 0 and what was paid" });
+      }
+      booking.refund.amount = n;
+      booking.refund.charges = booking.refund.paid - n;
+    }
+    if (booking.refund.amount == null) {
+      return res.status(409).json({ success: false, message: "Set the refund amount first" });
+    }
+    const now = new Date();
+    booking.refund.status = status;
+    if (!booking.refund.startedAt) booking.refund.startedAt = now;
+    if (status === "completed") booking.refund.completedAt = now;
+    await booking.save();
+    res.status(200).json({ success: true, refund: booking.refund });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
