@@ -8,6 +8,7 @@ import { utcDayRange } from "../utils/dateRange.js";
 import { computeAvailability, computeSlotsForDate } from "../utils/packageAvailability.js";
 import { checkServiceability, describeVendorAreas, extractPincode, listServiceableCities, lookupPincode } from "../utils/serviceability.js";
 import { serviceAreaRegexClauses } from "../utils/serviceAreas.js";
+import { findServiceArea, isKnownServiceArea } from "../data/serviceLocalities.js";
 import { round2 } from "../utils/money.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { buildGroupFilter } from "../utils/packageGroupFilter.js";
@@ -1362,13 +1363,41 @@ export const browseVendors = async (req, res) => {
       }
     }
 
+    // `city` doubles as the vendor listing's "Service Localities" filter —
+    // real bug (reported): that sidebar used to offer raw Vendor.city facet
+    // values (often full addresses, not clean locality names — see
+    // customerVendorLocation known gotcha) and only narrowed the single
+    // already-loaded page client-side, the same class of bug eventCategory
+    // had before it was fixed to refetch server-side. Now the sidebar's
+    // options are the 9 curated main areas (serviceLocalities.js, same list
+    // as the Become a Vendor page's "We are live in 200+ Localities"), and
+    // picking one here is expanded to [area name, ...its real localities]
+    // so it matches a vendor whose `serviceAreas.area` IS that chip
+    // (the common case — vendor onboarding stores the whole area as one
+    // chip), OR whose serviceAreas.sublocalities/legacy string array names
+    // one of that area's specific localities. Comma-separated = OR across
+    // several areas, same convention eventCategory already uses. A `city`
+    // value that isn't one of the 9 curated areas (e.g. a literal city/
+    // pincode-derived name from elsewhere) falls back to the original
+    // single-value exact/service-area match, unchanged.
     if (city) {
-      and.push({
-        $or: [
-          { city: { $regex: `^${escapeRegex(city)}$`, $options: "i" } },
-          ...serviceAreaRegexClauses({ $regex: escapeRegex(city), $options: "i" }),
-        ],
+      const cityValues = String(city)
+        .split(",")
+        .map((c) => c.trim())
+        .filter(Boolean);
+      const cityOr = cityValues.flatMap((value) => {
+        const knownArea = isKnownServiceArea(value) ? findServiceArea(value) : null;
+        if (!knownArea) {
+          const rx = { $regex: `^${escapeRegex(value)}$`, $options: "i" };
+          return [{ city: rx }, ...serviceAreaRegexClauses(rx)];
+        }
+        const namePattern = [knownArea.area, ...knownArea.localities]
+          .map((name) => `^${escapeRegex(name)}$`)
+          .join("|");
+        const rx = { $regex: namePattern, $options: "i" };
+        return [{ city: rx }, ...serviceAreaRegexClauses(rx)];
       });
+      if (cityOr.length) and.push({ $or: cityOr });
     }
 
     // Free-text search over the fields a customer would actually type into
