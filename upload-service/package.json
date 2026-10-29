@@ -25,6 +25,9 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "nodemon": "^3.1.14"
+    "@aws-sdk/client-cloudfront": "^3.1158.0",
+    "heic-convert": "^2.1.0",
+    "nodemon": "^3.1.14",
+    "sharp": "^0.35.5"
   }
 }

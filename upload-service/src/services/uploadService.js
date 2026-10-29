@@ -116,9 +116,26 @@ export function extractKey(fileUrl) {
   return decodeURIComponent(String(fileUrl).replace(/^https?:\/\/[^/]+\//, ""));
 }
 
-export async function createPresignedPut({ fileName, vendorType }) {
-  const { key, contentType } = buildObjectKey(fileName, vendorType);
-  const uploadUrl = await getSignedUrl(
+export const PREVIEW_CONTENT_TYPE = "image/webp";
+
+const PREVIEW_FOLDER = "previews/";
+
+export function isPreviewKey(key) {
+  return key.includes(`/${PREVIEW_FOLDER}`);
+}
+
+export function hasPreview(key) {
+  return key.includes("/images/") && !isPreviewKey(key);
+}
+
+export function previewKeyFor(key) {
+  const slash = key.lastIndexOf("/");
+  const base = key.slice(slash + 1).replace(/\.[^.]+$/, "");
+  return `${key.slice(0, slash + 1)}${PREVIEW_FOLDER}${base}.webp`;
+}
+
+function presignPut(key, contentType) {
+  return getSignedUrl(
     s3,
     new PutObjectCommand({
       Bucket: bucket(),
@@ -128,10 +145,35 @@ export async function createPresignedPut({ fileName, vendorType }) {
     }),
     { expiresIn: PUT_URL_TTL },
   );
-  return { uploadUrl, key, publicUrl: buildPublicUrl(key), contentType };
 }
 
-export async function createMultipart({ fileName, vendorType, size }) {
+async function previewUploadFor(key, contentType, withPreview) {
+  if (!withPreview || !contentType.startsWith("image/")) return undefined;
+  const previewKey = previewKeyFor(key);
+  return {
+    uploadUrl: await presignPut(previewKey, PREVIEW_CONTENT_TYPE),
+    key: previewKey,
+    publicUrl: buildPublicUrl(previewKey),
+    contentType: PREVIEW_CONTENT_TYPE,
+  };
+}
+
+export async function createPresignedPut({ fileName, vendorType, withPreview }) {
+  const { key, contentType } = buildObjectKey(fileName, vendorType);
+  const [uploadUrl, preview] = await Promise.all([
+    presignPut(key, contentType),
+    previewUploadFor(key, contentType, withPreview),
+  ]);
+  return {
+    uploadUrl,
+    key,
+    publicUrl: buildPublicUrl(key),
+    contentType,
+    ...(preview && { preview }),
+  };
+}
+
+export async function createMultipart({ fileName, vendorType, size, withPreview }) {
   const { key, contentType } = buildObjectKey(fileName, vendorType);
 
   const created = await s3.send(
@@ -144,20 +186,23 @@ export async function createMultipart({ fileName, vendorType, size }) {
   );
 
   const partCount = Math.ceil(size / PART_SIZE);
-  const partUrls = await Promise.all(
-    Array.from({ length: partCount }, (_, index) =>
-      getSignedUrl(
-        s3,
-        new UploadPartCommand({
-          Bucket: bucket(),
-          Key: key,
-          UploadId: created.UploadId,
-          PartNumber: index + 1,
-        }),
-        { expiresIn: PART_URL_TTL },
+  const [partUrls, preview] = await Promise.all([
+    Promise.all(
+      Array.from({ length: partCount }, (_, index) =>
+        getSignedUrl(
+          s3,
+          new UploadPartCommand({
+            Bucket: bucket(),
+            Key: key,
+            UploadId: created.UploadId,
+            PartNumber: index + 1,
+          }),
+          { expiresIn: PART_URL_TTL },
+        ),
       ),
     ),
-  );
+    previewUploadFor(key, contentType, withPreview),
+  ]);
 
   return {
     uploadId: created.UploadId,
@@ -166,6 +211,7 @@ export async function createMultipart({ fileName, vendorType, size }) {
     contentType,
     partSize: PART_SIZE,
     partUrls,
+    ...(preview && { preview }),
   };
 }
 
@@ -185,20 +231,28 @@ export async function completeMultipart({ key, uploadId, parts }) {
   return { key, publicUrl: buildPublicUrl(key) };
 }
 
-export function abortMultipart({ key, uploadId }) {
-  return s3.send(
+function deletePreviewOf(key) {
+  if (!hasPreview(key)) return Promise.resolve();
+  return s3
+    .send(new DeleteObjectCommand({ Bucket: bucket(), Key: previewKeyFor(key) }))
+    .catch(() => {});
+}
+
+export async function abortMultipart({ key, uploadId }) {
+  await s3.send(
     new AbortMultipartUploadCommand({
       Bucket: bucket(),
       Key: key,
       UploadId: uploadId,
     }),
   );
+  await deletePreviewOf(key);
 }
 
-export function deleteObject({ url, key }) {
-  return s3.send(
-    new DeleteObjectCommand({ Bucket: bucket(), Key: key ?? extractKey(url) }),
-  );
+export async function deleteObject({ url, key }) {
+  const objectKey = key ?? extractKey(url);
+  await s3.send(new DeleteObjectCommand({ Bucket: bucket(), Key: objectKey }));
+  await deletePreviewOf(objectKey);
 }
 
 export function isCommercialCsv(fileName) {

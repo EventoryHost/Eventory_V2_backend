@@ -18,11 +18,14 @@ const size = z.coerce
   .int("size must be a whole number of bytes")
   .positive("size must be greater than zero");
 
+const withPreview = z.boolean().optional();
+
 export const presignSchema = z.object({
   fileName,
   vendorType,
   contentType: z.string().trim().max(255).optional(),
   size: size.optional(),
+  withPreview,
 });
 
 export const multipartCreateSchema = z.object({
@@ -30,6 +33,7 @@ export const multipartCreateSchema = z.object({
   vendorType,
   contentType: z.string().trim().max(255).optional(),
   size: size.max(PART_SIZE * S3_MAX_PARTS, "File exceeds the S3 multipart maximum"),
+  withPreview,
 });
 
 export const multipartCompleteSchema = z.object({
