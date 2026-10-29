@@ -71,6 +71,7 @@ const TransactionSchema = new mongoose.Schema(
     // still "PaymentDue".
     transferId: { type: String, default: null },
     cfTransferStatus: { type: String, default: null },
+    transferMode: { type: String, default: null },
     // Set on a "PaymentDue" record once a payout from the business admin
     // portal explicitly settles it — links the due record to the
     // transferId that actually paid it, without forcing the paid amount to

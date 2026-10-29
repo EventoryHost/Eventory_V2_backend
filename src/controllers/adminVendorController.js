@@ -486,7 +486,9 @@ export const getAllVendors = async (req, res) => {
       success: true,
       data: vendors.map((v) => {
         const row = v.toObject();
-        return { ...row, customerVisibility: customerVisibility(row) };
+        // Same computed completion the detail view shows (vendorResponse);
+        // customerVisibility keeps reading the stored figure customers filter on.
+        return { ...row, profileCompletion: completionSummary(row), customerVisibility: customerVisibility(row) };
       }),
       pagination: {
         total,
@@ -565,14 +567,18 @@ export const assignEmToVendor = async (req, res) => {
 };
 
 // POST /api/admin/vendors/:id/payout
-// Body: { amount, remarks, bankAccountId }
+// Body: { amount, remarks, bankAccountId, transferMode }
 export const initiateVendorPayout = async (req, res) => {
   try {
-    const { amount, remarks, bankAccountId } = req.body || {};
+    const { amount, remarks, bankAccountId, transferMode, transfer_mode, paymentMethod } = req.body || {};
     const parsedAmount = Number(amount);
     if (!parsedAmount || isNaN(parsedAmount) || parsedAmount <= 0) {
       return res.status(400).json({ success: false, message: "Valid positive amount is required" });
     }
+
+    const selectedTransferMode = String(
+      transferMode || transfer_mode || paymentMethod || "neft"
+    ).toLowerCase();
 
     const isObjectId = mongoose.isValidObjectId(req.params.id);
     const filter = isObjectId
@@ -768,7 +774,7 @@ export const initiateVendorPayout = async (req, res) => {
           transfer_id: transferId,
           transfer_amount: parsedAmount,
           beneficiary_details: { beneficiary_id: beneficiaryId },
-          transfer_mode: "imps",
+          transfer_mode: selectedTransferMode,
           transfer_remarks: transferRemarks,
         },
         { headers: pHeaders }
@@ -798,6 +804,7 @@ export const initiateVendorPayout = async (req, res) => {
         receivedDate: new Date(),
         transferId: transferId,
         cfTransferStatus: tData?.status || "SUCCESS",
+        transferMode: selectedTransferMode,
       });
     } catch (txErr) {
       console.error(`[VendorPayout] Failed to save Transaction record for ${transferId}:`, txErr);
