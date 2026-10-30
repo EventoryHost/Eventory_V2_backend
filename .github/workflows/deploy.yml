@@ -5,9 +5,6 @@ on:
     branches:
       - dev
       - prod
-    paths-ignore:
-      - "upload-service/**"
-      - ".github/workflows/deploy-upload-service.yml"
   workflow_dispatch:
     inputs:
       environment:
