@@ -4,6 +4,7 @@ import connectDB from "./src/config/db.js";
 import { initSocket } from "./src/config/socket.js";
 import dotenv from "dotenv";
 import os from "os";
+import { startAccountPurgeWorker } from "./src/jobs/accountPurgeWorker.js";
 
 // Load environment variables
 dotenv.config();
@@ -33,6 +34,7 @@ connectDB()
         `🚀 Server running in ${process.env.NODE_ENV || "development"} mode on port ${PORT}`
       );
       console.log(`📱 Local network: http://${localIp}:${PORT}`);
+      startAccountPurgeWorker();
     });
   })
   .catch((err) => {
