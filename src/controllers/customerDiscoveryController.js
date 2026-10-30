@@ -1430,9 +1430,52 @@ export const browseVendors = async (req, res) => {
         .select(PUBLIC_VENDOR_FIELDS)
         .sort(sortMap[sort] || sortMap.rating)
         .skip((page - 1) * limit)
-        .limit(limit),
+        .limit(limit)
+        .lean(),
       Vendor.countDocuments(query),
     ]);
+
+    // A vendor's card used to show only their single self-declared
+    // Vendor.vendorType, even though a vendor can have Live packages under
+    // OTHER vendorTypes too (Package.vendorType is its own discriminator
+    // field, set per-package at creation — nothing ties it to the owning
+    // Vendor's own vendorType). Real bug (reported 2026-10-30): a vendor
+    // with, say, both Decorator and Caterer packages would only ever show
+    // "Decorator" on the listing card. Fixed by looking at what the vendor
+    // actually has Live, same dual vendorId-shape match
+    // (ObjectId on newer docs, the "VEN..." string id on seeded ones) the
+    // eventCategory filter above already uses for the same reason.
+    if (vendors.length > 0) {
+      const objectIdVendorIds = vendors.map((v) => v._id).filter(Boolean);
+      const stringVendorIds = vendors.map((v) => v.id).filter(Boolean);
+      const liveVendorPackages = await Package.find({
+        packageStatus: "Live",
+        vendorId: { $in: [...objectIdVendorIds, ...stringVendorIds] },
+      })
+        .select("vendorId vendorType")
+        .lean();
+
+      // Keyed by every identifier a vendor could be referenced by, so a
+      // package found via either id shape lands on the right vendor.
+      const vendorIndexById = new Map();
+      vendors.forEach((v, index) => {
+        if (v._id) vendorIndexById.set(String(v._id), index);
+        if (v.id) vendorIndexById.set(String(v.id), index);
+      });
+
+      const categoriesByVendor = vendors.map(() => new Set());
+      for (const pkg of liveVendorPackages) {
+        const index = vendorIndexById.get(String(pkg.vendorId));
+        if (index !== undefined && pkg.vendorType) categoriesByVendor[index].add(pkg.vendorType);
+      }
+
+      vendors.forEach((vendor, index) => {
+        const categories = [...categoriesByVendor[index]];
+        // No Live package yet (a brand-new vendor) — fall back to the
+        // single type they declared at onboarding rather than an empty list.
+        vendor.categories = categories.length > 0 ? categories : [vendor.vendorType].filter(Boolean);
+      });
+    }
 
     return res.status(200).json({
       status: "SUCCESS",
