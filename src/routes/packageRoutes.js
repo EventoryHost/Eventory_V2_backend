@@ -25,6 +25,8 @@ import {
   submitPackage,
   submitPackageGroup,
   goLivePackageGroup,
+  pausePackageGroup,
+  resumePackageGroup,
   deletePackage,
   duplicatePackage,
   duplicateVariant,
@@ -696,6 +698,81 @@ router.post("/group/:packageGroupId/submit", ownsGroup, submitPackageGroup);
  *         description: Server error
  */
 router.post("/group/:packageGroupId/go-live", ownsGroup, goLivePackageGroup);
+
+/**
+ * @swagger
+ * /api/packages/group/{packageGroupId}/pause:
+ *   post:
+ *     summary: Pause a live package
+ *     description: |
+ *       Moves a "Live" package to "Paused". It leaves the marketplace but keeps
+ *       its approval; a paused package cannot be edited and can be resumed
+ *       without another review.
+ *     tags: [Packages]
+ *     parameters:
+ *       - in: path
+ *         name: packageGroupId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Package is now paused
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: SUCCESS
+ *                 packageStatus:
+ *                   type: string
+ *                   example: Paused
+ *                 count:
+ *                   type: integer
+ *       409:
+ *         description: Package is not live
+ *       500:
+ *         description: Server error
+ */
+router.post("/group/:packageGroupId/pause", ownsGroup, pausePackageGroup);
+
+/**
+ * @swagger
+ * /api/packages/group/{packageGroupId}/resume:
+ *   post:
+ *     summary: Resume a paused package
+ *     description: Moves a "Paused" package back to "Live".
+ *     tags: [Packages]
+ *     parameters:
+ *       - in: path
+ *         name: packageGroupId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Package is live again
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 status:
+ *                   type: string
+ *                   example: SUCCESS
+ *                 packageStatus:
+ *                   type: string
+ *                   example: Live
+ *                 count:
+ *                   type: integer
+ *       409:
+ *         description: Package is not paused
+ *       500:
+ *         description: Server error
+ */
+router.post("/group/:packageGroupId/resume", ownsGroup, resumePackageGroup);
 
 /**
  * @swagger

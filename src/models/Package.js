@@ -9,12 +9,16 @@ import {
 /**
  * The package lifecycle.
  *
- *   Draft ──submit──> Under Review ──┬── approve ──────> Approved ──go-live──> Live
+ *   Draft ──submit──> Under Review ──┬── approve ──────> Approved ──go-live──> Live ⇄ Paused
  *                                    ├── raise-action ─> Action Required ──resubmit──> Under Review
  *                                    └── reject ───────> Deleted
  *
  * A package stays editable while it is Under Review, and resubmitting it there
  * simply puts the revision back in front of the EM.
+ *
+ * Pause and resume move a published package between Live and Paused: a paused
+ * package leaves the marketplace but keeps its review, and resuming needs no
+ * new approval. Paused is frozen for editing, like Live.
  *
  * "Approved" is deliberately distinct from "Live": the EM clears a package for
  * sale, the vendor decides when it actually appears on the marketplace.
@@ -26,6 +30,7 @@ export const PACKAGE_STATUSES = [
   "Approved",
   "Live",
   "Deleted",
+  "Paused",
 ];
 
 /** Statuses in which the vendor may still edit the package. */

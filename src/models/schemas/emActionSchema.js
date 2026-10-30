@@ -55,6 +55,8 @@ export const REVIEW_EVENTS = [
   "ActionRaised",
   "Rejected",
   "WentLive",
+  "Paused",
+  "Resumed",
 ];
 
 /**

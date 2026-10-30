@@ -10,10 +10,12 @@ import {
 import {
   submitGroup,
   goLiveGroup,
+  pauseGroup,
+  resumeGroup,
   ReviewTransitionError,
 } from "../services/packageReviewService.js";
 
-// Approved and Live are frozen, so what customers see is exactly what the EM
+// Approved, Live and Paused are frozen, so what customers see is exactly what the EM
 // cleared. Live was added 2026-10-13: an edit to a Live package went straight
 // to customers with no review. The vendor app already freezes Live packages
 // (inventory_item.dart isEditable), so only the raw API path changes.
@@ -21,7 +23,7 @@ import {
 // waiting for review and resubmit it, which puts the revision back in front of
 // the EM (see the Submitted transition). Draft and Action Required have always
 // been editable. Admin step edits skip the lock — see updatePackageStep.
-const LOCKED_FOR_EDIT = ["Approved", "Live"];
+const LOCKED_FOR_EDIT = ["Approved", "Live", "Paused"];
 
 const lockedEditResponse = (packageStatus) =>
   LOCKED_FOR_EDIT.includes(packageStatus)
@@ -369,6 +371,7 @@ const STATUS_PROGRESS = [
   "Under Review",
   "Approved",
   "Live",
+  "Paused",
   "Draft",
   "Deleted",
 ];
@@ -377,6 +380,7 @@ const STATUS_PROGRESS = [
 // the bottom of Drafts rather than in a tab of their own.
 const STATUS_TAB = {
   Live: "live",
+  Paused: "paused",
   Approved: "submitted",
   "Under Review": "submitted",
   "Action Required": "submitted",
@@ -400,7 +404,7 @@ const getVendorPackageCounts = async (vendorId) => {
   ]);
 
   const byStatus = Object.fromEntries(STATUS_PROGRESS.map((s) => [s, 0]));
-  const tabs = { drafts: 0, live: 0, submitted: 0 };
+  const tabs = { drafts: 0, live: 0, paused: 0, submitted: 0 };
 
   for (const group of groups) {
     const status =
@@ -672,6 +676,49 @@ export const goLivePackageGroup = async (req, res) => {
     return sendReviewError(res, error, "Failed to publish package");
   }
 };
+
+const buildVisibilityHandler = (run, successMessage, failureMessage) => async (req, res) => {
+  try {
+    const { packageGroupId } = req.params;
+
+    if (!packageGroupId || !String(packageGroupId).trim()) {
+      return res.status(400).json({
+        status: "FAILED",
+        message: `Invalid packageGroupId: ${packageGroupId}`,
+      });
+    }
+
+    const result = await run(await buildGroupFilter(packageGroupId), {
+      by: req.body?.updatedBy,
+    });
+
+    return res.status(200).json({
+      status: "SUCCESS",
+      message: successMessage,
+      packageStatus: result.to,
+      count: result.matched,
+    });
+  } catch (error) {
+    return sendReviewError(res, error, failureMessage);
+  }
+};
+
+/**
+ * @desc Vendor pauses a live package: it leaves the marketplace but stays
+ * approved, and can be resumed without another review.
+ */
+export const pausePackageGroup = buildVisibilityHandler(
+  pauseGroup,
+  "Package is now paused",
+  "Failed to pause package"
+);
+
+/** @desc Vendor puts a paused package back on the marketplace. */
+export const resumePackageGroup = buildVisibilityHandler(
+  resumeGroup,
+  "Package is live again",
+  "Failed to resume package"
+);
 
 /**
  * @desc Permanently delete ONE variant. Irreversible.
