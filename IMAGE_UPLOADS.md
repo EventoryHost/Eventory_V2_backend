@@ -2,6 +2,8 @@
 
 How images get from a phone to S3, and how apps and the website should display them.
 
+The upload service now lives in its own repo, [EventoryHost/Eventory_V2_upload_service](https://github.com/EventoryHost/Eventory_V2_upload_service). Paths below that start with `upload-service/` refer to that repo.
+
 ## In short
 
 - **Every image is stored as two files**, side by side in S3:
