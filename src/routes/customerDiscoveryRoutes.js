@@ -8,6 +8,7 @@ import {
   getPackageDetail,
   getPackageGroupVariants,
   getPackageReviews,
+  getPackageServiceability,
   getPackageSlots,
   getPopularPackages,
   getServiceableCities,
@@ -304,6 +305,15 @@ router.get(
 router.post("/packages/:packageId/view", publicBrowseLimiter, recordView);
 
 router.get("/packages/:packageId/slots", publicBrowseLimiter, validateRequest(packageSlotsQuerySchema, "query"), getPackageSlots);
+
+// REAL BUG FIXED: getPackageServiceability (the PDP's "does this vendor
+// serve my location" check — see customerDiscoveryController.js's own doc
+// comment on it) was fully implemented and imported by the frontend
+// (customerPackageDetailApi.ts's getPackageServiceability) but never
+// actually mounted as a route — every call 404'd, so the check silently
+// always failed, and nothing anywhere ever blocked a booking from an
+// unserviced location as a result.
+router.get("/packages/:packageId/serviceability", publicBrowseLimiter, getPackageServiceability);
 
 /**
  * @swagger
