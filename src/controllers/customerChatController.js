@@ -11,14 +11,11 @@ import {
   notifyHelpMessage,
   notifyHelpWhatsApp,
   notifyAreaWaitlist,
-  notifyBookingHelp,
-  notifyEventDayReport,
   notifyVendorContact,
   notifyHelpSorted,
 } from "../services/chatSlackNotifier.js";
 import AreaWaitlist from "../models/AreaWaitlist.js";
 import Booking from "../models/Booking.js";
-import Vendor from "../models/Vendor.js";
 import { raiseBookingIssue } from "../services/bookingIssueService.js";
 import HelpConversation from "../models/HelpConversation.js";
 import { lookupArea } from "../services/areaLookupService.js";
@@ -535,13 +532,6 @@ export const createBookingHelpRequest = async (req, res) => {
       via: "help_request",
     });
 
-    const vendorIds = bookings.map((x) => x.vendorId).filter(Boolean).map(String);
-    const vendors = await Vendor.find(
-      { $or: [{ id: { $in: vendorIds } }, { _id: { $in: vendorIds.filter((v) => /^[a-f0-9]{24}$/i.test(v)) } }] },
-      { id: 1, businessName: 1 }
-    ).lean();
-    const vendorName = (v) =>
-      vendors.find((x) => x.id === String(v) || String(x._id) === String(v))?.businessName || null;
     // A report is also the booking's own issue record (Booking.issues).
     if (report?.packageRef) {
       try {
@@ -559,18 +549,9 @@ export const createBookingHelpRequest = async (req, res) => {
         console.error("[createBookingHelpRequest] issue record failed:", err.message);
       }
     }
-    const summary = {
-      text: b.text,
-      details: b.details || [],
-      bookings: bookings.map((x) => ({
-        ref: x.bookingId,
-        name: x.packageSnapshot?.name || "Package",
-        vendor: vendorName(x.vendorId),
-      })),
-    };
-    (report ? notifyEventDayReport(enquiry, summary) : notifyBookingHelp(enquiry, summary))
-      .then(() => ChatEnquiry.updateOne({ _id: enquiry._id }, { $set: { slackNotifiedAt: new Date() } }))
-      .catch((err) => console.error("[createBookingHelpRequest] Slack notify failed:", err.message));
+    // No Slack post from here: the panel posts booking requests and reports
+    // itself (frontend /api/help-ticket/slack), with the customer's WhatsApp
+    // link and a "Mark resolved" button — posting here too doubled them.
 
     const fresh = await ChatEnquiry.findById(enquiry._id);
     return res.status(201).json({
