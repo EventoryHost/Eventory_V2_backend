@@ -61,17 +61,35 @@ export function extractPincode(text) {
   return m ? m[1] : null;
 }
 
+// serviceablePincodes.json's Delhi entries store the district as just the
+// bare compass-direction name ("CENTRAL", "SOUTH EAST", "SHAHDARA", ...) —
+// `state` carries "DELHI" separately, so the district alone doesn't say
+// Delhi at all. Every other state's districts are already real, standalone
+// place names (FARIDABAD, GURUGRAM, GHAZIABAD, GAUTAM BUDDHA NAGAR) that
+// read fine on their own in the dropdown. REAL BUG (reported): this showed
+// as a bare "CENTRAL" / "WEST" row with nothing indicating it's a Delhi
+// district. "NEW DELHI" already names itself, so it's left alone.
+function districtDisplayLabel(info) {
+  if (info.state === "DELHI" && !info.district.includes("DELHI")) {
+    return `${info.district} DELHI`;
+  }
+  return info.district;
+}
+
 /**
- * Distinct, alphabetically sorted RAW district names across the whole
- * serviceable dataset — e.g. "CENTRAL", "SOUTH WEST", "GAUTAM BUDDHA NAGAR",
- * exactly as they appear on indelhincr.com/PinCode.aspx (the dataset's
- * source) and in serviceablePincodes.json's own `district` field. This is
- * the raw admin-district level, NOT the 5 collapsed city labels cityOf()
- * derives for the vendor-serviceability match — the navbar's district
- * picker wants every real district, not the coarser city grouping.
+ * Distinct, alphabetically sorted district DISPLAY labels across the whole
+ * serviceable dataset — e.g. "CENTRAL DELHI", "SOUTH WEST DELHI",
+ * "GAUTAM BUDDHA NAGAR" — derived from the raw admin-district names on
+ * indelhincr.com/PinCode.aspx (the dataset's source) and in
+ * serviceablePincodes.json's own `district` field, with "DELHI" appended to
+ * the bare Delhi ones (see districtDisplayLabel above) so each sorts and
+ * reads correctly on its own. This is the raw admin-district level, NOT the
+ * 5 collapsed city labels cityOf() derives for the vendor-serviceability
+ * match — the navbar's district picker wants every real district, not the
+ * coarser city grouping.
  */
 export function listServiceableCities() {
-  const districts = new Set(Object.values(PINCODES).map((info) => info.district));
+  const districts = new Set(Object.values(PINCODES).map(districtDisplayLabel));
   return [...districts].sort();
 }
 
@@ -113,12 +131,21 @@ function areaMatchLevel(vendorArea, info) {
 }
 
 // An area with no localities covers its whole city/region. With localities,
-// only those count; when none of them names a post office, the area itself
-// is the (broader) fallback.
+// only those count — REAL BUG FIXED: this used to fall back to the broad
+// area/region match (areaMatchLevel) even when the vendor HAD narrowed to
+// specific localities and none of them matched, directly contradicting this
+// comment's own stated rule. For a vendor whose declared area is one of the
+// DELHI_REGION_CHIPS ("Old Delhi" -> CENTRAL + NORTH districts, "Central
+// Delhi" -> CENTRAL + WEST, etc.), that fallback silently widened coverage
+// to the ENTIRE district(s) the chip maps to — e.g. a vendor who picked only
+// a handful of Old Delhi localities was still shown as serviceable (and
+// bookable) for any North Delhi pincode at all, since "Old Delhi" maps to
+// both CENTRAL and NORTH. Narrowing to specific localities now actually
+// narrows the match, as the comment always said it should.
 function entryMatchLevel({ area, sublocalities }, info) {
   if (sublocalities.length === 0) return areaMatchLevel(area, info);
   if (sublocalities.some((s) => info.areas.some((n) => norm(n).includes(norm(s))))) return "exact";
-  return areaMatchLevel(area, info) ? "city_fallback" : null;
+  return null;
 }
 
 /**
