@@ -55,7 +55,8 @@ app.use(morgan("dev"));
 // way, and doing it globally is cheap/harmless for every other route that
 // never reads req.rawBody.
 app.use(express.json({ limit: '50mb', verify: (req, res, buf) => { req.rawBody = buf; } }));
-app.use(express.urlencoded({ limit: '50mb', extended: true }));
+// rawBody too: Slack signs its form-encoded button clicks (/api/slack/interactions).
+app.use(express.urlencoded({ limit: '50mb', extended: true, verify: (req, res, buf) => { req.rawBody = buf; } }));
 
 // --------------- Routes ---------------
 

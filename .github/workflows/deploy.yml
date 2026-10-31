@@ -63,6 +63,9 @@ jobs:
         env:
           V2_DEV_ENV: ${{ secrets.V2_DEV_ENV }}
           V2_PROD_ENV: ${{ secrets.V2_PROD_ENV }}
+          # Help panel Slack: own secrets, so they don't depend on V2_*_ENV.
+          SLACK_HELP_WEBHOOK_URL: ${{ secrets.SLACK_HELP_WEBHOOK_URL }}
+          SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
         run: |
           BRANCH="${{ steps.target.outputs.branch }}"
           APP_NAME="${{ steps.target.outputs.app_name }}"
@@ -79,6 +82,10 @@ jobs:
 
           # Base64 encode to safely transmit special chars and RSA keys over SSH
           B64_ENV=$(printf '%s' "$RAW_ENV" | base64 -w 0)
+          B64_SLACK_WEBHOOK=$(printf '%s' "$SLACK_HELP_WEBHOOK_URL" | base64 -w 0)
+          B64_SLACK_SIGNING=$(printf '%s' "$SLACK_SIGNING_SECRET" | base64 -w 0)
+          echo "Slack webhook secret present: $([ -n "$SLACK_HELP_WEBHOOK_URL" ] && echo yes || echo no)"
+          echo "Slack signing secret present: $([ -n "$SLACK_SIGNING_SECRET" ] && echo yes || echo no)"
 
           ssh -i ~/.ssh/ec2_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
             "APP_NAME='$APP_NAME' \
@@ -86,7 +93,9 @@ jobs:
              PORT='$PORT' \
              NODE_ENV='$NODE_ENV' \
              BRANCH='$BRANCH' \
-             B64_ENV='$B64_ENV'" bash -s << 'EOF'
+             B64_ENV='$B64_ENV' \
+             B64_SLACK_WEBHOOK='$B64_SLACK_WEBHOOK' \
+             B64_SLACK_SIGNING='$B64_SLACK_SIGNING'" bash -s << 'EOF'
             set -e
 
             REPO_URL="https://github.com/EventoryHost/Eventory_V2_backend.git"
@@ -114,6 +123,17 @@ jobs:
             printf '\nPORT=%s\n' "$PORT" >> .env
             sed -i "/^NODE_ENV=/d" .env 2>/dev/null || true
             printf 'NODE_ENV=%s\n' "$NODE_ENV" >> .env
+
+            # Help panel Slack, from their own GitHub Secrets (when set).
+            if [ -n "$B64_SLACK_WEBHOOK" ]; then
+              sed -i "/^SLACK_HELP_WEBHOOK_URL=/d" .env
+              printf 'SLACK_HELP_WEBHOOK_URL=%s\n' "$(echo "$B64_SLACK_WEBHOOK" | base64 -d)" >> .env
+            fi
+            if [ -n "$B64_SLACK_SIGNING" ]; then
+              sed -i "/^SLACK_SIGNING_SECRET=/d" .env
+              printf 'SLACK_SIGNING_SECRET=%s\n' "$(echo "$B64_SLACK_SIGNING" | base64 -d)" >> .env
+            fi
+            echo "Slack webhook in .env: $(grep -c '^SLACK_HELP_WEBHOOK_URL=.' .env || true)"
 
             pm2 delete "$APP_NAME" >/dev/null 2>&1 || true
             pm2 start server.js --name "$APP_NAME" --update-env
