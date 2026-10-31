@@ -389,14 +389,39 @@ const PackageSchema = new mongoose.Schema(
 
     assignedEmId: { type: String, default: null },
     assignedEmName: { type: String, default: null },
+
+    deletedAt: { type: Date, default: null },
   },
   packageOptions
 );
+
+function stampDeletedAtOnUpdate() {
+  const update = this.getUpdate();
+  if (!update || Array.isArray(update)) return;
+  const status = update.$set?.packageStatus ?? update.packageStatus;
+  if (status === undefined) return;
+  update.$set = {
+    ...update.$set,
+    deletedAt: status === "Deleted" ? new Date() : null,
+  };
+}
+
+PackageSchema.pre(
+  ["findOneAndUpdate", "updateOne", "updateMany"],
+  stampDeletedAtOnUpdate
+);
+
+PackageSchema.pre("save", function () {
+  if (this.isModified("packageStatus")) {
+    this.deletedAt = this.packageStatus === "Deleted" ? new Date() : null;
+  }
+});
 
 // Loading every variant of one logical package (the common read).
 PackageSchema.index({ packageGroupId: 1, variantType: 1 });
 // Listing a vendor's packages, optionally filtered by status.
 PackageSchema.index({ vendorId: 1, packageStatus: 1 });
+PackageSchema.index({ packageStatus: 1, deletedAt: 1 });
 
 const Package = mongoose.model("Package", PackageSchema);
 

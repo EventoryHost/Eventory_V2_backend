@@ -4,24 +4,9 @@ import {
   purgeVendor,
   retentionWindowMs,
 } from "../utils/accountDeletion.js";
+import { runHourIst, scheduleDaily } from "./scheduleDaily.js";
 
-const DAY_MS = 24 * 60 * 60 * 1000;
-const IST_OFFSET_MS = (5 * 60 + 30) * 60 * 1000;
 const DEFAULT_RUN_HOUR_IST = 3;
-
-const runHourIst = () => {
-  const hour = Number(process.env.ACCOUNT_PURGE_HOUR_IST);
-  return Number.isInteger(hour) && hour >= 0 && hour <= 23
-    ? hour
-    : DEFAULT_RUN_HOUR_IST;
-};
-
-const msUntilNextRun = (now = Date.now()) => {
-  const istNow = now + IST_OFFSET_MS;
-  const todayRun = istNow - (istNow % DAY_MS) + runHourIst() * 60 * 60 * 1000;
-  const next = todayRun > istNow ? todayRun : todayRun + DAY_MS;
-  return next - istNow;
-};
 
 let running = false;
 
@@ -69,15 +54,8 @@ export function startAccountPurgeWorker() {
     console.log("[account-purge] worker disabled via ACCOUNT_PURGE_WORKER=off");
     return;
   }
-
-  const scheduleNext = () => {
-    const timer = setTimeout(async () => {
-      await runAccountPurge();
-      scheduleNext();
-    }, msUntilNextRun());
-    timer.unref();
-  };
-
-  runAccountPurge();
-  scheduleNext();
+  scheduleDaily(
+    runAccountPurge,
+    runHourIst(process.env.ACCOUNT_PURGE_HOUR_IST, DEFAULT_RUN_HOUR_IST)
+  );
 }

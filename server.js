@@ -5,6 +5,7 @@ import { initSocket } from "./src/config/socket.js";
 import dotenv from "dotenv";
 import os from "os";
 import { startAccountPurgeWorker } from "./src/jobs/accountPurgeWorker.js";
+import { startPackagePurgeWorker } from "./src/jobs/packagePurgeWorker.js";
 
 // Load environment variables
 dotenv.config();
@@ -35,6 +36,7 @@ connectDB()
       );
       console.log(`📱 Local network: http://${localIp}:${PORT}`);
       startAccountPurgeWorker();
+      startPackagePurgeWorker();
     });
   })
   .catch((err) => {
