@@ -40,6 +40,24 @@ function formatEnquiryBlock(enquiry) {
   return lines.join("\n");
 }
 
+/** Whether the webhook is set — GET /api/customer/chat/slack/status reports it. */
+export const slackConfigured = () => isConfigured();
+
+/** Posts a Block Kit message (help ticket posts). Returns false when not configured or Slack refused. */
+export async function postBlocks(payload) {
+  if (!isConfigured()) {
+    console.log(`[chatSlackNotifier] SLACK_HELP_WEBHOOK_URL not set — skipping (would have posted): ${payload.text}`);
+    return false;
+  }
+  try {
+    await axios.post(webhookUrl(), payload);
+    return true;
+  } catch (err) {
+    console.error("[chatSlackNotifier] Slack webhook post failed (non-blocking):", err.response?.data || err.message);
+    return false;
+  }
+}
+
 async function post(text) {
   if (!isConfigured()) {
     console.log(`[chatSlackNotifier] SLACK_HELP_WEBHOOK_URL not set — skipping (would have posted):\n${text}`);
