@@ -18,8 +18,13 @@ import axios from "axios";
  * perspective (chatBotEngine.js awaits it just to log failures, never lets
  * a Slack error interrupt the bot's reply).
  */
+// One webhook for every help post. SLACK_HELP_WEBHOOK_URL is the name the
+// frontend's /api/help-ticket/slack route uses, so both repos can share it;
+// SLACK_CHAT_WEBHOOK_URL is the original name, still honoured.
+const webhookUrl = () => process.env.SLACK_HELP_WEBHOOK_URL || process.env.SLACK_CHAT_WEBHOOK_URL;
+
 function isConfigured() {
-  return Boolean(process.env.SLACK_CHAT_WEBHOOK_URL);
+  return Boolean(webhookUrl());
 }
 
 function formatEnquiryBlock(enquiry) {
@@ -37,11 +42,11 @@ function formatEnquiryBlock(enquiry) {
 
 async function post(text) {
   if (!isConfigured()) {
-    console.log(`[chatSlackNotifier] SLACK_CHAT_WEBHOOK_URL not set — skipping (would have posted):\n${text}`);
+    console.log(`[chatSlackNotifier] SLACK_HELP_WEBHOOK_URL not set — skipping (would have posted):\n${text}`);
     return;
   }
   try {
-    await axios.post(process.env.SLACK_CHAT_WEBHOOK_URL, { text });
+    await axios.post(webhookUrl(), { text });
   } catch (err) {
     console.error("[chatSlackNotifier] Slack webhook post failed (non-blocking):", err.response?.data || err.message);
   }
@@ -133,22 +138,6 @@ export async function notifyHelpWhatsApp(enquiry) {
   );
 }
 
-/** @desc Booking help request, tagged with the booking's Event Manager. */
-export async function notifyBookingHelp(enquiry, { text, details, bookings }) {
-  const who = enquiry.assignedEmName
-    ? `*For:* ${enquiry.assignedEmName} (assigned Event Manager)`
-    : "*For:* Event Manager team (no Event Manager assigned)";
-  const pkgs = bookings.map((b) => `• ${b.name}${b.vendor ? ` by ${b.vendor}` : ""} (${b.ref})`).join("\n");
-  await post(
-    `🗂️ *Booking help ${enquiry.ticket}* — ${enquiry.topic}\n${who}\n` +
-      `*Customer:* ${enquiry.customerName || "—"}${enquiry.customer?.phone ? ` · ${enquiry.customer.phone}` : ""}\n` +
-      `*Event:* ${enquiry.eventType || "—"} · ${enquiry.eventDateRaw || "—"} · ${enquiry.city || "—"}\n` +
-      `*Packages:*\n${pkgs}\n` +
-      `> ${text}` +
-      (details.length ? `\n${details.map((d) => `• ${d}`).join("\n")}` : "")
-  );
-}
-
 /** @desc A customer cancelled a booking (help panel or booking page) — the refund to process. */
 export async function notifyBookingCancelled(booking) {
   const r = booking.refund;
@@ -165,24 +154,6 @@ export async function notifyBookingCancelled(booking) {
       `*Package:* ${booking.packageSnapshot?.name || "—"} · ${booking.eventType || "—"} on ${booking.eventDate ? new Date(booking.eventDate).toDateString() : "—"}\n` +
       `*Reason:* ${booking.cancellationReason || "Not given"}\n` +
       `*Refund:* ${refund}`
-  );
-}
-
-/** @desc Event-day problem report; urgent ones (no-show, safety) alert the duty manager. */
-export async function notifyEventDayReport(enquiry, { text, details, bookings }) {
-  const r = enquiry.report || {};
-  const pkg = bookings.find((b) => b.ref === r.packageRef);
-  await post(
-    `${r.urgent ? "🚨 *URGENT — duty manager, please pick this up*\n" : ""}` +
-      `⚠️ *Event-day report ${enquiry.ticket}* — ${r.label || enquiry.topic}\n` +
-      `*For:* ${enquiry.assignedEmName || "Event Manager team (no Event Manager assigned)"}\n` +
-      `*Customer:* ${enquiry.customerName || "—"}${enquiry.customer?.phone ? ` · ${enquiry.customer.phone}` : ""}\n` +
-      `*About:* ${pkg ? `${pkg.name}${pkg.vendor ? ` by ${pkg.vendor}` : ""} (${pkg.ref})` : "Not sure / the venue"}\n` +
-      `*Event:* ${enquiry.eventType || "—"} · ${enquiry.city || "—"}\n` +
-      `> ${text}` +
-      (r.missing?.length ? `\n*Missing:* ${r.missing.join(", ")}` : "") +
-      (r.photoUrl ? `\n*Photo:* ${r.photoUrl}` : "") +
-      (details.length ? `\n${details.map((d) => `• ${d}`).join("\n")}` : "")
   );
 }
 
@@ -216,9 +187,7 @@ export default {
   notifyHelpMessage,
   notifyHelpWhatsApp,
   notifyAreaWaitlist,
-  notifyBookingHelp,
   notifyBookingCancelled,
-  notifyEventDayReport,
   notifyVendorContact,
   notifyHelpSorted,
 };
