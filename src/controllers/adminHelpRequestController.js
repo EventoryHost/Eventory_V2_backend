@@ -149,6 +149,7 @@ export const setHelpRequestStatus = async (req, res) => {
     const closing = req.body.status === "closed";
     enquiry.ticketStatus = closing ? "closed" : enquiry.firstReplyAt ? "replied" : "open";
     enquiry.resolvedAt = closing ? new Date() : null;
+    enquiry.resolvedBy = closing ? "team" : null;
     await enquiry.save();
     return res.json({ success: true, request: await adminView(enquiry) });
   } catch (error) {

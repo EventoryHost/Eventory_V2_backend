@@ -57,8 +57,16 @@ export function buildCustomerWhatsAppLink(t) {
 // Slack mrkdwn treats &, < and > as control characters.
 const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-/** `resolvable`: show "Mark resolved" — only once Slack interactivity is set up, else the click errors. */
-export function buildSlackPayload(t, { resolvable = false } = {}) {
+/** Under a threaded ticket post: how replying works. */
+export const THREAD_HINT =
+  "💬 Reply in this thread to answer the customer — it shows in their help chat. Start a reply with // for a note only the team sees.";
+
+/**
+ * `resolvable`: show "Mark resolved" — only once Slack interactivity is set
+ * up, else the click errors. `threaded`: the bot posts it, so replies in
+ * its thread reach the customer.
+ */
+export function buildSlackPayload(t, { resolvable = false, threaded = false } = {}) {
   const issue = clean(t.issue);
   const name = clean(t.customerName);
   const pkg = clean(t.packageName);
@@ -109,6 +117,23 @@ export function buildSlackPayload(t, { resolvable = false } = {}) {
       { type: "section", text: { type: "mrkdwn", text: lines.join("\n") } },
       ...(link ? [] : [{ type: "context", elements: [{ type: "mrkdwn", text: "No mobile number on file, so there's no WhatsApp link." }] }]),
       ...(buttons.length ? [{ type: "actions", elements: buttons }] : []),
+      ...(threaded ? [{ type: "context", elements: [{ type: "mrkdwn", text: THREAD_HINT }] }] : []),
     ],
   };
+}
+
+/** A ticket post as resolved: ✅ header, no resolve button, and `byLine` (who, when). */
+export function resolvedBlocks(blocks, byLine) {
+  const ts = Math.floor(Date.now() / 1000);
+  return [
+    ...blocks
+      .map((b) => (b.type === "header" && b.text ? { ...b, text: { ...b.text, text: b.text.text.replace(/^(🆘|🚨)/, "✅ Resolved:") } } : b))
+      .map((b) => (b.type === "actions" ? { ...b, elements: b.elements?.filter((e) => e.action_id !== RESOLVE_ACTION_ID) } : b))
+      .filter((b) => b.type !== "actions" || b.elements?.length)
+      .filter((b) => !(b.type === "context" && b.elements?.some((e) => e.text === THREAD_HINT))),
+    {
+      type: "context",
+      elements: [{ type: "mrkdwn", text: `${byLine} · <!date^${ts}^{date_short_pretty} at {time}|just now>` }],
+    },
+  ];
 }

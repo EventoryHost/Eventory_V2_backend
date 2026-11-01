@@ -13,6 +13,7 @@ import {
   notifyAreaWaitlist,
   notifyVendorContact,
   notifyHelpSorted,
+  notifyHelpResolvedByCustomer,
 } from "../services/chatSlackNotifier.js";
 import AreaWaitlist from "../models/AreaWaitlist.js";
 import Booking from "../models/Booking.js";
@@ -588,6 +589,35 @@ export const markHelpRequestSorted = async (req, res) => {
 };
 
 /**
+ * @desc The customer marks their ticket resolved from the help panel. It
+ * moves to Resolved in Your chats and the team sees it in the ticket's
+ * Slack thread; writing in the chat again reopens it.
+ * @route POST /api/customer/chat/help-request/:enquiryId/resolve
+ */
+export const resolveHelpRequest = async (req, res) => {
+  try {
+    const enquiry = await findOwnHelpRequest(req, req.body || {});
+    if (!enquiry) return res.status(404).json({ success: false, message: "Request not found" });
+    if (enquiry.ticketStatus !== "closed") {
+      enquiry.ticketStatus = "closed";
+      enquiry.resolvedAt = new Date();
+      enquiry.resolvedBy = "customer";
+      await enquiry.save();
+      notifyHelpResolvedByCustomer(enquiry).catch((err) =>
+        console.error("[resolveHelpRequest] Slack notify failed:", err.message)
+      );
+    }
+    return res.json({
+      success: true,
+      request: serializeHelpRequest(enquiry, { late: false, messages: await loadTicketMessages(enquiry) }),
+    });
+  } catch (error) {
+    console.error("resolveHelpRequest error:", error);
+    return res.status(500).json({ success: false, message: "Could not update that" });
+  }
+};
+
+/**
  * @desc Event day: the customer opened a vendor's on-ground number. The
  * Event Manager is told, so they can step in.
  * @route POST /api/customer/chat/booking-help/contact
@@ -665,8 +695,19 @@ export const postHelpRequestMessage = async (req, res) => {
       senderName: enquiry.customer?.name ?? enquiry.customerName ?? null,
       via: "help_request",
     });
+    // Writing again after it was resolved reopens it.
+    const reopened = !saved.isRetry && enquiry.ticketStatus === "closed";
+    if (reopened) {
+      enquiry.ticketStatus = enquiry.firstReplyAt ? "replied" : "open";
+      enquiry.resolvedAt = null;
+      enquiry.resolvedBy = null;
+      await ChatEnquiry.updateOne(
+        { _id: enquiry._id },
+        { $set: { ticketStatus: enquiry.ticketStatus, resolvedAt: null, resolvedBy: null } }
+      );
+    }
     if (!saved.isRetry) {
-      notifyHelpMessage(enquiry, saved.text).catch((err) =>
+      notifyHelpMessage(enquiry, saved.text, { reopened }).catch((err) =>
         console.error("[postHelpRequestMessage] Slack notify failed:", err.message)
       );
     }
