@@ -1,6 +1,6 @@
 import axios from "axios";
 import ChatEnquiry from "../models/ChatEnquiry.js";
-import { THREAD_HINT, resolvedBlocks } from "./helpTicketSlack.js";
+import { buildSlackPayload, resolvedBlocks } from "./helpTicketSlack.js";
 
 /**
  * Anonymous Chat / lead-gen chatbot — Slack notification. Deliberately the
@@ -190,27 +190,43 @@ export async function notifyFlowComplete(enquiry) {
   await post(text);
 }
 
-/** @desc Help panel brief sent to the Event Manager team. */
+/**
+ * @desc Help panel brief sent to the Event Manager team — the same post as
+ * a booking ticket: WhatsApp to the customer (when there's a number) and
+ * "Mark resolved" (when interactivity is set up).
+ */
 export async function notifyHelpRequest(enquiry) {
-  const reach =
+  const phone = enquiry.phoneNumber || enquiry.customer?.phone || null;
+  const details = [
     enquiry.replyMode === "call-me"
-      ? `📞 *Call back:* ${enquiry.phoneNumber || "—"} (${enquiry.bestTimeToCall || "Anytime"})`
-      : "💬 *Reply in the help chat* (customer chose Reply here)";
-  const text =
-    `🆘 *Help panel request ${enquiry.ticket || ""}* (enquiry ${enquiry.enquiryId})\n` +
-    `${reach}\n` +
-    `*Date:* ${enquiry.eventDateRaw || "Not given"}\n` +
-    `${formatEnquiryBlock(enquiry)}\n` +
-    `*Page:* ${enquiry.pageUrl || "—"}` +
-    (enquiry.areaServed === false
-      ? "\n⚠️ *Area not served yet* — check whether a vendor travels there."
-      : "") +
-    (enquiry.hasReferencePhoto
-      ? "\n📷 *Has a reference photo* — not uploaded; ask the customer to share it on WhatsApp."
-      : "") +
-    (enquiry.transcript?.length ? `\n*Chat so far:*\n> ${enquiry.transcript.join("\n> ")}` : "") +
-    (slackBotConfigured() ? `\n_${THREAD_HINT}_` : "");
-  await postTicketParent(enquiry, { text });
+      ? `📞 Call back: ${phone || "—"} (${enquiry.bestTimeToCall || "Anytime"})`
+      : "💬 Reply in the help chat (customer chose Reply here)",
+    `Occasion: ${enquiry.eventType || "—"}`,
+    `Service: ${(enquiry.servicesNeeded || []).join(", ") || "—"}`,
+    `Guests: ${enquiry.guestCount || "—"}`,
+    `Budget: ${enquiry.budgetRange || "—"}`,
+    `Area: ${enquiry.city || "—"}`,
+    `Date: ${enquiry.eventDateRaw || "Not given"}`,
+    ...(enquiry.areaServed === false ? ["⚠️ Area not served yet — check whether a vendor travels there."] : []),
+    ...(enquiry.hasReferencePhoto ? ["📷 Has a reference photo — not uploaded; ask them to share it on WhatsApp."] : []),
+    ...(enquiry.pageUrl ? [`Page: ${enquiry.pageUrl}`] : []),
+    ...(enquiry.transcript?.length ? ["Chat so far:", ...enquiry.transcript.map((l) => `  ${l}`)] : []),
+  ];
+  const payload = buildSlackPayload(
+    {
+      ticket: enquiry.ticket || enquiry.enquiryId,
+      issue: `Planning help · ${enquiry.eventType || "Event"}`,
+      customerName: enquiry.customer?.name || enquiry.customerName,
+      customerPhone: phone,
+      details: details.join("\n").slice(0, 3000),
+    },
+    {
+      resolvable: Boolean(process.env.SLACK_SIGNING_SECRET),
+      threaded: slackBotConfigured(),
+      withPackage: false,
+    }
+  );
+  await postTicketParent(enquiry, payload);
 }
 
 const istTime = (date) =>

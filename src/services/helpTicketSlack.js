@@ -64,9 +64,10 @@ export const THREAD_HINT =
 /**
  * `resolvable`: show "Mark resolved" — only once Slack interactivity is set
  * up, else the click errors. `threaded`: the bot posts it, so replies in
- * its thread reach the customer.
+ * its thread reach the customer. `withPackage: false` drops the Package
+ * line (planning briefs).
  */
-export function buildSlackPayload(t, { resolvable = false, threaded = false } = {}) {
+export function buildSlackPayload(t, { resolvable = false, threaded = false, withPackage = true } = {}) {
   const issue = clean(t.issue);
   const name = clean(t.customerName);
   const pkg = clean(t.packageName);
@@ -81,7 +82,8 @@ export function buildSlackPayload(t, { resolvable = false, threaded = false } = 
   const lines = [
     `*Customer:* ${name ? esc(name) : "—"}`,
     `*Mobile:* ${clean(t.customerPhone) ? esc(t.customerPhone.trim()) : "Not on file"}`,
-    `*Package:* ${pkg ? esc(pkg) : "Not sure / the venue"}${pkgId ? `  (ID: \`${esc(pkgId)}\`)` : ""}`,
+    // `withPackage: false`: a planning brief, not about a package.
+    ...(withPackage ? [`*Package:* ${pkg ? esc(pkg) : "Not sure / the venue"}${pkgId ? `  (ID: \`${esc(pkgId)}\`)` : ""}`] : []),
     ...(booking ? [`*Booking:* \`${esc(booking)}\``] : []),
     ...(clean(t.emName) ? [`*Event Manager:* ${esc(t.emName.trim())}`] : []),
     ...(note && note !== issue ? [`*Note:* ${esc(note)}`] : []),
@@ -114,7 +116,8 @@ export function buildSlackPayload(t, { resolvable = false, threaded = false } = 
     blocks: [
       { type: "header", text: { type: "plain_text", text: title, emoji: true } },
       ...(t.urgent ? [{ type: "section", text: { type: "mrkdwn", text: "*Duty manager, please pick this up now.*" } }] : []),
-      { type: "section", text: { type: "mrkdwn", text: lines.join("\n") } },
+      // Slack refuses a section over 3000 characters (a long transcript).
+      { type: "section", text: { type: "mrkdwn", text: lines.join("\n").slice(0, 3000) } },
       ...(link ? [] : [{ type: "context", elements: [{ type: "mrkdwn", text: "No mobile number on file, so there's no WhatsApp link." }] }]),
       ...(buttons.length ? [{ type: "actions", elements: buttons }] : []),
       ...(threaded ? [{ type: "context", elements: [{ type: "mrkdwn", text: THREAD_HINT }] }] : []),
