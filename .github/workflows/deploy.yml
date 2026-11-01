@@ -66,6 +66,8 @@ jobs:
           # Help panel Slack: own secrets, so they don't depend on V2_*_ENV.
           SLACK_HELP_WEBHOOK_URL: ${{ secrets.SLACK_HELP_WEBHOOK_URL }}
           SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          SLACK_HELP_CHANNEL_ID: ${{ secrets.SLACK_HELP_CHANNEL_ID }}
         run: |
           BRANCH="${{ steps.target.outputs.branch }}"
           APP_NAME="${{ steps.target.outputs.app_name }}"
@@ -84,8 +86,12 @@ jobs:
           B64_ENV=$(printf '%s' "$RAW_ENV" | base64 -w 0)
           B64_SLACK_WEBHOOK=$(printf '%s' "$SLACK_HELP_WEBHOOK_URL" | base64 -w 0)
           B64_SLACK_SIGNING=$(printf '%s' "$SLACK_SIGNING_SECRET" | base64 -w 0)
+          B64_SLACK_BOT=$(printf '%s' "$SLACK_BOT_TOKEN" | base64 -w 0)
+          B64_SLACK_CHANNEL=$(printf '%s' "$SLACK_HELP_CHANNEL_ID" | base64 -w 0)
           echo "Slack webhook secret present: $([ -n "$SLACK_HELP_WEBHOOK_URL" ] && echo yes || echo no)"
           echo "Slack signing secret present: $([ -n "$SLACK_SIGNING_SECRET" ] && echo yes || echo no)"
+          echo "Slack bot token present: $([ -n "$SLACK_BOT_TOKEN" ] && echo yes || echo no)"
+          echo "Slack channel id present: $([ -n "$SLACK_HELP_CHANNEL_ID" ] && echo yes || echo no)"
 
           ssh -i ~/.ssh/ec2_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
             "APP_NAME='$APP_NAME' \
@@ -95,7 +101,9 @@ jobs:
              BRANCH='$BRANCH' \
              B64_ENV='$B64_ENV' \
              B64_SLACK_WEBHOOK='$B64_SLACK_WEBHOOK' \
-             B64_SLACK_SIGNING='$B64_SLACK_SIGNING'" bash -s << 'EOF'
+             B64_SLACK_SIGNING='$B64_SLACK_SIGNING' \
+             B64_SLACK_BOT='$B64_SLACK_BOT' \
+             B64_SLACK_CHANNEL='$B64_SLACK_CHANNEL'" bash -s << 'EOF'
             set -e
 
             REPO_URL="https://github.com/EventoryHost/Eventory_V2_backend.git"
@@ -133,7 +141,17 @@ jobs:
               sed -i "/^SLACK_SIGNING_SECRET=/d" .env
               printf 'SLACK_SIGNING_SECRET=%s\n' "$(echo "$B64_SLACK_SIGNING" | base64 -d)" >> .env
             fi
+            # Bot token + channel: ticket threads and Event Manager replies.
+            if [ -n "$B64_SLACK_BOT" ]; then
+              sed -i "/^SLACK_BOT_TOKEN=/d" .env
+              printf 'SLACK_BOT_TOKEN=%s\n' "$(echo "$B64_SLACK_BOT" | base64 -d)" >> .env
+            fi
+            if [ -n "$B64_SLACK_CHANNEL" ]; then
+              sed -i "/^SLACK_HELP_CHANNEL_ID=/d" .env
+              printf 'SLACK_HELP_CHANNEL_ID=%s\n' "$(echo "$B64_SLACK_CHANNEL" | base64 -d)" >> .env
+            fi
             echo "Slack webhook in .env: $(grep -c '^SLACK_HELP_WEBHOOK_URL=.' .env || true)"
+            echo "Slack bot token in .env: $(grep -c '^SLACK_BOT_TOKEN=.' .env || true)"
 
             pm2 delete "$APP_NAME" >/dev/null 2>&1 || true
             pm2 start server.js --name "$APP_NAME" --update-env

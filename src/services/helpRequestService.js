@@ -136,10 +136,13 @@ export function customerSnapshot(customer, phone = null) {
  * A message sent into a ticket — by the customer or an Event Manager. Saved
  * before anything else happens (Slack is only told afterwards), in the
  * ticket's own chat. `clientId` is the panel's item id for a customer
- * message, so the thread's next save doesn't store it again.
+ * message, so the thread's next save doesn't store it again. A Slack reply
+ * passes a `messageId` made from its Slack ts, so a retried event is one row.
  */
-export async function recordTicketMessage(enquiry, { role, text, clientId, senderId = null, senderName = null, via }) {
-  const messageId = newMessageId();
+export async function recordTicketMessage(
+  enquiry,
+  { role, text, clientId, senderId = null, senderName = null, via, messageId = newMessageId() }
+) {
   const sentAt = new Date();
   const filter = { conversationId: enquiry.conversationId ?? null, clientId: clientId || messageId };
   const before = await HelpMessage.findOneAndUpdate(
@@ -170,7 +173,8 @@ export async function recordTicketMessage(enquiry, { role, text, clientId, sende
       $set: {
         lastMessageAt: sentAt,
         lastMessageFrom: role,
-        ...(role === "event_manager" ? { ticketStatus: "replied" } : {}),
+        // A reply on a resolved ticket ("glad it's sorted") keeps it resolved.
+        ...(role === "event_manager" && enquiry.ticketStatus !== "closed" ? { ticketStatus: "replied" } : {}),
       },
       $inc: { messageCount: 1 },
     }
@@ -275,6 +279,8 @@ export function serializeHelpRequest(enquiry, { late, messages = enquiry.helpMes
     replied: Boolean(enquiry.firstReplyAt),
     /** The team marked it resolved; Your chats lists it under Resolved. */
     resolved: enquiry.ticketStatus === "closed",
+    /** "customer" when they marked it resolved themselves. */
+    resolvedBy: enquiry.ticketStatus === "closed" ? (enquiry.resolvedBy ?? "team") : null,
     whatsappAt: enquiry.whatsappAt ?? null,
     /** "request" or an event-day "report" (GRV ref). */
     kind: enquiry.kind ?? "request",

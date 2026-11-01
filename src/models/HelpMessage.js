@@ -39,8 +39,9 @@ const HelpMessageSchema = new mongoose.Schema(
     tone: { type: String, default: null },
 
     // How it arrived: copied from the panel's saved thread, sent into the
-    // ticket by the customer, or replied by the Event Manager team.
-    via: { type: String, enum: ["transcript", "help_request", "admin"], required: true },
+    // ticket by the customer, or replied by the Event Manager team (admin
+    // panel, or a reply in the ticket's Slack thread).
+    via: { type: String, enum: ["transcript", "help_request", "admin", "slack"], required: true },
     sentAt: { type: Date, default: Date.now },
   },
   {

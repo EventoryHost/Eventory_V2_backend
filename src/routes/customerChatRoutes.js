@@ -17,6 +17,7 @@ import {
   continueHelpOnWhatsApp,
   createBookingHelpRequest,
   markHelpRequestSorted,
+  resolveHelpRequest,
   noteVendorContact,
 } from "../controllers/customerChatController.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
@@ -300,6 +301,18 @@ router.post("/booking-help/contact", validateRequest(vendorContactSchema), noteV
  *     tags: [Customer Chat]
  */
 router.post("/help-request/:enquiryId/sorted", markHelpRequestSorted);
+
+/**
+ * @swagger
+ * /api/customer/chat/help-request/{enquiryId}/resolve:
+ *   post:
+ *     summary: The customer marks their ticket resolved (Your chats → Resolved; told in the Slack thread). A new message reopens it.
+ *     tags: [Customer Chat]
+ *     responses:
+ *       200: { description: "{ request } with resolved: true, resolvedBy: customer" }
+ *       404: { description: Not this caller's request }
+ */
+router.post("/help-request/:enquiryId/resolve", resolveHelpRequest);
 
 /**
  * @swagger

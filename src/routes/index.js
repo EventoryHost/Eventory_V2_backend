@@ -33,7 +33,7 @@ import adminBookingRoutes from "./adminBookingRoutes.js";
 import adminTemplateRoutes from "./adminTemplateRoutes.js";
 import adminDashboardRoutes from "./adminDashboardRoutes.js";
 import adminHelpRequestRoutes from "./adminHelpRequestRoutes.js";
-import { slackInteractions } from "../controllers/slackController.js";
+import { slackEvents, slackInteractions } from "../controllers/slackController.js";
 
 /**
  * API namespace convention:
@@ -125,6 +125,10 @@ router.use("/admin/help-requests", adminHelpRequestRoutes);
 // Slack's Interactivity Request URL ("Mark resolved" on help ticket posts):
 // https://<backend host>/api/slack/interactions
 router.post("/slack/interactions", slackInteractions);
+// Slack's Event Subscriptions Request URL (message.channels / message.groups):
+// replies in a ticket's thread reach the customer's help chat.
+// https://<backend host>/api/slack/events
+router.post("/slack/events", slackEvents);
 
 export default router;
 
