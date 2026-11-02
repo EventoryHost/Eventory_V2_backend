@@ -58,24 +58,30 @@ export const slackStatus = (req, res) =>
 
 const MAX_AGE_S = 60 * 5;
 
-function verified(secret, timestamp, signature, body) {
-  if (!timestamp || !signature || !Number.isFinite(Number(timestamp))) return false;
+/** Why a request failed Slack's check, or null when it passed. */
+function signatureProblem(secret, timestamp, signature, body) {
+  if (!timestamp || !signature) return "missing X-Slack-Signature / X-Slack-Request-Timestamp";
+  if (!Number.isFinite(Number(timestamp))) return "timestamp is not a number";
   // Old requests are replays.
-  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > MAX_AGE_S) return false;
+  if (Math.abs(Date.now() / 1000 - Number(timestamp)) > MAX_AGE_S) return "timestamp older than 5 minutes";
   const expected = `v0=${createHmac("sha256", secret).update(`v0:${timestamp}:${body}`).digest("hex")}`;
   const a = Buffer.from(expected);
   const b = Buffer.from(signature);
-  return a.length === b.length && timingSafeEqual(a, b);
+  return a.length === b.length && timingSafeEqual(a, b) ? null : "signature mismatch (check SLACK_SIGNING_SECRET)";
 }
 
 /** Slack's signature check on a request this server received; false = reject it. */
-const fromSlack = (req) =>
-  verified(
-    process.env.SLACK_SIGNING_SECRET,
+const fromSlack = (req) => {
+  // Trimmed: a secret pasted with a trailing space or newline fails every check.
+  const problem = signatureProblem(
+    process.env.SLACK_SIGNING_SECRET.trim(),
     req.get("x-slack-request-timestamp"),
     req.get("x-slack-signature"),
     req.rawBody ? req.rawBody.toString("utf8") : ""
   );
+  if (problem) console.warn(`[slack] rejected ${req.originalUrl}: ${problem}`);
+  return !problem;
+};
 
 /**
  * @desc Slack's Interactivity Request URL: "Mark resolved" on a ticket post.
