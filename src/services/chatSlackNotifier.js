@@ -292,8 +292,28 @@ async function parentPayloadFor(enquiry, { note = null, details = [], legacy = f
     ...legacyLine,
     ...(enquiry.transcript?.length ? ["Chat so far:", ...enquiry.transcript.map((l) => `  ${l}`)] : []),
   ];
+  // The WhatsApp message's version: only what they told us, in their terms.
+  const plan = [
+    ["Looking for", (enquiry.servicesNeeded || []).join(", ")],
+    ["Guests", enquiry.guestCount],
+    ["Budget", enquiry.budgetRange],
+    ["Area", enquiry.city],
+    ["Date", enquiry.eventDateRaw],
+  ]
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k}: ${v}`);
   return buildSlackPayload(
-    { ...base, issue: `Planning help · ${enquiry.eventType || "Event"}`, customerPhone: phone, details: brief.join("\n").slice(0, 3000) },
+    {
+      ...base,
+      issue: `Planning help · ${enquiry.eventType || "Event"}`,
+      customerIssue: `Help planning your ${enquiry.eventType ? enquiry.eventType.toLowerCase() : "event"}`,
+      customerDetails: [
+        ...plan,
+        ...(enquiry.hasReferencePhoto ? ["You have a reference photo — please send it here"] : []),
+      ],
+      customerPhone: phone,
+      details: brief.join("\n").slice(0, 3000),
+    },
     { ...opts, withPackage: false }
   );
 }

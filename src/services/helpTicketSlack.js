@@ -34,19 +34,61 @@ export function toWhatsAppNumber(phone) {
   return d.length >= 11 && d.length <= 15 ? d : null;
 }
 
-/** What the Event Manager sends the customer. No issue → the fallback. */
+/** Ticket lines that are for the team only (vendor state, photo links, page, transcript). */
+const TEAM_ONLY_DETAIL = /^(About|Packages|Vendor status|Photo|Page|Chat so far):|^(↩️|⚠️|📷|📞|💬)|^\s/;
+
+const istDateTime = (date) =>
+  new Date(date).toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).replace(/\b(am|pm)\b/, (m) => m.toUpperCase());
+
+/**
+ * What the Event Manager sends the customer on WhatsApp: the Slack post's
+ * ticket, request, package, booking, their words, raised time and status,
+ * in WhatsApp formatting and addressed to them. `customerIssue` /
+ * `customerDetails` override the team's wording when the caller has it.
+ */
 export function buildCustomerMessage(t) {
   const name = clean(t.customerName)?.split(/\s+/)[0];
-  const hi = name ? `Hi ${name},` : "Hi,";
-  const em = clean(t.emName);
-  const from = em ? `this is ${em.split(/\s+/)[0]} from Eventory` : "this is the Eventory team";
-  const issue = clean(t.issue);
-  if (!issue) {
-    return `${hi} ${from}. We've received the help request you just raised and we're on it. Could you tell us a little more about what's going wrong so we can resolve it for you quickly?`;
-  }
+  const em = clean(t.emName)?.split(/\s+/)[0];
+  const ticket = clean(t.ticket);
+  const issue = clean(t.customerIssue) ?? clean(t.issue);
   const pkg = clean(t.packageName);
   const booking = clean(t.bookingId);
-  return `${hi} ${from}. You raised a help request regarding "${issue}"${pkg ? ` for ${pkg}` : ""}${booking ? ` (Booking ${booking})` : ""}. We're on it — could you share a little more detail so we can resolve this for you quickly?`;
+  const note = clean(t.note);
+  const details =
+    t.customerDetails ??
+    (clean(t.details) ?? "")
+      .split("\n")
+      .map((d) => d.trim())
+      .filter((d) => d && !TEAM_ONLY_DETAIL.test(d));
+  const resolved = /resolved/i.test(t.status ?? "");
+  const lines = [
+    `Hi ${name || "there"}! 👋`,
+    `This is ${em ? `${em} from Eventory` : "the Eventory team"}, about the help request you raised.`,
+    "",
+    ...(ticket ? [`*Ticket:* ${ticket}`] : []),
+    ...(issue ? [`*Request:* ${issue}`] : []),
+    ...(pkg ? [`*Package:* ${pkg}`] : []),
+    ...(booking ? [`*Booking:* ${booking}`] : []),
+    ...(note && note !== issue ? [`*You told us:* "${note.slice(0, 300)}"`] : []),
+    ...details.map((d) => `• ${d}`),
+    ...(t.createdAt ? [`*Raised:* ${istDateTime(t.createdAt)}`] : []),
+    `*Status:* ${resolved ? "✅ Resolved" : "🟡 Open — we're working on it"}`,
+    "",
+    ...(t.urgent ? ["We've marked this urgent and someone is on it right now."] : []),
+    issue
+      ? "Anything else we should know? Photos or screenshots help too — just send them here."
+      : "Could you tell us a little more about what's going wrong, so we can sort it out quickly?",
+    "",
+    "— Team Eventory",
+  ];
+  return lines.join("\n").slice(0, 1800);
 }
 
 export function buildCustomerWhatsAppLink(t) {
