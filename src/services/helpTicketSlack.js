@@ -57,6 +57,9 @@ export function buildCustomerWhatsAppLink(t) {
 // Slack mrkdwn treats &, < and > as control characters.
 const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
+/** The post's status line; resolvedBlocks rewrites it. */
+const STATUS_PREFIX = "*Status:* ";
+
 /** Under a threaded ticket post: how replying works. */
 export const THREAD_HINT =
   "💬 Reply in this thread to answer the customer — it shows in their help chat. Start a reply with // for a note only the team sees.";
@@ -76,18 +79,24 @@ export function buildSlackPayload(t, { resolvable = false, threaded = false, wit
   const note = clean(t.note);
   const ticket = clean(t.ticket);
   const link = buildCustomerWhatsAppLink(t);
+  const who = [clean(t.customerEmail), clean(t.customerCode)].filter(Boolean).map(esc).join(" · ");
+  const raised = t.createdAt ? Math.floor(new Date(t.createdAt).getTime() / 1000) : null;
   // Header blocks cap plain text at 150 chars.
   const title = `${t.urgent ? "🚨 URGENT" : "🆘 New help ticket"}${issue ? ` — ${issue}` : ""}${ticket ? ` · ${ticket}` : ""}`.slice(0, 150);
   const details = (clean(t.details) ?? "").split("\n").map((d) => d.trim()).filter(Boolean);
   const lines = [
     `*Customer:* ${name ? esc(name) : "—"}`,
+    ...(who ? [`*Email / ID:* ${who}`] : []),
     `*Mobile:* ${clean(t.customerPhone) ? esc(t.customerPhone.trim()) : "Not on file"}`,
     // `withPackage: false`: a planning brief, not about a package.
     ...(withPackage ? [`*Package:* ${pkg ? esc(pkg) : "Not sure / the venue"}${pkgId ? `  (ID: \`${esc(pkgId)}\`)` : ""}`] : []),
     ...(booking ? [`*Booking:* \`${esc(booking)}\``] : []),
     ...(clean(t.emName) ? [`*Event Manager:* ${esc(t.emName.trim())}`] : []),
-    ...(note && note !== issue ? [`*Note:* ${esc(note)}`] : []),
+    ...(note && note !== issue ? [`*Message:* ${esc(note)}`] : []),
     ...details.map((d) => `• ${esc(d)}`),
+    ...(raised ? [`*Raised:* <!date^${raised}^{date_short_pretty} at {time}|${new Date(raised * 1000).toISOString()}>`] : []),
+    // resolvedBlocks flips this line when the ticket is resolved.
+    ...(t.status ? [`${STATUS_PREFIX}${esc(t.status)}`] : []),
   ];
   const firstName = name?.split(/\s+/)[0] ?? "the customer";
   const buttons = [
@@ -131,6 +140,11 @@ export function resolvedBlocks(blocks, byLine) {
   return [
     ...blocks
       .map((b) => (b.type === "header" && b.text ? { ...b, text: { ...b.text, text: b.text.text.replace(/^(🆘|🚨)/, "✅ Resolved:") } } : b))
+      .map((b) =>
+        b.type === "section" && b.text?.text?.includes(STATUS_PREFIX)
+          ? { ...b, text: { ...b.text, text: b.text.text.replace(/\*Status:\* .*/, `${STATUS_PREFIX}✅ Resolved`) } }
+          : b
+      )
       .map((b) => (b.type === "actions" ? { ...b, elements: b.elements?.filter((e) => e.action_id !== RESOLVE_ACTION_ID) } : b))
       .filter((b) => b.type !== "actions" || b.elements?.length)
       .filter((b) => !(b.type === "context" && b.elements?.some((e) => e.text === THREAD_HINT))),

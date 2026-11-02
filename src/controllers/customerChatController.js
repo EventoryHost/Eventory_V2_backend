@@ -7,6 +7,7 @@ import ChatEnquiry from "../models/ChatEnquiry.js";
 import { handleBotTurn } from "../services/chatBotEngine.js";
 import {
   notifyHelpRequest,
+  notifyBookingTicket,
   notifyHelpCallBack,
   notifyHelpMessage,
   notifyHelpWhatsApp,
@@ -550,9 +551,12 @@ export const createBookingHelpRequest = async (req, res) => {
         console.error("[createBookingHelpRequest] issue record failed:", err.message);
       }
     }
-    // No Slack post from here: the panel posts booking requests and reports
-    // itself (frontend /api/help-ticket/slack), with the customer's WhatsApp
-    // link and a "Mark resolved" button — posting here too doubled them.
+    // The ticket's one Slack parent post, sent from here (not the panel) so
+    // it exists before anything else on the ticket — every later update
+    // threads under it. Fire-and-forget: Slack never fails the request.
+    notifyBookingTicket(enquiry, { text: b.text, details: b.details || [] })
+      .then(() => ChatEnquiry.updateOne({ _id: enquiry._id }, { $set: { slackNotifiedAt: new Date() } }))
+      .catch((err) => console.error("[createBookingHelpRequest] Slack notify failed:", err.message));
 
     const fresh = await ChatEnquiry.findById(enquiry._id);
     return res.status(201).json({

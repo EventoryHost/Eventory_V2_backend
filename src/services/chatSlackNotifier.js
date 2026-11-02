@@ -1,5 +1,6 @@
 import axios from "axios";
 import ChatEnquiry from "../models/ChatEnquiry.js";
+import Booking from "../models/Booking.js";
 import { buildSlackPayload, resolvedBlocks } from "./helpTicketSlack.js";
 
 /**
@@ -96,12 +97,49 @@ export async function postTicketParent(enquiry, payload) {
 }
 
 /**
+ * Whether the ticket has a Slack thread, waiting a few seconds for a new
+ * ticket's own post: the panel posts booking tickets just after creating
+ * them, and an update in that gap (a call back, a quick follow-up) would
+ * otherwise land outside the thread. Fills in the enquiry's thread fields.
+ */
+async function awaitThread(enquiry) {
+  if (enquiry?.slackThreadTs) return true;
+  if (!enquiry?._id || !slackBotConfigured()) return false;
+  // Older tickets that never got a thread (posted by webhook) aren't waited on.
+  if (!enquiry.createdAt || Date.now() - new Date(enquiry.createdAt).getTime() > 60_000) return false;
+  for (let i = 0; i < 16; i++) {
+    await new Promise((r) => setTimeout(r, 500));
+    const fresh = await ChatEnquiry.findById(enquiry._id, { slackChannel: 1, slackThreadTs: 1 }).lean();
+    if (fresh?.slackThreadTs) {
+      enquiry.slackChannel = fresh.slackChannel;
+      enquiry.slackThreadTs = fresh.slackThreadTs;
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * A ticket with no thread yet (raised before the bot was set up, or its
+ * post failed): with the bot, it gets its parent post now, so this update
+ * and everything after thread under it. Without the bot: false, and the
+ * update is a channel post as before.
+ */
+async function startLegacyThread(enquiry) {
+  if (!slackBotConfigured() || !enquiry?._id || enquiry.source !== "help_panel") return false;
+  // Only an old ticket says so; a new one whose post failed just gets it now.
+  const legacy = !enquiry.createdAt || Date.now() - new Date(enquiry.createdAt).getTime() > 60_000;
+  await postTicketParent(enquiry, await parentPayloadFor(enquiry, { legacy }));
+  return Boolean(enquiry.slackThreadTs);
+}
+
+/**
  * An update on a ticket: into its thread when it has one (`broadcast` also
  * shows it in the channel, for things the team lead must see), else a
  * channel post as before.
  */
 async function postToTicket(enquiry, text, { broadcast = false } = {}) {
-  if (enquiry?.slackThreadTs && botToken()) {
+  if ((await awaitThread(enquiry)) || (await startLegacyThread(enquiry))) {
     try {
       await slackApi("chat.postMessage", {
         channel: enquiry.slackChannel || helpChannel(),
@@ -191,13 +229,54 @@ export async function notifyFlowComplete(enquiry) {
 }
 
 /**
- * @desc Help panel brief sent to the Event Manager team — the same post as
- * a booking ticket: WhatsApp to the customer (when there's a number) and
- * "Mark resolved" (when interactivity is set up).
+ * A ticket's parent post (the message its thread hangs off), built from
+ * the ticket itself: a booking ticket names its packages and bookings, a
+ * planning brief lists what they asked for. `note`/`details`: the request's
+ * own words and lines, when the caller has them. `legacy`: a ticket from
+ * before threads, getting its post on its next update.
  */
-export async function notifyHelpRequest(enquiry) {
-  const phone = enquiry.phoneNumber || enquiry.customer?.phone || null;
-  const details = [
+async function parentPayloadFor(enquiry, { note = null, details = [], legacy = false } = {}) {
+  const c = enquiry.customer ?? {};
+  const base = {
+    ticket: enquiry.ticket || enquiry.enquiryId,
+    customerName: c.name || enquiry.customerName,
+    customerEmail: c.email,
+    customerCode: c.code || (enquiry.anonId ? `Guest ${enquiry.anonId}` : null),
+    createdAt: enquiry.createdAt ?? new Date(),
+    status: enquiry.ticketStatus === "closed" ? "✅ Resolved" : "🟡 Open",
+    note,
+  };
+  const opts = { resolvable: Boolean(process.env.SLACK_SIGNING_SECRET), threaded: slackBotConfigured() };
+  const legacyLine = legacy ? ["↩️ Raised before Slack threads: its earlier updates are separate posts above."] : [];
+
+  if (enquiry.bookingRefs?.length) {
+    const bookings = await Booking.find(
+      { bookingId: { $in: enquiry.bookingRefs } },
+      { bookingId: 1, packageId: 1, packageSnapshot: 1, customer: 1 }
+    ).lean();
+    // A report about one package names that one; else every package asked about.
+    const about = enquiry.report?.packageRef ? bookings.filter((b) => b.bookingId === enquiry.report.packageRef) : bookings;
+    const contact = (about[0] ?? bookings[0])?.customer ?? {};
+    return buildSlackPayload(
+      {
+        ...base,
+        issue: enquiry.report?.label || enquiry.topic,
+        customerName: base.customerName || contact.name,
+        customerEmail: base.customerEmail || contact.email,
+        customerPhone: c.phone || contact.phone,
+        packageName: about.map((b) => b.packageSnapshot?.name).filter(Boolean).join(", ") || null,
+        packageId: about.length === 1 ? String(about[0].packageId ?? "") || null : null,
+        bookingId: (enquiry.report?.packageRef ? [enquiry.report.packageRef] : enquiry.bookingRefs).join(", "),
+        emName: enquiry.assignedEmName,
+        urgent: Boolean(enquiry.report?.urgent),
+        details: [...details, ...legacyLine].join("\n").slice(0, 3000),
+      },
+      opts
+    );
+  }
+
+  const phone = enquiry.phoneNumber || c.phone || null;
+  const brief = [
     enquiry.replyMode === "call-me"
       ? `📞 Call back: ${phone || "—"} (${enquiry.bestTimeToCall || "Anytime"})`
       : "💬 Reply in the help chat (customer chose Reply here)",
@@ -210,23 +289,31 @@ export async function notifyHelpRequest(enquiry) {
     ...(enquiry.areaServed === false ? ["⚠️ Area not served yet — check whether a vendor travels there."] : []),
     ...(enquiry.hasReferencePhoto ? ["📷 Has a reference photo — not uploaded; ask them to share it on WhatsApp."] : []),
     ...(enquiry.pageUrl ? [`Page: ${enquiry.pageUrl}`] : []),
+    ...legacyLine,
     ...(enquiry.transcript?.length ? ["Chat so far:", ...enquiry.transcript.map((l) => `  ${l}`)] : []),
   ];
-  const payload = buildSlackPayload(
-    {
-      ticket: enquiry.ticket || enquiry.enquiryId,
-      issue: `Planning help · ${enquiry.eventType || "Event"}`,
-      customerName: enquiry.customer?.name || enquiry.customerName,
-      customerPhone: phone,
-      details: details.join("\n").slice(0, 3000),
-    },
-    {
-      resolvable: Boolean(process.env.SLACK_SIGNING_SECRET),
-      threaded: slackBotConfigured(),
-      withPackage: false,
-    }
+  return buildSlackPayload(
+    { ...base, issue: `Planning help · ${enquiry.eventType || "Event"}`, customerPhone: phone, details: brief.join("\n").slice(0, 3000) },
+    { ...opts, withPackage: false }
   );
-  await postTicketParent(enquiry, payload);
+}
+
+/**
+ * @desc Help panel brief sent to the Event Manager team — the ticket's
+ * parent post: WhatsApp to the customer (when there's a number) and
+ * "Mark resolved" (when interactivity is set up).
+ */
+export async function notifyHelpRequest(enquiry) {
+  await postTicketParent(enquiry, await parentPayloadFor(enquiry));
+}
+
+/**
+ * @desc A request or event-day report from a booking page — the ticket's
+ * parent post, with the request's own words (`text`) and its lines
+ * (new guest count, missing items, photo…).
+ */
+export async function notifyBookingTicket(enquiry, { text, details = [] } = {}) {
+  await postTicketParent(enquiry, await parentPayloadFor(enquiry, { note: text, details }));
 }
 
 const istTime = (date) =>
@@ -235,7 +322,7 @@ const istTime = (date) =>
 /** @desc Help panel request with no reply after 30 min — for the team lead. */
 export async function notifyHelpRequestLate(enquiry) {
   // In the thread, and shown in the channel too: the team lead must see it.
-  if (enquiry.slackThreadTs) {
+  if ((await awaitThread(enquiry)) || (await startLegacyThread(enquiry))) {
     await postToTicket(enquiry, `⚠️ *${enquiry.ticket || enquiry.enquiryId} waiting 30+ min with no reply* — team lead, please pick this up.`, {
       broadcast: true,
     });
@@ -316,7 +403,7 @@ export async function notifyHelpSorted(enquiry) {
 /** @desc Customer wrote again in the help panel thread (`reopened`: on a resolved ticket). */
 export async function notifyHelpMessage(enquiry, text, { reopened = false } = {}) {
   const quote = text.replace(/\n/g, "\n> ");
-  if (enquiry.slackThreadTs) {
+  if ((await awaitThread(enquiry)) || (await startLegacyThread(enquiry))) {
     await postToTicket(
       enquiry,
       `💬 *Customer:*\n> ${quote}` + (reopened ? "\n🔄 _They wrote after it was resolved, so the ticket is open again._" : ""),
@@ -340,6 +427,7 @@ export default {
   notifyHandoffStarted,
   notifyFlowComplete,
   notifyHelpRequest,
+  notifyBookingTicket,
   notifyHelpRequestLate,
   notifyHelpCallBack,
   notifyHelpMessage,
