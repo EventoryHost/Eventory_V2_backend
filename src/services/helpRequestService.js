@@ -137,13 +137,13 @@ export function customerSnapshot(customer, phone = null) {
  * before anything else happens (Slack is only told afterwards), in the
  * ticket's own chat. `clientId` is the panel's item id for a customer
  * message, so the thread's next save doesn't store it again. A Slack reply
- * passes a `messageId` made from its Slack ts, so a retried event is one row.
+ * passes a `messageId` made from its Slack ts, so a retried event is one
+ * row, and `sentAt` from that ts, so replies keep Slack's order.
  */
 export async function recordTicketMessage(
   enquiry,
-  { role, text, clientId, senderId = null, senderName = null, via, messageId = newMessageId() }
+  { role, text, clientId, senderId = null, senderName = null, via, messageId = newMessageId(), sentAt = new Date() }
 ) {
-  const sentAt = new Date();
   const filter = { conversationId: enquiry.conversationId ?? null, clientId: clientId || messageId };
   const before = await HelpMessage.findOneAndUpdate(
     filter,
@@ -302,6 +302,10 @@ export function serializeHelpRequest(enquiry, { late, messages = enquiry.helpMes
       senderName: m.senderName,
       text: m.text,
       sentAt: m.sentAt,
+      /** Changed in Slack after it was sent. */
+      edited: Boolean(m.editedAt),
+      /** Deleted in Slack: `text` says so. */
+      deleted: Boolean(m.deletedAt),
     })),
   };
 }

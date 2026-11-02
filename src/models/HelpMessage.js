@@ -43,6 +43,12 @@ const HelpMessageSchema = new mongoose.Schema(
     // panel, or a reply in the ticket's Slack thread).
     via: { type: String, enum: ["transcript", "help_request", "admin", "slack"], required: true },
     sentAt: { type: Date, default: Date.now },
+    // A Slack reply edited or deleted in Slack after it was sent. A deleted
+    // one keeps its place in the thread, its text replaced (deletedText
+    // keeps the original for the team).
+    editedAt: { type: Date, default: null },
+    deletedAt: { type: Date, default: null },
+    deletedText: { type: String, default: null },
   },
   {
     timestamps: true,

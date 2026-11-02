@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from "crypto";
 import axios from "axios";
 import ChatEnquiry from "../models/ChatEnquiry.js";
+import HelpMessage from "../models/HelpMessage.js";
 import { postTicketParent, slackApi, slackBotConfigured, slackConfigured } from "../services/chatSlackNotifier.js";
 import { RESOLVE_ACTION_ID, TICKET_FIELDS, buildSlackPayload, resolvedBlocks } from "../services/helpTicketSlack.js";
 import { recordTicketMessage } from "../services/helpRequestService.js";
@@ -14,7 +15,8 @@ import { recordTicketMessage } from "../services/helpRequestService.js";
  */
 
 /**
- * @desc The panel's post for a new ticket. Fields only (no raw blocks), so
+ * @desc Legacy: the panel's own post for a new ticket (before the backend
+ * posted them). Kept for older frontends. Fields only (no raw blocks), so
  * the endpoint can't be used to post arbitrary messages to the channel.
  * @route POST /api/customer/chat/slack/ticket
  */
@@ -26,13 +28,12 @@ export const postHelpTicketToSlack = async (req, res) => {
   }
   if (req.body?.urgent === true) input.urgent = true;
   if (!input.ticket && !input.issue) return res.status(400).json({ success: false, message: "ticket or issue required" });
-  // The ticket's own record, so its later updates and replies thread under this post.
+  // The backend posts every ticket itself when it's created (one parent
+  // per ticket); an older panel still calling this gets a no-op for those.
   const enquiry = input.ticket ? await ChatEnquiry.findOne({ source: "help_panel", ticket: input.ticket }) : null;
-  const payload = buildSlackPayload(input, {
-    resolvable: Boolean(process.env.SLACK_SIGNING_SECRET),
-    threaded: Boolean(enquiry) && slackBotConfigured(),
-  });
-  const posted = await postTicketParent(enquiry, payload);
+  if (enquiry) return res.json({ success: true, alreadyPosted: true });
+  const payload = buildSlackPayload(input, { resolvable: Boolean(process.env.SLACK_SIGNING_SECRET) });
+  const posted = await postTicketParent(null, payload);
   if (!posted) {
     return res
       .status(slackConfigured() ? 502 : 503)
@@ -159,15 +160,85 @@ async function plainText(text) {
     .trim();
 }
 
-// Plain replies only: no edits, deletions, joins or bot posts (ours included).
+// New replies: plain, with a file, or "also send to channel". Edits and
+// deletions are handled on their own; joins, bot posts (ours included —
+// that's what keeps the customer's own messages from looping back) and
+// everything else are ignored.
 const REPLY_SUBTYPES = new Set([undefined, "file_share", "thread_broadcast"]);
+const DELETED_TEXT = "This message was deleted.";
+
+/** One Slack message's row: its ts, made unique by its channel. */
+const slackMessageId = (channel, ts) => `HMSG-slack-${channel}-${String(ts).replace(".", "-")}`;
+/** Slack's ts is seconds.micro since the epoch: the reply's own send time. */
+const slackTime = (ts) => {
+  const ms = Number(ts) * 1000;
+  return Number.isFinite(ms) && ms > 0 ? new Date(ms) : new Date();
+};
+/** A person's reply inside a ticket thread, not the parent or a bot's. */
+const isThreadReply = (m) => Boolean(m?.thread_ts && m.thread_ts !== m.ts && m.user && !m.bot_id && !m.app_id);
+
+/** The ticket a thread belongs to: a ts is unique within its channel, so the pair is the ticket. */
+const ticketOfThread = (channel, threadTs) =>
+  ChatEnquiry.findOne({ source: "help_panel", slackChannel: channel, slackThreadTs: threadTs });
+
+/** A new reply in a ticket's thread → the Event Manager's message on that ticket. */
+async function saveReply(e) {
+  const raw = (e.text ?? "").trim();
+  if (raw.startsWith("//")) return;
+  const enquiry = await ticketOfThread(e.channel, e.thread_ts);
+  if (!enquiry) return;
+  // Text only: Slack files are private to the workspace.
+  const text = await plainText(raw);
+  if (!text) return;
+  // Keyed by Slack's ts, so a retried event is saved once — and it's the
+  // panel's item id too, so its thread save doesn't store it again.
+  const messageId = slackMessageId(e.channel, e.ts);
+  const saved = await recordTicketMessage(enquiry, {
+    role: "event_manager",
+    text: text.slice(0, 4000),
+    messageId,
+    clientId: messageId,
+    senderId: e.user,
+    senderName: await slackUserName(e.user),
+    via: "slack",
+    sentAt: slackTime(e.ts),
+  });
+  if (!saved.isRetry) {
+    await ChatEnquiry.updateOne({ _id: enquiry._id, firstReplyAt: null }, { $set: { firstReplyAt: saved.sentAt } });
+  }
+}
+
+/** A reply edited in Slack: the customer's copy changes too (never a new message). */
+async function saveEdit(e) {
+  const m = e.message;
+  if (!isThreadReply(m)) return;
+  const raw = (m.text ?? "").trim();
+  // Edited into a team note: it leaves the customer's chat.
+  if (raw.startsWith("//")) return saveDeletion({ channel: e.channel, deleted_ts: m.ts });
+  const text = await plainText(raw);
+  if (!text) return;
+  await HelpMessage.updateOne(
+    { messageId: slackMessageId(e.channel, m.ts), via: "slack", deletedAt: null, text: { $ne: text.slice(0, 4000) } },
+    { $set: { text: text.slice(0, 4000), editedAt: new Date() } }
+  );
+}
+
+/** A reply deleted in Slack: it stays in place in the chat, saying it was deleted. */
+async function saveDeletion(e) {
+  const row = await HelpMessage.findOne({ messageId: slackMessageId(e.channel, e.deleted_ts), via: "slack", deletedAt: null });
+  if (!row) return;
+  await HelpMessage.updateOne(
+    { _id: row._id },
+    { $set: { deletedAt: new Date(), deletedText: row.text, text: DELETED_TEXT } }
+  );
+}
 
 /**
  * @desc Slack's Event Subscriptions Request URL (message.channels /
  * message.groups). A person's reply in a ticket's thread is saved as the
  * Event Manager's message on that ticket — the customer's panel shows it
- * on its next poll, like a reply from the admin panel. Replies starting
- * with "//" stay in Slack (team notes).
+ * on its next poll, like a reply from the admin panel; edits and deletions
+ * follow it. Replies starting with "//" stay in Slack (team notes).
  * @route POST /api/slack/events
  */
 export const slackEvents = async (req, res) => {
@@ -184,32 +255,11 @@ export const slackEvents = async (req, res) => {
 
   const e = body.event;
   if (body.type !== "event_callback" || e?.type !== "message") return;
-  if (!e.thread_ts || e.thread_ts === e.ts || e.bot_id || !e.user || !REPLY_SUBTYPES.has(e.subtype)) return;
-  const raw = (e.text ?? "").trim();
-  if (raw.startsWith("//")) return;
   try {
-    // A ts is unique within its channel, so the pair is the ticket.
-    const enquiry = await ChatEnquiry.findOne({ source: "help_panel", slackChannel: e.channel, slackThreadTs: e.thread_ts });
-    if (!enquiry) return;
-    // Text only: Slack files are private to the workspace.
-    const text = await plainText(raw);
-    if (!text) return;
-    // Keyed by Slack's ts, so a retried event is saved once — and it's the
-    // panel's item id too, so its thread save doesn't store it again.
-    const messageId = `HMSG-slack-${e.channel}-${e.ts.replace(".", "-")}`;
-    const saved = await recordTicketMessage(enquiry, {
-      role: "event_manager",
-      text: text.slice(0, 4000),
-      messageId,
-      clientId: messageId,
-      senderId: e.user,
-      senderName: await slackUserName(e.user),
-      via: "slack",
-    });
-    if (!saved.isRetry) {
-      await ChatEnquiry.updateOne({ _id: enquiry._id, firstReplyAt: null }, { $set: { firstReplyAt: saved.sentAt } });
-    }
+    if (e.subtype === "message_changed") await saveEdit(e);
+    else if (e.subtype === "message_deleted") await saveDeletion(e);
+    else if (REPLY_SUBTYPES.has(e.subtype) && isThreadReply(e)) await saveReply(e);
   } catch (error) {
-    console.error(`[slack/events] saving the reply in ${e.thread_ts} failed:`, error.message);
+    console.error(`[slack/events] ${e.subtype ?? "reply"} in ${e.thread_ts ?? e.message?.thread_ts ?? "?"} failed:`, error.message);
   }
 };
