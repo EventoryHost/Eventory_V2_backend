@@ -9,6 +9,7 @@ import Vendor from "../models/Vendor.js";
 import CalendarBlock from "../models/CalendarBlock.js";
 import { generateISTId } from "../utils/idGenerator.js";
 import { snapshotDeliverables } from "../utils/packageDeliverables.js";
+import { packageCoverImage } from "../utils/packageCoverImage.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 import {
   applyPricingBreakdown,
@@ -112,7 +113,7 @@ const snapshotPackage = (pkg) => ({
   name: pkg.step1_eventAndCrew?.packageName || "Untitled Package",
   // getEffectivePackagePrice — see that util's comment.
   price: getEffectivePackagePrice(pkg),
-  image: pkg.step4_sampleMedia?.media?.[0]?.url || null,
+  image: packageCoverImage(pkg),
   vendorType: pkg.vendorType || null,
   variantType: pkg.variantType || "Premium",
   gstRatePercent: pkg.step3_policiesAndCharges?.gstRatePercent ?? null,

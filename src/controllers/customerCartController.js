@@ -6,6 +6,7 @@ import Package from "../models/Package.js";
 import WishlistItem from "../models/WishlistItem.js";
 import { computeAvailability, validateTimeSlotSelection } from "../utils/packageAvailability.js";
 import { round2 } from "../utils/money.js";
+import { packageCoverImage } from "../utils/packageCoverImage.js";
 import { computeCartQuote } from "../services/cartPricingService.js";
 import { resolveVendorRefId } from "../utils/resolveVendor.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
@@ -296,7 +297,7 @@ export const addCartItem = async (req, res) => {
         price: getEffectivePackagePrice(pkg),
         billingUnit:
           pkg.step3_policiesAndCharges?.packagePricing?.billingUnit ?? pkg.step3_policiesAndCharges?.teamAndEquipment?.billingUnit ?? null,
-        image: pkg.step4_sampleMedia?.media?.[0]?.url,
+        image: packageCoverImage(pkg),
         vendorType: pkg.vendorType,
         variantType: pkg.variantType,
       },

@@ -9,6 +9,7 @@ import Vendor from "../models/Vendor.js";
 import CalendarBlock from "../models/CalendarBlock.js";
 import { generateISTId } from "../utils/idGenerator.js";
 import { snapshotDeliverables } from "../utils/packageDeliverables.js";
+import { packageCoverImage } from "../utils/packageCoverImage.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 import { releaseSlotIfUnused } from "../utils/releaseSlot.js";
 import { raiseBookingIssue } from "../services/bookingIssueService.js";
@@ -276,7 +277,7 @@ export const createBooking = async (req, res) => {
         // packages, which would otherwise snapshot a manually-created
         // booking's price as ₹0.
         price: getEffectivePackagePrice(pkg),
-        image: pkg.step4_sampleMedia?.media?.[0]?.url || null,
+        image: packageCoverImage(pkg),
         vendorType: pkg.vendorType || null,
         variantType: pkg.variantType || "Premium",
         gstRatePercent: pkg.step3_policiesAndCharges?.gstRatePercent ?? null,

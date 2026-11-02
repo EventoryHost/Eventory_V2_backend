@@ -3,8 +3,9 @@
  * Business Profile Setup and Personal Documents — have to be complete first.
  *
  * Mirrors the vendor app's ProfileSetupResolver (businessProfileSteps /
- * personalDocsSteps) so the app's message and this refusal agree. GST is
- * optional but not ignorable: it counts once verified or deliberately skipped
+ * personalDocsSteps) so the app's message and this refusal agree. Email is
+ * skippable in the app, so it is not required here. GST is optional but not
+ * ignorable: it counts once verified or deliberately skipped
  * (Vendor.isGstSkipped).
  */
 
@@ -15,7 +16,6 @@ const isEmptyList = (l) => !Array.isArray(l) || l.length === 0;
 export const READINESS_FIELDS = [
   "businessName",
   "pocName",
-  "email",
   "isIndividual",
   "teamSize",
   "bookingsPerYear",
@@ -47,7 +47,6 @@ export const profileGaps = (vendor) => {
   const businessProfile = [
     isBlank(v.businessName) && "businessName",
     isBlank(v.pocName) && "pocName",
-    isBlank(v.email) && "email",
     !v.isIndividual && isBlank(v.teamSize) && "teamSize",
     isBlank(v.bookingsPerYear) && "bookingsPerYear",
     isBlank(v.experience) && "experience",

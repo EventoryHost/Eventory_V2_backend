@@ -8,6 +8,7 @@ import { computeContactValidation, computeLinesValidation } from "../services/ch
 import { computeAvailability } from "../utils/packageAvailability.js";
 import { resolveVendorRefId } from "../utils/resolveVendor.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
+import { packageCoverImage } from "../utils/packageCoverImage.js";
 import { snapshotDeliverables } from "../utils/packageDeliverables.js";
 import { hiddenVendorKeys, visibleVendorIdClause } from "../utils/customerVisibility.js";
 
@@ -84,7 +85,7 @@ async function buildLine({
         price: getEffectivePackagePrice(pkg),
         billingUnit:
           pkg.step3_policiesAndCharges?.packagePricing?.billingUnit ?? pkg.step3_policiesAndCharges?.teamAndEquipment?.billingUnit ?? null,
-        image: pkg.step4_sampleMedia?.media?.[0]?.url,
+        image: packageCoverImage(pkg),
         vendorType: pkg.vendorType,
         variantType: pkg.variantType,
         // Full vendor-editable feature set (spaces/setups/menus/items/addOns,
@@ -423,7 +424,7 @@ export const updateCheckoutLine = async (req, res) => {
         price: getEffectivePackagePrice(newPkg),
         billingUnit:
           newPkg.step3_policiesAndCharges?.packagePricing?.billingUnit ?? newPkg.step3_policiesAndCharges?.teamAndEquipment?.billingUnit ?? null,
-        image: newPkg.step4_sampleMedia?.media?.[0]?.url,
+        image: packageCoverImage(newPkg),
         vendorType: newPkg.vendorType,
         variantType: newPkg.variantType,
         deliverables: snapshotDeliverables(newPkg),

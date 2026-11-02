@@ -4,6 +4,7 @@ import Package from "../models/Package.js";
 import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
+import { packageCoverImage } from "../utils/packageCoverImage.js";
 import { visibleVendorIdClause } from "../utils/customerVisibility.js";
 
 /**
@@ -16,7 +17,7 @@ import { visibleVendorIdClause } from "../utils/customerVisibility.js";
 
 const COMPARE_PACKAGE_FIELDS =
   "vendorId vendorType variantType packageStatus step1_eventAndCrew step2_productsAndPricing " +
-  "step3_policiesAndCharges step4_sampleMedia.media createdAt";
+  "step3_policiesAndCharges step4_sampleMedia.media step4_sampleMedia.spaceMedia createdAt";
 
 async function getOrCreateSession(customerId) {
   let session = await CompareSession.findOne({ customerId });
@@ -73,7 +74,7 @@ function buildComparisonPayload(packages) {
       },
       capacity: { minGuests: cap.minGuests ?? null, maxGuests: cap.maxGuests ?? null },
       duration: { minHours: dur.minHours ?? null, maxHours: dur.maxHours ?? null },
-      coverImage: pkg.step4_sampleMedia?.media?.[0]?.url || null,
+      coverImage: packageCoverImage(pkg),
       cancellationPolicySummary: cancellation
         ? cancellation.templateTitle || (cancellation.writtenText ? cancellation.writtenText.slice(0, 200) : null)
         : null,

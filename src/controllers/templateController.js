@@ -2,6 +2,7 @@ import Package from "../models/Package.js";
 import Template from "../models/Template.js";
 import Vendor from "../models/Vendor.js";
 import { buildGroupFilter } from "../utils/packageGroup.js";
+import { packageCoverImage } from "../utils/packageCoverImage.js";
 
 const VENDOR_TYPE_LABELS = {
   Caterer: "CATERER",
@@ -39,18 +40,6 @@ const serializeTemplate = (doc) => {
     ...rest,
     ownerVendorId: ownerVendorCustomId || String(t.ownerVendorId ?? ""),
   };
-};
-
-const firstMediaUrl = (pkg) => {
-  const step4 = pkg?.step4_sampleMedia || {};
-  const fromMedia = step4.media?.find((m) => m?.url)?.url;
-  if (fromMedia) return fromMedia;
-  // VenueProvider keeps its media per-space instead of a flat media[].
-  for (const space of step4.spaceMedia || []) {
-    const url = space?.media?.find((m) => m?.url)?.url;
-    if (url) return url;
-  }
-  return undefined;
 };
 
 /**
@@ -126,7 +115,7 @@ export const createTemplate = async (req, res) => {
     const template = await Template.create({
       packageName: packageName?.trim() || name || "Untitled Package",
       note: note?.trim() || undefined,
-      coverImageUrl: coverImageUrl || firstMediaUrl(sourcePkg),
+      coverImageUrl: coverImageUrl || packageCoverImage(sourcePkg),
       vendorTypeLabel: vendorTypeLabel || VENDOR_TYPE_LABELS[sourcePkg.vendorType],
       ownerVendorId: vendor._id,
       ownerVendorCustomId: vendor.id,

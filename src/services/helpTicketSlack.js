@@ -1,0 +1,198 @@
+/**
+ * The Event Managers' Slack post for a new help ticket (booking request,
+ * event-day report, call back) — moved here from the frontend's
+ * /api/help-ticket/slack route so the webhook and signing secret live only
+ * in the backend's env, which the deploy workflow writes from GitHub
+ * Secrets. The post carries a WhatsApp link to the customer's own number
+ * with a message pre-filled, and — when SLACK_SIGNING_SECRET is set — a
+ * "Mark resolved" button handled by /api/slack/interactions.
+ */
+
+export const RESOLVE_ACTION_ID = "help_ticket_resolve";
+
+/** Fields the panel may send, as strings, capped. */
+export const TICKET_FIELDS = {
+  ticket: 40,
+  issue: 200,
+  note: 1000,
+  customerName: 200,
+  customerPhone: 40,
+  packageName: 200,
+  packageId: 100,
+  bookingId: 300,
+  emName: 100,
+  details: 1000,
+};
+
+const clean = (s) => (typeof s === "string" && s.trim()) || null;
+
+/** "98180 30600" / "+91-9818030600" → "919818030600"; null if it can't be a number. */
+export function toWhatsAppNumber(phone) {
+  let d = String(phone ?? "").replace(/\D/g, "");
+  if (d.length === 11 && d.startsWith("0")) d = d.slice(1);
+  if (d.length === 10) d = `91${d}`;
+  return d.length >= 11 && d.length <= 15 ? d : null;
+}
+
+/** Ticket lines that are for the team only (vendor state, photo links, page, transcript). */
+const TEAM_ONLY_DETAIL = /^(About|Packages|Vendor status|Photo|Page|Chat so far):|^(↩️|⚠️|📷|📞|💬)|^\s/;
+
+const istDateTime = (date) =>
+  new Date(date).toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).replace(/\b(am|pm)\b/, (m) => m.toUpperCase());
+
+/**
+ * What the Event Manager sends the customer on WhatsApp: the Slack post's
+ * ticket, request, package, booking, their words, raised time and status,
+ * in WhatsApp formatting and addressed to them. `customerIssue` /
+ * `customerDetails` override the team's wording when the caller has it.
+ */
+export function buildCustomerMessage(t) {
+  const name = clean(t.customerName)?.split(/\s+/)[0];
+  const em = clean(t.emName)?.split(/\s+/)[0];
+  const ticket = clean(t.ticket);
+  const issue = clean(t.customerIssue) ?? clean(t.issue);
+  const pkg = clean(t.packageName);
+  const booking = clean(t.bookingId);
+  const note = clean(t.note);
+  const details =
+    t.customerDetails ??
+    (clean(t.details) ?? "")
+      .split("\n")
+      .map((d) => d.trim())
+      .filter((d) => d && !TEAM_ONLY_DETAIL.test(d));
+  const resolved = /resolved/i.test(t.status ?? "");
+  const lines = [
+    `Hi ${name || "there"}! 👋`,
+    `This is ${em ? `${em} from Eventory` : "the Eventory team"}, about the help request you raised.`,
+    "",
+    ...(ticket ? [`*Ticket:* ${ticket}`] : []),
+    ...(issue ? [`*Request:* ${issue}`] : []),
+    ...(pkg ? [`*Package:* ${pkg}`] : []),
+    ...(booking ? [`*Booking:* ${booking}`] : []),
+    ...(note && note !== issue ? [`*You told us:* "${note.slice(0, 300)}"`] : []),
+    ...details.map((d) => `• ${d}`),
+    ...(t.createdAt ? [`*Raised:* ${istDateTime(t.createdAt)}`] : []),
+    `*Status:* ${resolved ? "✅ Resolved" : "🟡 Open — we're working on it"}`,
+    "",
+    ...(t.urgent ? ["We've marked this urgent and someone is on it right now."] : []),
+    issue
+      ? "Anything else we should know? Photos or screenshots help too — just send them here."
+      : "Could you tell us a little more about what's going wrong, so we can sort it out quickly?",
+    "",
+    "— Team Eventory",
+  ];
+  return lines.join("\n").slice(0, 1800);
+}
+
+export function buildCustomerWhatsAppLink(t) {
+  const number = toWhatsAppNumber(t.customerPhone);
+  return number ? `https://wa.me/${number}?text=${encodeURIComponent(buildCustomerMessage(t))}` : null;
+}
+
+// Slack mrkdwn treats &, < and > as control characters.
+const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+/** The post's status line; resolvedBlocks rewrites it. */
+const STATUS_PREFIX = "*Status:* ";
+
+/** Under a threaded ticket post: how replying works. */
+export const THREAD_HINT =
+  "💬 Reply in this thread to answer the customer — it shows in their help chat. Start a reply with // for a note only the team sees.";
+
+/**
+ * `resolvable`: show "Mark resolved" — only once Slack interactivity is set
+ * up, else the click errors. `threaded`: the bot posts it, so replies in
+ * its thread reach the customer. `withPackage: false` drops the Package
+ * line (planning briefs).
+ */
+export function buildSlackPayload(t, { resolvable = false, threaded = false, withPackage = true } = {}) {
+  const issue = clean(t.issue);
+  const name = clean(t.customerName);
+  const pkg = clean(t.packageName);
+  const pkgId = clean(t.packageId);
+  const booking = clean(t.bookingId);
+  const note = clean(t.note);
+  const ticket = clean(t.ticket);
+  const link = buildCustomerWhatsAppLink(t);
+  const who = [clean(t.customerEmail), clean(t.customerCode)].filter(Boolean).map(esc).join(" · ");
+  const raised = t.createdAt ? Math.floor(new Date(t.createdAt).getTime() / 1000) : null;
+  // Header blocks cap plain text at 150 chars.
+  const title = `${t.urgent ? "🚨 URGENT" : "🆘 New help ticket"}${issue ? ` — ${issue}` : ""}${ticket ? ` · ${ticket}` : ""}`.slice(0, 150);
+  const details = (clean(t.details) ?? "").split("\n").map((d) => d.trim()).filter(Boolean);
+  const lines = [
+    `*Customer:* ${name ? esc(name) : "—"}`,
+    ...(who ? [`*Email / ID:* ${who}`] : []),
+    `*Mobile:* ${clean(t.customerPhone) ? esc(t.customerPhone.trim()) : "Not on file"}`,
+    // `withPackage: false`: a planning brief, not about a package.
+    ...(withPackage ? [`*Package:* ${pkg ? esc(pkg) : "Not sure / the venue"}${pkgId ? `  (ID: \`${esc(pkgId)}\`)` : ""}`] : []),
+    ...(booking ? [`*Booking:* \`${esc(booking)}\``] : []),
+    ...(clean(t.emName) ? [`*Event Manager:* ${esc(t.emName.trim())}`] : []),
+    ...(note && note !== issue ? [`*Message:* ${esc(note)}`] : []),
+    ...details.map((d) => `• ${esc(d)}`),
+    ...(raised ? [`*Raised:* <!date^${raised}^{date_short_pretty} at {time}|${new Date(raised * 1000).toISOString()}>`] : []),
+    // resolvedBlocks flips this line when the ticket is resolved.
+    ...(t.status ? [`${STATUS_PREFIX}${esc(t.status)}`] : []),
+  ];
+  const firstName = name?.split(/\s+/)[0] ?? "the customer";
+  const buttons = [
+    ...(link
+      ? [{ type: "button", style: "primary", text: { type: "plain_text", text: `💬 Message ${firstName} on WhatsApp`, emoji: true }, url: link }]
+      : []),
+    ...(resolvable && ticket
+      ? [
+          {
+            type: "button",
+            action_id: RESOLVE_ACTION_ID,
+            value: ticket,
+            text: { type: "plain_text", text: "✅ Mark resolved", emoji: true },
+            confirm: {
+              title: { type: "plain_text", text: "Resolve this ticket?" },
+              text: { type: "mrkdwn", text: `${esc(ticket)} moves to Resolved in the customer's chats.` },
+              confirm: { type: "plain_text", text: "Resolve" },
+              deny: { type: "plain_text", text: "Cancel" },
+            },
+          },
+        ]
+      : []),
+  ];
+  return {
+    text: title,
+    blocks: [
+      { type: "header", text: { type: "plain_text", text: title, emoji: true } },
+      ...(t.urgent ? [{ type: "section", text: { type: "mrkdwn", text: "*Duty manager, please pick this up now.*" } }] : []),
+      // Slack refuses a section over 3000 characters (a long transcript).
+      { type: "section", text: { type: "mrkdwn", text: lines.join("\n").slice(0, 3000) } },
+      ...(link ? [] : [{ type: "context", elements: [{ type: "mrkdwn", text: "No mobile number on file, so there's no WhatsApp link." }] }]),
+      ...(buttons.length ? [{ type: "actions", elements: buttons }] : []),
+      ...(threaded ? [{ type: "context", elements: [{ type: "mrkdwn", text: THREAD_HINT }] }] : []),
+    ],
+  };
+}
+
+/** A ticket post as resolved: ✅ header, no resolve button, and `byLine` (who, when). */
+export function resolvedBlocks(blocks, byLine) {
+  const ts = Math.floor(Date.now() / 1000);
+  return [
+    ...blocks
+      .map((b) => (b.type === "header" && b.text ? { ...b, text: { ...b.text, text: b.text.text.replace(/^(🆘|🚨)/, "✅ Resolved:") } } : b))
+      .map((b) =>
+        b.type === "section" && b.text?.text?.includes(STATUS_PREFIX)
+          ? { ...b, text: { ...b.text, text: b.text.text.replace(/\*Status:\* .*/, `${STATUS_PREFIX}✅ Resolved`) } }
+          : b
+      )
+      .map((b) => (b.type === "actions" ? { ...b, elements: b.elements?.filter((e) => e.action_id !== RESOLVE_ACTION_ID) } : b))
+      .filter((b) => b.type !== "actions" || b.elements?.length)
+      .filter((b) => !(b.type === "context" && b.elements?.some((e) => e.text === THREAD_HINT))),
+    {
+      type: "context",
+      elements: [{ type: "mrkdwn", text: `${byLine} · <!date^${ts}^{date_short_pretty} at {time}|just now>` }],
+    },
+  ];
+}

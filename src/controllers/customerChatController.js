@@ -7,18 +7,17 @@ import ChatEnquiry from "../models/ChatEnquiry.js";
 import { handleBotTurn } from "../services/chatBotEngine.js";
 import {
   notifyHelpRequest,
+  notifyBookingTicket,
   notifyHelpCallBack,
   notifyHelpMessage,
   notifyHelpWhatsApp,
   notifyAreaWaitlist,
-  notifyBookingHelp,
-  notifyEventDayReport,
   notifyVendorContact,
   notifyHelpSorted,
+  notifyHelpResolvedByCustomer,
 } from "../services/chatSlackNotifier.js";
 import AreaWaitlist from "../models/AreaWaitlist.js";
 import Booking from "../models/Booking.js";
-import Vendor from "../models/Vendor.js";
 import { raiseBookingIssue } from "../services/bookingIssueService.js";
 import HelpConversation from "../models/HelpConversation.js";
 import { lookupArea } from "../services/areaLookupService.js";
@@ -535,13 +534,6 @@ export const createBookingHelpRequest = async (req, res) => {
       via: "help_request",
     });
 
-    const vendorIds = bookings.map((x) => x.vendorId).filter(Boolean).map(String);
-    const vendors = await Vendor.find(
-      { $or: [{ id: { $in: vendorIds } }, { _id: { $in: vendorIds.filter((v) => /^[a-f0-9]{24}$/i.test(v)) } }] },
-      { id: 1, businessName: 1 }
-    ).lean();
-    const vendorName = (v) =>
-      vendors.find((x) => x.id === String(v) || String(x._id) === String(v))?.businessName || null;
     // A report is also the booking's own issue record (Booking.issues).
     if (report?.packageRef) {
       try {
@@ -559,16 +551,10 @@ export const createBookingHelpRequest = async (req, res) => {
         console.error("[createBookingHelpRequest] issue record failed:", err.message);
       }
     }
-    const summary = {
-      text: b.text,
-      details: b.details || [],
-      bookings: bookings.map((x) => ({
-        ref: x.bookingId,
-        name: x.packageSnapshot?.name || "Package",
-        vendor: vendorName(x.vendorId),
-      })),
-    };
-    (report ? notifyEventDayReport(enquiry, summary) : notifyBookingHelp(enquiry, summary))
+    // The ticket's one Slack parent post, sent from here (not the panel) so
+    // it exists before anything else on the ticket — every later update
+    // threads under it. Fire-and-forget: Slack never fails the request.
+    notifyBookingTicket(enquiry, { text: b.text, details: b.details || [] })
       .then(() => ChatEnquiry.updateOne({ _id: enquiry._id }, { $set: { slackNotifiedAt: new Date() } }))
       .catch((err) => console.error("[createBookingHelpRequest] Slack notify failed:", err.message));
 
@@ -602,6 +588,35 @@ export const markHelpRequestSorted = async (req, res) => {
     return res.json({ success: true, request: serializeHelpRequest(enquiry, { late, messages: await loadTicketMessages(enquiry) }) });
   } catch (error) {
     console.error("markHelpRequestSorted error:", error);
+    return res.status(500).json({ success: false, message: "Could not update that" });
+  }
+};
+
+/**
+ * @desc The customer marks their ticket resolved from the help panel. It
+ * moves to Resolved in Your chats and the team sees it in the ticket's
+ * Slack thread; writing in the chat again reopens it.
+ * @route POST /api/customer/chat/help-request/:enquiryId/resolve
+ */
+export const resolveHelpRequest = async (req, res) => {
+  try {
+    const enquiry = await findOwnHelpRequest(req, req.body || {});
+    if (!enquiry) return res.status(404).json({ success: false, message: "Request not found" });
+    if (enquiry.ticketStatus !== "closed") {
+      enquiry.ticketStatus = "closed";
+      enquiry.resolvedAt = new Date();
+      enquiry.resolvedBy = "customer";
+      await enquiry.save();
+      notifyHelpResolvedByCustomer(enquiry).catch((err) =>
+        console.error("[resolveHelpRequest] Slack notify failed:", err.message)
+      );
+    }
+    return res.json({
+      success: true,
+      request: serializeHelpRequest(enquiry, { late: false, messages: await loadTicketMessages(enquiry) }),
+    });
+  } catch (error) {
+    console.error("resolveHelpRequest error:", error);
     return res.status(500).json({ success: false, message: "Could not update that" });
   }
 };
@@ -684,8 +699,19 @@ export const postHelpRequestMessage = async (req, res) => {
       senderName: enquiry.customer?.name ?? enquiry.customerName ?? null,
       via: "help_request",
     });
+    // Writing again after it was resolved reopens it.
+    const reopened = !saved.isRetry && enquiry.ticketStatus === "closed";
+    if (reopened) {
+      enquiry.ticketStatus = enquiry.firstReplyAt ? "replied" : "open";
+      enquiry.resolvedAt = null;
+      enquiry.resolvedBy = null;
+      await ChatEnquiry.updateOne(
+        { _id: enquiry._id },
+        { $set: { ticketStatus: enquiry.ticketStatus, resolvedAt: null, resolvedBy: null } }
+      );
+    }
     if (!saved.isRetry) {
-      notifyHelpMessage(enquiry, saved.text).catch((err) =>
+      notifyHelpMessage(enquiry, saved.text, { reopened }).catch((err) =>
         console.error("[postHelpRequestMessage] Slack notify failed:", err.message)
       );
     }
