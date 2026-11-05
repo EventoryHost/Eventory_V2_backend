@@ -1,6 +1,7 @@
 import Booking from "../models/Booking.js";
 import { round2 } from "../utils/money.js";
 import { recordVendorMilestoneDue } from "./vendorPayoutService.js";
+import { contextFromDeal, notifyVendor } from "./vendorNotificationService.js";
 
 /**
  * Applies a confirmed-PAID Step 22 milestone payment to its Booking — Phase
@@ -83,7 +84,29 @@ export async function applyMilestonePaymentToBooking(payment) {
   // payout against this same Transaction data — PM decision 2026-10-10.
   await recordVendorMilestoneDue({ booking, milestoneTitle: milestone.title, grossAmount: payment.amount });
 
+  notifyMilestonePaid(booking, milestone, payment, shortBy);
+
   return booking;
 }
 
 export default applyMilestonePaymentToBooking;
+
+/** Tells the vendor a payment landed: part of an instalment, the last of
+ * the booking, or one instalment with some still to come. */
+function notifyMilestonePaid(booking, milestone, payment, shortBy) {
+  const ctx = {
+    ...contextFromDeal(booking),
+    amount: payment.amount,
+    milestoneTitle: milestone.title,
+    // The webhook and the status poll can both apply one payment.
+    dedupeKey: `payments.received:${payment._id}`,
+  };
+  const remaining = round2((booking.totalAmount || 0) - (booking.totalReceived || 0));
+  if (shortBy > 0.01) {
+    notifyVendor("payments.partialReceived", { ...ctx, shortBy, due: round2(shortBy + payment.amount) });
+  } else if (remaining <= 0.01) {
+    notifyVendor("payments.fullyPaid", ctx);
+  } else {
+    notifyVendor("payments.milestoneReceived", { ...ctx, remaining });
+  }
+}

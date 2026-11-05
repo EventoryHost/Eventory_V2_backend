@@ -8,6 +8,7 @@ import {
   validateSetupPhotos,
 } from "../validators/eventDayValidators.js";
 import { failed, findBooking, invalid, notFound } from "./bookingController.js";
+import { resolveVendorActions } from "../services/vendorNotificationService.js";
 
 /**
  * The vendor's event-day flow on a Confirmed booking — check in, prove the
@@ -259,6 +260,11 @@ export const updateDayRequest = async (req, res) => {
 
     request.update = { ...validation.value, sentAt: new Date() };
     request.status = "Updated";
+    // Rows are per request but not linked to one: clear them once nothing
+    // is left pending.
+    if (!booking.dayRequests.some((r) => r.status === "Pending")) {
+      resolveVendorActions(booking.vendorId, booking.bookingId, ["eventDay.dayRequest"]);
+    }
     return await saveAndRespond(res, booking, "Update sent");
   } catch (error) {
     return failed(res, "Failed to send update", error);
