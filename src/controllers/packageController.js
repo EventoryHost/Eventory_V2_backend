@@ -4,6 +4,11 @@ import { getModelForVendor } from "../utils/modelRegistry.js";
 import { upgradeLegacyDurationKeys } from "../utils/legacyDurationKeys.js";
 import { generateISTId } from "../utils/idGenerator.js";
 import {
+  contextFromPackage,
+  notifyPackageGroup,
+  notifyVendor,
+} from "../services/vendorNotificationService.js";
+import {
   buildGroupFilter,
   buildGroupFilterFromPackageId,
 } from "../utils/packageGroup.js";
@@ -606,8 +611,12 @@ export const submitPackageGroup = async (req, res) => {
       });
     }
 
-    const result = await submitGroup(await buildGroupFilter(packageGroupId), {
+    const groupFilter = await buildGroupFilter(packageGroupId);
+    const result = await submitGroup(groupFilter, {
       by: req.body?.submittedBy,
+    });
+    notifyPackageGroup("package.submitted", groupFilter, {
+      resolveActions: ["package.changesNeeded"],
     });
 
     return res.status(200).json({
@@ -635,6 +644,9 @@ export const submitPackage = async (req, res) => {
     }
 
     const result = await submitGroup(groupFilter, { by: req.body?.submittedBy });
+    notifyPackageGroup("package.submitted", groupFilter, {
+      resolveActions: ["package.changesNeeded"],
+    });
 
     return res.status(200).json({
       status: "SUCCESS",
@@ -662,9 +674,11 @@ export const goLivePackageGroup = async (req, res) => {
       });
     }
 
-    const result = await goLiveGroup(await buildGroupFilter(packageGroupId), {
+    const groupFilter = await buildGroupFilter(packageGroupId);
+    const result = await goLiveGroup(groupFilter, {
       by: req.body?.publishedBy,
     });
+    notifyPackageGroup("package.live", groupFilter, { resolveActions: ["package.approved"] });
 
     return res.status(200).json({
       status: "SUCCESS",
@@ -791,6 +805,10 @@ export const deletePackage = async (req, res) => {
     if (!updatedPackage) {
       return res.status(404).json({ status: "FAILED", message: "Package not found" });
     }
+
+    contextFromPackage(updatedPackage)
+      .then((ctx) => notifyVendor("package.trashed", ctx))
+      .catch((err) => console.error("[deletePackage] notify failed:", err.message));
 
     return res.status(200).json({ status: "SUCCESS", message: "Package marked as deleted" });
   } catch (error) {

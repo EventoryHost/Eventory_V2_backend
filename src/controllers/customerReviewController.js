@@ -1,4 +1,5 @@
 import Booking from "../models/Booking.js";
+import { contextFromDeal, notifyVendor } from "../services/vendorNotificationService.js";
 import Review from "../models/Review.js";
 import EventReview from "../models/EventReview.js";
 import { bookingLookupQuery } from "./customerBookingController.js";
@@ -50,7 +51,8 @@ async function loadEventGroup(anchor, customerId) {
     eventType: eventType === null ? { $in: [null, "Event"] } : eventType,
     eventDate: { $gte: start, $lt: end },
   })
-    .select("bookingId packageId vendorId eventType eventDate status")
+    // customer/packageSnapshot/location: the vendor's review notification.
+    .select("bookingId packageId vendorId eventType eventDate status customer.name packageSnapshot.name packageSnapshot.image location")
     .lean();
 }
 
@@ -229,6 +231,15 @@ export const submitBookingReview = async (req, res) => {
           };
         })
       );
+      for (const item of packages) {
+        const booking = bookingById.get(item.bookingId);
+        notifyVendor("eventDay.review", {
+          ...contextFromDeal(booking),
+          rating: item.rating,
+          reviewText: typeof item.comment === "string" ? item.comment.trim().slice(0, 140) || null : null,
+          dedupeKey: `eventDay.review:${booking.bookingId}`,
+        });
+      }
     }
 
     const next = await buildReviewState(anchor, group, customerId);

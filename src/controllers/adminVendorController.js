@@ -5,6 +5,7 @@ import Transaction from "../models/Transaction.js";
 import generateUniqueId from "../utils/generateId.js";
 import { buildPayoutsHeaders, getPayoutsBaseUrl } from "../utils/cashfreePayoutsHelper.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
+import { notifyVendor, resolveVendorActionsByType } from "../services/vendorNotificationService.js";
 import { computeCompletion, completionSummary } from "../utils/profileCompletion.js";
 import {
   EFFECTIVE_STATUS_EXPR,
@@ -314,6 +315,22 @@ export const getVendorDetails = async (req, res) => {
   }
 };
 
+/**
+ * Tells the vendor how their verification went. A request for changes is an
+ * open action until they're verified; verified or rejected settles it.
+ */
+const notifyVerificationOutcome = async (vendor, outcome, note) => {
+  if (!vendor?.id) return;
+  const reason = typeof note === "string" && note.trim() ? note.trim() : null;
+  if (outcome === "changes") {
+    notifyVendor("profile.changesRequested", { vendorId: vendor.id, reason });
+    return;
+  }
+  await resolveVendorActionsByType(vendor.id, ["profile.changesRequested"]);
+  if (outcome === "verified") notifyVendor("profile.verified", { vendorId: vendor.id });
+  if (outcome === "rejected") notifyVendor("profile.rejected", { vendorId: vendor.id, reason });
+};
+
 // PUT /api/admin/vendors/:id/review-step
 // Body: { stepKey, status: "Approved"|"Rejected"|"Pending", note, reviewedBy }
 export const reviewVendorStep = async (req, res) => {
@@ -350,6 +367,7 @@ export const verifyVendor = async (req, res) => {
       finalNote: body.finalNote ?? body.notes,
       by: reviewerOf(body),
     });
+    notifyVerificationOutcome(vendor, "verified");
     res.status(200).json(vendorResponse(vendor));
   } catch (error) {
     sendError(res, error);
@@ -365,6 +383,7 @@ export const rejectVendor = async (req, res) => {
       finalNote: body.finalNote ?? body.reason,
       by: reviewerOf(body),
     });
+    notifyVerificationOutcome(vendor, "rejected", body.finalNote ?? body.reason);
     res.status(200).json(vendorResponse(vendor));
   } catch (error) {
     sendError(res, error);
@@ -380,6 +399,7 @@ export const requestChanges = async (req, res) => {
       finalNote: body.finalNote ?? body.notes,
       by: reviewerOf(body),
     });
+    notifyVerificationOutcome(vendor, "changes", body.finalNote ?? body.notes);
     res.status(200).json(vendorResponse(vendor));
   } catch (error) {
     sendError(res, error);
@@ -389,22 +409,26 @@ export const requestChanges = async (req, res) => {
 // PUT /api/admin/vendors/:id/groups/:group/approve | request-changes | reject
 // group: businessProfile | personalDocuments
 // Body: { finalNote (required for request-changes and reject), reviewedBy }
-const groupDecision = (decide) => async (req, res) => {
+const groupDecision = (decide, outcome) => async (req, res) => {
   try {
     const body = req.body || {};
     const vendor = await decide(req.params.id, req.params.group, {
       finalNote: body.finalNote,
       by: reviewerOf(body),
     });
+    // Approving one group only counts once the whole profile is verified.
+    if (outcome !== "verified" || vendor?.isVerified) {
+      notifyVerificationOutcome(vendor, outcome, body.finalNote);
+    }
     res.status(200).json(vendorResponse(vendor));
   } catch (error) {
     sendError(res, error);
   }
 };
 
-export const approveVendorGroup = groupDecision(approveGroup);
-export const requestVendorGroupChanges = groupDecision(requestGroupChanges);
-export const rejectVendorGroup = groupDecision(rejectGroup);
+export const approveVendorGroup = groupDecision(approveGroup, "verified");
+export const requestVendorGroupChanges = groupDecision(requestGroupChanges, "changes");
+export const rejectVendorGroup = groupDecision(rejectGroup, "rejected");
 
 // GET /api/admin/vendors/:id/verification-history  (newest first)
 export const getVerificationHistory = async (req, res) => {
@@ -559,6 +583,8 @@ export const assignEmToVendor = async (req, res) => {
       { new: true }
     );
     if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
+
+    if (emId) notifyVendor("profile.emAssigned", { vendorId: vendor.id, emName });
 
     res.status(200).json({ success: true, data: vendor });
   } catch (error) {
@@ -809,6 +835,12 @@ export const initiateVendorPayout = async (req, res) => {
     } catch (txErr) {
       console.error(`[VendorPayout] Failed to save Transaction record for ${transferId}:`, txErr);
     }
+
+    notifyVendor("payments.payoutProcessed", {
+      vendorId: vendor.id,
+      amount: parsedAmount,
+      dedupeKey: `payments.payout:${transferId}`,
+    });
 
     return res.status(200).json({
       success: true,
