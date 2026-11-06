@@ -8,6 +8,11 @@ import Package from "../models/Package.js";
 import Vendor from "../models/Vendor.js";
 import CalendarBlock from "../models/CalendarBlock.js";
 import { generateISTId } from "../utils/idGenerator.js";
+import {
+  contextFromDeal,
+  notifyVendor,
+  resolveVendorActions,
+} from "../services/vendorNotificationService.js";
 import { snapshotDeliverables } from "../utils/packageDeliverables.js";
 import { packageCoverImage } from "../utils/packageCoverImage.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
@@ -234,6 +239,12 @@ export const createEnquiry = async (req, res) => {
 
     const conflictDetected = await detectConflict(vendorId, enquiry.eventDate);
 
+    notifyVendor("enquiry.new", {
+      ...contextFromDeal(enquiry),
+      conflict: conflictDetected,
+      requestCount: enquiry.changeRequests?.length || 0,
+    });
+
     return res.status(201).json({
       status: "SUCCESS",
       message: "Enquiry created",
@@ -394,6 +405,11 @@ export const requestEnquiryChanges = async (req, res) => {
     markInDiscussion(enquiry);
     await enquiry.save();
 
+    notifyVendor("enquiry.changesRequested", {
+      ...contextFromDeal(enquiry),
+      requestCount: requests.length,
+    });
+
     return res.status(201).json({
       status: "SUCCESS",
       message: `${requests.length} change request(s) submitted`,
@@ -542,6 +558,8 @@ export const sendProposal = async (req, res) => {
     enquiry.proposalSentAt = new Date();
 
     await enquiry.save();
+    // The vendor has answered: the enquiry leaves "actions required".
+    resolveVendorActions(enquiry.vendorId, enquiry.enquiryId);
 
     return res.status(200).json({
       status: "SUCCESS",
@@ -683,6 +701,7 @@ export const convertEnquiryToBooking = async (req, res) => {
     enquiry.convertedBookingId = booking._id;
     enquiry.convertedAt = new Date();
     await enquiry.save();
+    resolveVendorActions(enquiry.vendorId, enquiry.enquiryId);
 
     return res.status(201).json({
       status: "SUCCESS",
@@ -713,6 +732,7 @@ export const declineEnquiry = async (req, res) => {
     enquiry.declinedAt = new Date();
     enquiry.declineReason = req.body?.reason?.trim() || null;
     await enquiry.save();
+    resolveVendorActions(enquiry.vendorId, enquiry.enquiryId);
 
     return res.status(200).json({
       status: "SUCCESS",
