@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { notifyPackageGroup } from "../services/vendorNotificationService.js";
 import Package, { PACKAGE_STATUSES } from "../models/Package.js";
 import Vendor from "../models/Vendor.js";
 import {
@@ -308,6 +309,9 @@ export const approvePackage = async (req, res) => {
 
     const result = await approveGroup(groupFilter, { by: req.body?.reviewedBy });
     const data = await Package.find(groupFilter).lean();
+    notifyPackageGroup("package.approved", groupFilter, {
+      resolveActions: ["package.changesNeeded"],
+    });
 
     res.status(200).json({
       success: true,
@@ -345,6 +349,9 @@ export const raiseAction = async (req, res) => {
       by: req.body?.reviewedBy,
     });
     const data = await Package.find(groupFilter).lean();
+    notifyPackageGroup("package.changesNeeded", groupFilter, {
+      reason: action?.summary?.trim() || null,
+    });
 
     res.status(200).json({
       success: true,
@@ -463,6 +470,9 @@ export const requestFix = async (req, res) => {
       by: req.body?.reviewedBy || req.adminUser?.username || "Admin",
     });
     const data = await Package.find(groupFilter).lean();
+    notifyPackageGroup("package.changesNeeded", groupFilter, {
+      reason: actionSummary || null,
+    });
 
     res.status(200).json({
       success: true,
@@ -501,6 +511,10 @@ export const rejectPackage = async (req, res) => {
       by: req.body?.reviewedBy || req.adminUser?.username || "Admin",
     });
     const data = await Package.find(groupFilter).lean();
+    notifyPackageGroup("package.rejected", groupFilter, {
+      reason: reason?.summary?.trim() || null,
+      resolveActions: ["package.approved", "package.changesNeeded"],
+    });
 
     res.status(200).json({
       success: true,
@@ -687,6 +701,7 @@ export const adminGoLive = async (req, res) => {
 
     const by = req.body?.by || req.adminUser?.username || "Admin";
     const result = await goLiveGroup(groupFilter, { by });
+    notifyPackageGroup("package.live", groupFilter, { resolveActions: ["package.approved"] });
 
     res.status(200).json({
       success: true,

@@ -1512,6 +1512,25 @@ export const browseVendors = async (req, res) => {
   }
 };
 
+/**
+ * The Become a Vendor hero's "Total Number of Vendors on Eventory" stat —
+ * real bug fixed (PM reported 2026-11-02): the frontend previously read
+ * browseVendors' `.total` off a `?limit=1` call, which is filtered by
+ * VISIBLE_VENDOR_FILTER (excludes deactivated/Unlive vendors and anyone
+ * under 50% onboarding completion) — a number meant for "how many vendors
+ * can a customer actually browse", not "how many vendors has Eventory
+ * signed up", which is what this stat is supposed to be bragging about.
+ * This counts every Vendor document, unfiltered.
+ */
+export const getVendorsTotalCount = async (req, res) => {
+  try {
+    const total = await Vendor.countDocuments({});
+    return res.status(200).json({ status: "SUCCESS", total });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to count vendors", error: error.message });
+  }
+};
+
 // Builds a Mongo aggregation $project stage from the same space-separated
 // field-list strings .select() takes, so the rating-sort aggregation branch
 // returns exactly the same shape as the normal .find().select().populate()

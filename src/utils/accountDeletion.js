@@ -78,9 +78,9 @@ export async function purgeVendor(vendorId) {
 /**
  * Vendors whose retention window has lapsed and are therefore due for purge.
  *
- * Purging itself is run manually by the team, so this only reports what is
- * due — call `purgeVendor` per id to actually remove one. Anything listed here
- * has passed its window and can no longer be cancelled by the vendor.
+ * Consumed by the account purge worker (src/jobs/accountPurgeWorker.js), which
+ * calls `purgeVendor` per id. Anything listed here has passed its window and
+ * can no longer be cancelled by the vendor.
  */
 export async function findVendorsDueForPurge() {
   const cutoff = new Date(Date.now() - retentionWindowMs());

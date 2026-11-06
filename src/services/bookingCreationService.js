@@ -3,6 +3,7 @@ import { generateISTId } from "../utils/idGenerator.js";
 import { round2 } from "../utils/money.js";
 import { applyPricingBreakdown } from "../utils/pricingBreakdown.js";
 import { recordVendorMilestoneDue } from "./vendorPayoutService.js";
+import { contextFromDeal, notifyVendor } from "./vendorNotificationService.js";
 
 /**
  * Turns a paid CheckoutSession into real Booking documents — Phase 4 Step
@@ -300,6 +301,8 @@ export async function createBookingsFromCheckoutSession(session, payment, option
       }
     }
 
+    notifyNewBooking(booking);
+
     createdBookingIds.push(booking._id);
 
     // NO slot reservation here (removed 2026-09-25). This used to call
@@ -331,3 +334,25 @@ export async function createBookingsFromCheckoutSession(session, payment, option
 }
 
 export default createBookingsFromCheckoutSession;
+
+/**
+ * Tells the vendor about a booking that just came in. Requests to change the
+ * package lead the row; otherwise it says whether a token was paid.
+ */
+function notifyNewBooking(booking) {
+  const requestCount = booking.customizeRequests?.length || 0;
+  const token = booking.paymentMilestones?.find((m) => m.status === "Received");
+  const type =
+    requestCount > 0
+      ? "booking.newWithRequests"
+      : booking.paymentType === "AdvancePaid" && token?.amount > 0
+        ? "booking.newTokenPaid"
+        : "booking.newRequest";
+  notifyVendor(type, {
+    ...contextFromDeal(booking),
+    requestCount,
+    amount: token?.amount,
+    // The webhook and the status poll can both finish one checkout.
+    dedupeKey: `booking.new:${booking.bookingId}`,
+  });
+}

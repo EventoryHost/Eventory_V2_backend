@@ -37,6 +37,8 @@ const TRANSITIONS = {
     to: "Deleted",
   },
   WentLive: { from: ["Approved"], to: "Live" },
+  Paused: { from: ["Live"], to: "Paused" },
+  Resumed: { from: ["Paused"], to: "Live" },
 };
 
 // Shared with the vendor review service; re-exported so existing imports keep working.
@@ -292,6 +294,14 @@ export const goLiveGroup = async (groupFilter, { by } = {}) => {
   return transition(groupFilter, "WentLive", { by });
 };
 
+/** @desc Vendor takes a live package off the marketplace without losing its approval. */
+export const pauseGroup = async (groupFilter, { by } = {}) =>
+  transition(groupFilter, "Paused", { by });
+
+/** @desc Vendor puts a paused package back on the marketplace. */
+export const resumeGroup = async (groupFilter, { by } = {}) =>
+  transition(groupFilter, "Resumed", { by });
+
 /** @desc Convenience wrapper for callers holding a packageGroupId string. */
 export const resolveGroup = (packageGroupId) => buildGroupFilter(packageGroupId);
 
@@ -304,6 +314,8 @@ export default {
   raiseActionGroup,
   rejectGroup,
   goLiveGroup,
+  pauseGroup,
+  resumeGroup,
   resolveGroup,
   ReviewTransitionError,
 };

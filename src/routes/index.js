@@ -25,6 +25,7 @@ import enquiryRoutes from "./enquiryRoutes.js";
 import transactionRoutes from "./transactionRoutes.js";
 import redirectRoutes from "./redirectRoutes.js";
 import groundRoutes from "./groundRoutes.js";
+import vendorNotificationRoutes from "./vendorNotificationRoutes.js";
 
 // Admin Routes
 import adminVendorRoutes from "./adminVendorRoutes.js";
@@ -111,6 +112,7 @@ router.use("/calendar", calendarRoutes);
 router.use("/bookings", bookingRoutes);
 router.use("/enquiries", enquiryRoutes);
 router.use("/transactions", transactionRoutes);
+router.use("/notifications", vendorNotificationRoutes);
 router.use("/redirect", redirectRoutes);
 // Public ground-contact view (no auth) — see groundRoutes.js.
 router.use("/ground", groundRoutes);
