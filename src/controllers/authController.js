@@ -1,4 +1,5 @@
 import { cognito } from "../config/awsConfig.js";
+import { notifyVendor } from "../services/vendorNotificationService.js";
 import {
   SignUpCommand,
   AdminInitiateAuthCommand,
@@ -176,6 +177,7 @@ export const verifyOtp = async (req, res, next) => {
         isVerified: false,
       });
       await vendor.save();
+      notifyVendor("profile.welcome", { vendorId: vendor.id });
     }
 
     // Generate JWT

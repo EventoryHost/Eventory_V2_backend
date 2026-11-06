@@ -134,8 +134,15 @@ const ChatEnquirySchema = new mongoose.Schema(
     report: { type: mongoose.Schema.Types.Mixed, default: null },
     // The customer said "It's sorted now"; the team closes it after checking.
     customerSortedAt: { type: Date, default: null },
-    // The team marked the ticket resolved (ticketStatus "closed").
+    // The ticket was resolved (ticketStatus "closed") — by the team (Slack
+    // button, admin) or by the customer from the help panel.
     resolvedAt: { type: Date, default: null },
+    resolvedBy: { type: String, enum: ["team", "customer", null], default: null },
+    // The ticket's Slack post (bot token only): every later update —
+    // customer messages, call back, resolved — goes into its thread, and
+    // replies in that thread come back to the customer's chat.
+    slackChannel: { type: String, default: null },
+    slackThreadTs: { type: String, default: null, index: true },
     // Last time the customer had this ticket's chat open — an Event
     // Manager message after it is "New reply" in Your chats.
     customerSeenAt: { type: Date, default: null },

@@ -19,6 +19,7 @@ import {
   revertPackageAvailability,
 } from "./bookingController.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
+import { contextFromDeal, notifyVendor } from "../services/vendorNotificationService.js";
 
 const SLA_HOURS = 4;
 const getSlaThreshold = () => new Date(Date.now() - SLA_HOURS * 60 * 60 * 1000);
@@ -307,7 +308,8 @@ export const reassignBooking = async (req, res) => {
     const booking = await Booking.findByIdAndUpdate(
       req.params.bookingId,
       { 
-        vendorId: newVendorId,
+        // Public id: what the vendor's lists (and inbox) query by.
+        vendorId: newVendor.id || newVendorId,
         // Reset status if it was declined/cancelled etc? 
         // For now just change vendor, keep status pending if it was pending
       },
@@ -315,6 +317,8 @@ export const reassignBooking = async (req, res) => {
     );
     
     if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
+
+    notifyVendor("booking.reassigned", contextFromDeal(booking));
     
     res.status(200).json({ success: true, data: booking, reason });
   } catch (error) {
@@ -334,6 +338,7 @@ export const forceAccept = async (req, res) => {
       { new: true }
     );
     if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
+    notifyVendor("booking.confirmedByEventory", contextFromDeal(booking));
     res.status(200).json({ success: true, data: booking });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -536,6 +541,7 @@ export const assignEmToBooking = async (req, res) => {
       { new: true }
     );
     if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
+    if (emId) notifyVendor("booking.emAssigned", { ...contextFromDeal(booking), emName });
 
     res.status(200).json({ success: true, data: booking });
   } catch (error) {
@@ -576,6 +582,13 @@ export const updateRefundStatus = async (req, res) => {
     if (!booking.refund.startedAt) booking.refund.startedAt = now;
     if (status === "completed") booking.refund.completedAt = now;
     await booking.save();
+    if (status === "completed") {
+      notifyVendor("payments.refundIssued", {
+        ...contextFromDeal(booking),
+        amount: booking.refund.amount,
+        dedupeKey: `payments.refund:${booking.bookingId}`,
+      });
+    }
     res.status(200).json({ success: true, refund: booking.refund });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -916,6 +929,10 @@ export const updateBooking = async (req, res) => {
         return saveValidationFailed(res, error);
       }
       throw error;
+    }
+
+    if (Array.isArray(body.paymentMilestones)) {
+      notifyVendor("payments.scheduleChanged", contextFromDeal(booking));
     }
 
     // The booking is saved at this point, so a calendar sync failure is

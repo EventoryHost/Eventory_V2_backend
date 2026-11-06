@@ -17,9 +17,11 @@ import {
   continueHelpOnWhatsApp,
   createBookingHelpRequest,
   markHelpRequestSorted,
+  resolveHelpRequest,
   noteVendorContact,
 } from "../controllers/customerChatController.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
+import { postHelpTicketToSlack, slackStatus } from "../controllers/slackController.js";
 import {
   createHelpRequestSchema,
   helpRequestCallBackSchema,
@@ -266,6 +268,24 @@ router.post("/booking-help", validateRequest(bookingHelpRequestSchema), createBo
 
 /**
  * @swagger
+ * /api/customer/chat/slack/ticket:
+ *   post:
+ *     summary: Post a new help ticket to the Event Managers' Slack channel (webhook stays server-side)
+ *     tags: [Customer Chat]
+ */
+router.post("/slack/ticket", postHelpTicketToSlack);
+
+/**
+ * @swagger
+ * /api/customer/chat/slack/status:
+ *   get:
+ *     summary: Whether this server has the Slack webhook / signing secret set (never the values)
+ *     tags: [Customer Chat]
+ */
+router.get("/slack/status", slackStatus);
+
+/**
+ * @swagger
  * /api/customer/chat/booking-help/contact:
  *   post:
  *     summary: Event day — the customer opened a vendor's on-ground number; the Event Manager is told on Slack
@@ -281,6 +301,18 @@ router.post("/booking-help/contact", validateRequest(vendorContactSchema), noteV
  *     tags: [Customer Chat]
  */
 router.post("/help-request/:enquiryId/sorted", markHelpRequestSorted);
+
+/**
+ * @swagger
+ * /api/customer/chat/help-request/{enquiryId}/resolve:
+ *   post:
+ *     summary: The customer marks their ticket resolved (Your chats → Resolved; told in the Slack thread). A new message reopens it.
+ *     tags: [Customer Chat]
+ *     responses:
+ *       200: { description: "{ request } with resolved: true, resolvedBy: customer" }
+ *       404: { description: Not this caller's request }
+ */
+router.post("/help-request/:enquiryId/resolve", resolveHelpRequest);
 
 /**
  * @swagger
