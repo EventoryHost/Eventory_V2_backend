@@ -244,6 +244,9 @@ export async function createBookingsFromCheckoutSession(session, payment, option
       // the quote couldn't compute one (no event date at checkout, etc.).
       convenienceFee: quoteLine.convenienceFee ?? null,
       convenienceFeeBreakdown: quoteLine.convenienceFeeBreakdown ?? null,
+      // Commercial Engine economics locked with the quote (PRD §16) —
+      // commission, MRER, fee components, rule versions. Immutable from here.
+      commercialSnapshot: session.commercialSnapshots?.[String(line._id)] ?? null,
       // The actual event timing from the Contact page — ONE value for the
       // whole checkout session, carried onto every booking it produces (see
       // Booking.js's own eventTiming comment for why this is separate from

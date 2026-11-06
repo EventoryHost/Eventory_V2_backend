@@ -24,7 +24,11 @@
  *   verificationHistory      [], when absent
  *
  *   And, for vendors that already have a status, completionPercent when it is
- *   missing (e.g. a vendor migrated lazily by a save before this ran).
+ *   missing (e.g. a vendor migrated lazily by a save before this ran) or
+ *   stale — stored but no longer what computeCompletion gives (the schema
+ *   default is 0, so a vendor written without the pre-save hook keeps 0).
+ *   Customers only see vendors whose STORED percentage is >= 50
+ *   (utils/customerVisibility.js), so a stale value hides a vendor.
  *
  * IT IS SAFE TO RE-RUN. Each write is guarded by the same "still missing"
  * condition it was planned from, so a second run finds nothing to do.
@@ -56,9 +60,17 @@ export function planVendor(doc) {
     verification.completionPercent = computeCompletion({ ...doc, verification }).percent;
     $set.verification = verification;
     filter["verification.status"] = null;
-  } else if (typeof doc.verification.completionPercent !== "number") {
-    $set["verification.completionPercent"] = computeCompletion(doc).percent;
-    filter["verification.completionPercent"] = { $exists: false };
+  } else {
+    const stored = doc.verification.completionPercent;
+    const percent = computeCompletion(doc).percent;
+    if (typeof stored !== "number") {
+      $set["verification.completionPercent"] = percent;
+      filter["verification.completionPercent"] = { $exists: false };
+    } else if (stored !== percent) {
+      $set["verification.completionPercent"] = percent;
+      // Only if nothing re-saved the vendor since it was read.
+      filter["verification.completionPercent"] = stored;
+    }
   }
 
   if (doc.isGstSkipped === undefined) $set.isGstSkipped = false;
@@ -76,7 +88,9 @@ const describe = (doc, op) => {
     return `${doc.id} ${JSON.stringify(doc.businessName || "")}: ${v.status}, ${v.completionPercent}% complete, ${approved} step(s) Approved${flagged.length ? `, flagged: ${flagged.join(", ")}` : ""}`;
   }
   const pct = op.update.$set["verification.completionPercent"];
-  return `${doc.id}: ${pct !== undefined ? `completionPercent = ${pct}` : "defaults only"}`;
+  const was = doc.verification?.completionPercent;
+  if (pct === undefined) return `${doc.id}: defaults only`;
+  return `${doc.id}: completionPercent ${typeof was === "number" ? `${was} → ` : "= "}${pct}`;
 };
 
 async function main() {
@@ -95,18 +109,13 @@ async function main() {
 
   // The raw collection: no casting, no defaults, no hooks.
   const collection = mongoose.connection.db.collection("vendors");
-  const cursor = collection.find({
-    $or: [
-      { "verification.status": null },
-      { "verification.completionPercent": { $exists: false } },
-      { isGstSkipped: { $exists: false } },
-      { verificationHistory: { $exists: false } },
-    ],
-  });
+  // Every vendor: a stale completionPercent can only be found by recomputing it.
+  const cursor = collection.find({});
 
   const counts = { Pending: 0, Verified: 0 };
   let writes = [];
   let total = 0;
+  let hiddenForCompletion = 0;
 
   const flush = async () => {
     if (!writes.length) return;
@@ -119,6 +128,11 @@ async function main() {
 
   for await (const doc of cursor) {
     const op = planVendor(doc);
+    const finalPercent =
+      op?.update.$set.verification?.completionPercent ??
+      op?.update.$set["verification.completionPercent"] ??
+      doc.verification?.completionPercent;
+    if (!(typeof finalPercent === "number" && finalPercent >= 50)) hiddenForCompletion += 1;
     if (!op) continue;
     total += 1;
     const status = op.update.$set.verification?.status;
@@ -132,6 +146,7 @@ async function main() {
   console.log(
     `\nStatuses assigned: ${Object.entries(counts).map(([k, n]) => `${k} ${n}`).join(" · ")}`
   );
+  console.log(`Vendors under 50% complete (hidden from customers): ${hiddenForCompletion}`);
   if (!total) console.log("✅ Every vendor already has a verification — nothing to do.");
   else if (DRY_RUN) console.log(`🔍 DRY RUN — would have updated ${total} vendor(s).`);
   else console.log(`✅ Updated ${total} vendor(s).`);

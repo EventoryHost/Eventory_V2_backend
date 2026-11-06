@@ -12,8 +12,7 @@ import { snapshotDeliverables } from "../utils/packageDeliverables.js";
 import { packageCoverImage } from "../utils/packageCoverImage.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 import { releaseSlotIfUnused } from "../utils/releaseSlot.js";
-import { raiseBookingIssue } from "../services/bookingIssueService.js";
-import {
+import { raiseBookingIssue } from "../services/bookingIssueService.js";import {
   applyPricingBreakdown,
   withPricingBreakdown,
 } from "../utils/pricingBreakdown.js";

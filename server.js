@@ -2,6 +2,7 @@ import http from "http";
 import app from "./src/app.js";
 import connectDB from "./src/config/db.js";
 import { initSocket } from "./src/config/socket.js";
+import { startTierScheduler } from "./src/services/commercial/tierScheduler.js";
 import dotenv from "dotenv";
 import os from "os";
 
@@ -28,6 +29,8 @@ app.set("io", io);
 // Connect to MongoDB and start server
 connectDB()
   .then(() => {
+    // Monthly Commercial Engine vendor tier review (opt-in: COMMERCIAL_TIER_SCHEDULER=on).
+    startTierScheduler();
     httpServer.listen(PORT, "0.0.0.0", () => {
       console.log(
         `🚀 Server running in ${process.env.NODE_ENV || "development"} mode on port ${PORT}`

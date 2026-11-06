@@ -12,10 +12,32 @@ import { findServiceArea, isKnownServiceArea } from "../data/serviceLocalities.j
 import { round2 } from "../utils/money.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { buildGroupFilter } from "../utils/packageGroupFilter.js";
-import { getPackageBasePrice, getEffectivePackagePrice } from "../utils/packagePrice.js";
-import { computeLineConvenienceFee } from "../services/convenienceFeeService.js";
+import { getPackageBasePrice } from "../utils/packagePrice.js";
+import { previewPackagePricing } from "../services/commercial/commercialService.js";
 import { getLiveEventCategories } from "../utils/liveEventCategoriesCache.js";
 import { VISIBLE_VENDOR_FILTER, hiddenVendorKeys, visibleVendorIdClause } from "../utils/customerVisibility.js";
+
+/**
+ * PDP fee preview. Same `{ configured, fee, reason }` shape the old
+ * convenienceFeeService returned, so the frontend keeps working; `fee` is
+ * the Eventory Service Fee incl. GST, `displayPrice` the merchandised total.
+ */
+async function serviceFeePreview(pkg, date) {
+  if (!date) return { configured: false, fee: null, reason: "Pick an event date to see the service fee" };
+  const preview = await previewPackagePricing(pkg, { eventDate: date });
+  const r = preview.modes[preview.defaultMode];
+  if (!r?.serviceFee) return { configured: false, fee: null, reason: "Service fee unavailable for this date" };
+  return {
+    configured: true,
+    fee: round2(r.serviceFee.taxableFee + r.serviceFee.gstOnFee),
+    taxableFee: r.serviceFee.taxableFee,
+    gstOnFee: r.serviceFee.gstOnFee,
+    displayPrice: r.customer.displayPrice,
+    bookingMode: preview.defaultMode,
+    bookable: r.status === "APPROVED",
+    reason: null,
+  };
+}
 
 /**
  * Public (no-auth), read-only discovery endpoints for the customer side:
@@ -508,12 +530,11 @@ export const getPackageDetail = async (req, res) => {
     // the cart line subtotal will be for a plain add-to-cart. The resolved
     // pkg.vendorId already carries teamSize/bookingsPerYear/experience
     // (PUBLIC_VENDOR_FIELDS whitelist).
-    pricingPreview.convenienceFee = computeLineConvenienceFee({
-      vendorType: pkg.vendorType,
-      vendor: pkg.vendorId,
-      linePrice: getEffectivePackagePrice(pkg),
-      eventDate: date || null,
-    });
+    // Commercial Engine since 2026-11 (same engine as the cart quote): the
+    // Eventory Service Fee for this package on the chosen date in its
+    // default booking mode. Customer-safe fields only — no commission,
+    // category, PCI or B2B economics leave the server.
+    pricingPreview.convenienceFee = await serviceFeePreview(pkg, date);
 
     return res.status(200).json({
       status: "SUCCESS",

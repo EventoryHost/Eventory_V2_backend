@@ -281,7 +281,8 @@ export const getAllPending = async (req, res) => {
 export const getBookingDetails = async (req, res) => {
   try {
     const filter = bookingLookup(req.params.bookingId);
-    const booking = filter && (await Booking.findOne(filter).lean());
+    // Admin sees the Commercial Engine snapshot (select:false elsewhere).
+    const booking = filter && (await Booking.findOne(filter).select("+commercialSnapshot").lean());
     if (!booking) return bookingNotFound(res);
 
     res.status(200).json({ success: true, data: await buildBookingDetail(booking) });

@@ -19,6 +19,7 @@ import {
   getPackageById,
   updatePackage,
   updatePackageStep,
+  updatePackageCommercial,
   getVendorPackages,
   getPackageGroup,
   updatePackageGroup,
@@ -574,6 +575,9 @@ router.get("/vendor/:vendorId", requireVendor(ownerFromParam("vendorId")), getVe
  *         description: Server error
  */
 router.put("/:packageId/step/:stepNumber", ownsPackage, updatePackageStep);
+
+// Vendor's commercial inputs (B2B / B2C / floor price, negotiation, modes).
+router.put("/:packageId/commercial", ownsPackage, updatePackageCommercial);
 
 /**
  * @swagger

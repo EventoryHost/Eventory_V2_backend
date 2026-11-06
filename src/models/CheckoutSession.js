@@ -172,6 +172,11 @@ const CheckoutSessionSchema = new mongoose.Schema(
     // against directly.
     lockedQuote: { type: mongoose.Schema.Types.Mixed, default: null },
     lockedAt: { type: Date, default: null },
+    // Commercial Engine snapshot per line, keyed by line _id, locked with
+    // the quote and copied onto each Booking's commercialSnapshot. Holds
+    // commission/category/PCI/B2B economics, so toJSON below strips it from
+    // every customer response.
+    commercialSnapshots: { type: mongoose.Schema.Types.Mixed, default: null },
 
     status: { type: String, enum: ["Active", "Expired", "Completed", "Cancelled"], default: "Active", index: true },
 
@@ -181,6 +186,12 @@ const CheckoutSessionSchema = new mongoose.Schema(
   {
     timestamps: true,
     collection: "customer_checkout_sessions",
+    toJSON: {
+      transform: (_doc, ret) => {
+        delete ret.commercialSnapshots;
+        return ret;
+      },
+    },
   }
 );
 

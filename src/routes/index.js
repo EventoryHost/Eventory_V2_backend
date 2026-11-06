@@ -33,6 +33,7 @@ import adminBookingRoutes from "./adminBookingRoutes.js";
 import adminTemplateRoutes from "./adminTemplateRoutes.js";
 import adminDashboardRoutes from "./adminDashboardRoutes.js";
 import adminHelpRequestRoutes from "./adminHelpRequestRoutes.js";
+import adminCommercialRoutes from "./adminCommercialRoutes.js";
 import { slackEvents, slackInteractions } from "../controllers/slackController.js";
 
 /**
@@ -121,6 +122,7 @@ router.use("/admin/bookings", adminBookingRoutes);
 router.use("/admin/templates", adminTemplateRoutes);
 router.use("/admin/dashboard", adminDashboardRoutes);
 router.use("/admin/help-requests", adminHelpRequestRoutes);
+router.use("/admin/commercial", adminCommercialRoutes);
 
 // Slack's Interactivity Request URL ("Mark resolved" on help ticket posts):
 // https://<backend host>/api/slack/interactions
