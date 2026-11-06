@@ -317,6 +317,7 @@ export const approvePackage = async (req, res) => {
       success: true,
       packageStatus: result.to,
       count: result.matched,
+      commercial: result.commercial,
       data,
     });
   } catch (error) {

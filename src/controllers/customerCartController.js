@@ -10,6 +10,7 @@ import { packageCoverImage } from "../utils/packageCoverImage.js";
 import { computeCartQuote } from "../services/cartPricingService.js";
 import { resolveVendorRefId } from "../utils/resolveVendor.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
+import { recordCommercialEvent } from "../services/commercial/commercialEvents.js";
 import { hiddenVendorKeys, visibleVendorIdClause } from "../utils/customerVisibility.js";
 
 /**
@@ -316,6 +317,14 @@ export const addCartItem = async (req, res) => {
       noteAttachments: noteAttachments || [],
       quantity,
     });
+    recordCommercialEvent("CART_ADD", {
+      customerId: cart.customerId,
+      guestId: cart.guestId,
+      packageId: pkg._id,
+      vendorId: resolvedVendorId,
+      eventDate: date || null,
+      price: item.packageSnapshot?.price ?? null,
+    });
 
     const payload = await buildCartPayload(cart);
     if (mintedGuestId) res.setHeader("X-Guest-Cart-Id", mintedGuestId);
@@ -411,6 +420,12 @@ export const removeCartItem = async (req, res) => {
     if (resolved.error) return res.status(resolved.error).json({ status: "FAILED", message: resolved.message });
 
     await CartItem.deleteOne({ _id: itemId });
+    recordCommercialEvent("CART_REMOVE", {
+      customerId: resolved.cart.customerId,
+      guestId: resolved.cart.guestId,
+      packageId: resolved.item?.packageId,
+      vendorId: resolved.item?.vendorId,
+    });
     const payload = await buildCartPayload(resolved.cart);
     return res.status(200).json({ status: "SUCCESS", message: "Removed from cart", ...payload });
   } catch (error) {

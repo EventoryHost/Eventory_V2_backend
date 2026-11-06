@@ -106,6 +106,23 @@ function isValidWebhookSignature(rawBody, timestamp, signature) {
  * before Continue" check server-side — never trusts that the frontend
  * actually enforced canContinue before calling this.
  */
+/**
+ * Commercial Engine gate (PRD §14.1): a line whose booking mode isn't
+ * APPROVED — Quote below CORE, weak PCI, fee ceiling breach, CPCI above
+ * limit, Zero-Pay ineligibility, missing event date — can't be paid for at a
+ * fixed price. Returns the 409 body, or null when every line is clear.
+ */
+function commercialBlockResponse(quote) {
+  const blocked = quote?.commercialBlockedLines || [];
+  if (!blocked.length) return null;
+  return {
+    status: "FAILED",
+    code: "COMMERCIAL_REVIEW_REQUIRED",
+    message: "One or more items can't be booked at a fixed price right now — remove them or request a quote.",
+    lines: blocked,
+  };
+}
+
 export const createTokenPayment = async (req, res) => {
   try {
     const { checkoutSessionId } = req.body;
@@ -130,6 +147,9 @@ export const createTokenPayment = async (req, res) => {
         validation: { contact, lines },
       });
     }
+
+    const blocked = commercialBlockResponse(session.lockedQuote);
+    if (blocked) return res.status(409).json(blocked);
 
     const tokenAmount = session.lockedQuote?.tokenAmountTotal;
     if (tokenAmount == null || tokenAmount <= 0) {
@@ -570,6 +590,8 @@ export const confirmFreeCheckout = async (req, res) => {
     }
 
     const quote = session.lockedQuote;
+    const blocked = commercialBlockResponse(quote);
+    if (blocked) return res.status(409).json(blocked);
     if (!quote || !quote.allTokensConfigured || quote.tokenAmountTotal !== 0) {
       return res.status(400).json({
         status: "FAILED",

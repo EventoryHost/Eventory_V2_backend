@@ -5,6 +5,7 @@ import {
   EmActionSchema,
   PackageReviewEventSchema,
 } from "./schemas/emActionSchema.js";
+import { PackageCommercialSchema } from "./schemas/commercialSchemas.js";
 
 /**
  * The package lifecycle.
@@ -390,6 +391,12 @@ const PackageSchema = new mongoose.Schema(
     assignedEmId: { type: String, default: null },
     assignedEmName: { type: String, default: null },
 
+    // Commercial Engine inputs + publication baseline (PRD §6, §13) — see
+    // models/schemas/commercialSchemas.js and services/commercial/.
+    // select:false — holds B2B, verified B2C, market benchmark and category,
+    // which customers must never see; every package read that is sent to a
+    // customer stays clean by default. Engine code selects "+commercial".
+    commercial: { type: PackageCommercialSchema, default: () => ({}), select: false },
     deletedAt: { type: Date, default: null },
   },
   packageOptions
