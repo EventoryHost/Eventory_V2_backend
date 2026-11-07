@@ -47,6 +47,10 @@ const authenticate = (req) => {
   }
 };
 
+/** The vendor id in a bare token (sockets have no Authorization header). */
+export const vendorIdFromToken = (token) =>
+  authenticate({ headers: { authorization: `Bearer ${token}` } }).vendorId ?? null;
+
 const refuse = (res, status, message) =>
   res.status(status).json({ success: false, status: "FAILED", message });
 
