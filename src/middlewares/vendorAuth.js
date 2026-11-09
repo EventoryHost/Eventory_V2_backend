@@ -55,9 +55,13 @@ const refuse = (res, status, message) =>
  *   route's target, null when the target does not exist (the route's own 404
  *   then applies), or undefined when the route has no single owner and only
  *   authentication is required.
+ * @param options.alwaysEnforce refuse regardless of VENDOR_AUTH_MODE — for
+ *   routes only the vendor app calls (it always sends the token), where
+ *   letting a stranger through would leak or redirect a vendor's data, e.g.
+ *   their notifications or the phones pushes go to.
  */
-export const requireVendor = (resolveOwner) => async (req, res, next) => {
-  const current = mode();
+export const requireVendor = (resolveOwner, { alwaysEnforce = false } = {}) => async (req, res, next) => {
+  const current = alwaysEnforce ? "enforce" : mode();
   if (current === "off") return next();
 
   try {
@@ -84,7 +88,7 @@ export const requireVendor = (resolveOwner) => async (req, res, next) => {
     // A lookup failing must not open the route in enforce mode, nor break it
     // in report mode.
     console.error(`[vendor-auth] owner lookup failed — ${req.method} ${req.originalUrl}:`, error.message);
-    return mode() === "enforce" ? refuse(res, 500, "Could not verify access") : next();
+    return current === "enforce" ? refuse(res, 500, "Could not verify access") : next();
   }
 };
 

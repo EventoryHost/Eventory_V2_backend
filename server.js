@@ -2,6 +2,7 @@ import http from "http";
 import app from "./src/app.js";
 import connectDB from "./src/config/db.js";
 import { initSocket } from "./src/config/socket.js";
+import { startNotificationScheduler } from "./src/services/notificationScheduler.js";
 import dotenv from "dotenv";
 import os from "os";
 
@@ -34,6 +35,8 @@ connectDB()
       );
       console.log(`📱 Local network: http://${localIp}:${PORT}`);
     });
+    // Time-based vendor reminders (response windows, setup, overdue payments).
+    startNotificationScheduler();
   })
   .catch((err) => {
     console.error("❌ Failed to connect to database:", err.message);

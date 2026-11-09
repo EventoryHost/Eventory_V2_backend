@@ -3,6 +3,7 @@ import Package from "../models/Package.js";
 import { packageCoverImage } from "../utils/packageCoverImage.js";
 import { resolveVendorRefId } from "../utils/resolveVendor.js";
 import { VENDOR_NOTIFICATION_TYPES } from "../constants/vendorNotificationTypes.js";
+import { pushToVendor } from "./pushService.js";
 
 /**
  * Writes rows into the vendor inbox (models/VendorNotification.js).
@@ -30,12 +31,15 @@ const firstName = (name) => {
 
 const IST = "Asia/Kolkata";
 
+// Names are stored as typed, stray spaces included ("Corporate decoration ").
+const trimmed = (value) => (typeof value === "string" ? value.trim() || null : (value ?? null));
+
 /** "24 Oct" in IST, or null. */
 export const dateLabel = (date) =>
   date ? new Date(date).toLocaleDateString("en-IN", { day: "numeric", month: "short", timeZone: IST }) : null;
 
-/** "9:30 AM" in IST, or null. */
-const timeLabel = (date) =>
+/** "9:30 AM" in IST. */
+export const timeLabel = (date) =>
   new Date(date).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", timeZone: IST });
 
 /**
@@ -65,8 +69,8 @@ export const contextFromDeal = (doc) => {
     bookingId: doc.bookingId ?? null,
     enquiryId: doc.enquiryId ?? null,
     customerName: doc.customer?.name ?? null,
-    eventName: doc.eventType ?? null,
-    packageName: doc.packageSnapshot?.name ?? null,
+    eventName: trimmed(doc.eventType),
+    packageName: trimmed(doc.packageSnapshot?.name),
     imageUrl: doc.packageSnapshot?.image ?? null,
     detail: doc.location ?? doc.venueName ?? null,
     eventDateLabel: dateLabel(doc.eventDate),
@@ -87,7 +91,7 @@ export const contextFromPackage = async (pkg) => {
   return {
     vendorId: await resolveVendorRefId(pkg.vendorId),
     packageGroupId: pkg.packageGroupId ? String(pkg.packageGroupId) : String(pkg._id),
-    packageName: pkg.step1_eventAndCrew?.packageName ?? null,
+    packageName: trimmed(pkg.step1_eventAndCrew?.packageName),
     imageUrl: packageCoverImage(pkg),
     serviceLabel: spaced(pkg.vendorType),
   };
@@ -114,6 +118,26 @@ export async function notifyPackageGroup(type, groupFilter, extra = {}) {
   }
 }
 
+/**
+ * Pushes a saved row to the vendor's phones. The lock screen gets the row's
+ * own title and body unless the type sets `push: { title, body }` — used to
+ * keep amounts, reasons and document details off the lock screen. Not
+ * awaited: the row is already saved, and a slow FCM call must not hold up
+ * the request that caused it.
+ */
+const sendPush = (def, ctx, row) => {
+  const copy = typeof def.push === "object" ? def.push : {};
+  pushToVendor({
+    notificationId: row.notificationId,
+    vendorId: row.vendorId,
+    type: row.type,
+    category: row.category,
+    target: row.target,
+    pushTitle: copy.title ? copy.title(ctx) : row.title,
+    pushBody: copy.body ? copy.body(ctx) : row.body,
+  });
+};
+
 const resolveFlag = (value, ctx) => (typeof value === "function" ? Boolean(value(ctx)) : Boolean(value));
 
 /**
@@ -128,14 +152,18 @@ export async function notifyVendor(type, rawCtx = {}) {
       console.warn(`[notify] unknown notification type "${type}"`);
       return null;
     }
-    const ctx = { ...rawCtx, customerName: firstName(rawCtx.customerName) };
+    const ctx = {
+      ...rawCtx,
+      customerName: firstName(rawCtx.customerName),
+      packageName: trimmed(rawCtx.packageName),
+    };
     if (!ctx.vendorId) {
       console.warn(`[notify] ${type}: no vendorId, skipped`);
       return null;
     }
 
     const target = def.target ? def.target(ctx) : { kind: "none", id: null };
-    return await VendorNotification.create({
+    const row = await VendorNotification.create({
       vendorId: String(ctx.vendorId),
       category: def.category,
       type,
@@ -152,6 +180,8 @@ export async function notifyVendor(type, rawCtx = {}) {
       target,
       dedupeKey: ctx.dedupeKey,
     });
+    if (def.push) sendPush(def, ctx, row);
+    return row;
   } catch (error) {
     if (error?.code === 11000 && rawCtx.dedupeKey) return null; // already sent
     console.error(`[notify] ${type} for vendor ${rawCtx.vendorId} failed:`, error.message);

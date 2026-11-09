@@ -9,6 +9,11 @@
  *
  * `target(ctx)` returns { kind, id }; kinds are the model's
  * NOTIFICATION_TARGET_KINDS and the app maps each to a screen.
+ *
+ * `push` marks the high-priority types that also go to the vendor's phone
+ * (services/pushService.js). `true` sends the row's own title and body;
+ * `{ title, body }` replaces them on the lock screen — used wherever the row
+ * shows an amount, a reason, a document or the customer's own words.
  */
 
 const inr = (amount) =>
@@ -25,12 +30,29 @@ const sentence = (...parts) => parts.filter(Boolean).join(" ");
 const booking = (ctx) => ({ kind: "booking", id: ctx.bookingId ?? null });
 const eventDay = (ctx) => ({ kind: "eventDay", id: ctx.bookingId ?? null });
 const enquiry = (ctx) => ({ kind: "enquiry", id: ctx.enquiryId ?? null });
+const calendarDay = (ctx) => ({ kind: "calendar", id: ctx.dateKey ?? null });
+const paymentsOf = (ctx) => ({ kind: "payments", id: ctx.bookingId ?? null });
 const pkgTarget = (ctx) =>
   ctx.packageGroupId ? { kind: "package", id: ctx.packageGroupId } : { kind: "packages", id: null };
+
+// "Royal Wedding Decor, 24 Oct" — the package and date, for lock-screen copy.
+const pkgOn = (ctx) => [pkg(ctx), ctx.eventDateLabel].filter(Boolean).join(", ");
+
+const newBookingPush = {
+  title: () => "New booking request",
+  body: (ctx) => `${pkgOn(ctx)}. Open to acknowledge.`,
+};
 
 export const VENDOR_NOTIFICATION_TYPES = {
   // ── Enquiry ──────────────────────────────────────────────────────────────
   "enquiry.new": {
+    push: {
+      title: (ctx) => (ctx.conflict ? "New enquiry, dates conflict" : "New enquiry received"),
+      body: (ctx) =>
+        ctx.conflict
+          ? `${pkgOn(ctx)}. You already have an event that day.`
+          : `${pkgOn(ctx)}. Review the customer's requests.`,
+    },
     category: "enquiry",
     needsAction: true,
     target: enquiry,
@@ -48,6 +70,10 @@ export const VENDOR_NOTIFICATION_TYPES = {
       ),
   },
   "enquiry.changesRequested": {
+    push: {
+      title: () => "Customer asked for changes",
+      body: (ctx) => `${pkg(ctx)}. Review them and update your proposal.`,
+    },
     category: "enquiry",
     needsAction: true,
     target: enquiry,
@@ -57,6 +83,7 @@ export const VENDOR_NOTIFICATION_TYPES = {
 
   // ── Booking ──────────────────────────────────────────────────────────────
   "booking.newRequest": {
+    push: newBookingPush,
     category: "booking",
     needsAction: true,
     target: booking,
@@ -66,6 +93,7 @@ export const VENDOR_NOTIFICATION_TYPES = {
       sentence(`${pkg(ctx)}. Free booking.`, ctx.respondByLabel ? `Confirm by ${ctx.respondByLabel}.` : null),
   },
   "booking.newTokenPaid": {
+    push: newBookingPush,
     category: "booking",
     needsAction: true,
     target: booking,
@@ -79,6 +107,7 @@ export const VENDOR_NOTIFICATION_TYPES = {
       ),
   },
   "booking.newWithRequests": {
+    push: newBookingPush,
     category: "booking",
     needsAction: true,
     target: booking,
@@ -88,6 +117,10 @@ export const VENDOR_NOTIFICATION_TYPES = {
       `${pkg(ctx)}. ${who(ctx)} wants changes to ${plural(ctx.requestCount || 1, "item")}. Review each one.`,
   },
   "booking.changesRequested": {
+    push: {
+      title: () => "Customer asked for changes",
+      body: (ctx) => `${pkg(ctx)}. Review the changes and send a revised proposal.`,
+    },
     category: "booking",
     needsAction: true,
     target: booking,
@@ -107,6 +140,48 @@ export const VENDOR_NOTIFICATION_TYPES = {
       ctx.reconfirmed
         ? `${pkg(ctx)}. The accepted changes are now part of the booking.`
         : `${pkg(ctx)}. Confirm the booking to lock the date.`,
+  },
+  "booking.customisationRequested": {
+    category: "booking",
+    needsAction: true,
+    target: booking,
+    showsPackageImage: true,
+    push: {
+      title: () => "New customisation request",
+      body: (ctx) => `${pkg(ctx)} is confirmed. Review the new request.`,
+    },
+    title: (ctx) => `${who(ctx)} sent a customisation request`,
+    body: (ctx) =>
+      `${pkg(ctx)} is confirmed. Review ${plural(ctx.requestCount || 1, "new request")} and respond.`,
+  },
+  "booking.responseClosing": {
+    category: "booking",
+    needsAction: true,
+    target: booking,
+    showsPackageImage: true,
+    push: {
+      title: () => "Response window closing",
+      body: (ctx) => `${pkgOn(ctx)}. Respond by ${ctx.respondByLabel || "soon"}.`,
+    },
+    title: () => "Response window closing",
+    body: (ctx) =>
+      sentence(
+        `${pkg(ctx)}.`,
+        ctx.respondByLabel ? `Respond by ${ctx.respondByLabel}.` : "Respond soon.",
+        "Acknowledge or decline the request."
+      ),
+  },
+  "booking.doubleBookingRisk": {
+    category: "booking",
+    needsAction: true,
+    target: calendarDay,
+    push: {
+      title: () => "Double-booking risk",
+      body: (ctx) => `You have more than one booking on ${ctx.eventDateLabel || "the same day"}. Check your calendar.`,
+    },
+    title: () => "Double-booking risk",
+    body: (ctx) =>
+      `${pkg(ctx)} overlaps another booking on ${ctx.eventDateLabel || "the same day"}. Check your calendar before confirming.`,
   },
   "booking.cancelledByCustomer": {
     category: "booking",
@@ -146,6 +221,44 @@ export const VENDOR_NOTIFICATION_TYPES = {
         ? `"${ctx.requestText}". Share an update with a photo or message.`
         : "Share an update with a photo or message.",
   },
+  "eventDay.setupDueSoon": {
+    category: "eventDay",
+    needsAction: true,
+    target: eventDay,
+    push: true,
+    title: () => "Setup due soon",
+    body: (ctx) =>
+      sentence(
+        ctx.startLabel ? `${pkg(ctx)} starts at ${ctx.startLabel}.` : `${pkg(ctx)} starts soon.`,
+        "Finish setting up and upload setup photos."
+      ),
+  },
+  "eventDay.setupOverdue": {
+    category: "eventDay",
+    needsAction: true,
+    target: eventDay,
+    push: true,
+    title: () => "Setup overdue",
+    body: (ctx) =>
+      sentence(
+        ctx.startLabel ? `${pkg(ctx)} started at ${ctx.startLabel}.` : `${pkg(ctx)} has started.`,
+        "Upload setup photos once you're set up."
+      ),
+  },
+  "eventDay.requestPending": {
+    category: "eventDay",
+    needsAction: true,
+    target: eventDay,
+    push: {
+      title: () => "Request still pending",
+      body: (ctx) => `A customer request on ${pkg(ctx)} is waiting for your update.`,
+    },
+    title: () => "Request still pending",
+    body: (ctx) =>
+      ctx.requestText
+        ? `${who(ctx)} is waiting on "${ctx.requestText}". Share an update.`
+        : `${who(ctx)} is waiting for an update. Share one with a photo or message.`,
+  },
   "eventDay.review": {
     category: "eventDay",
     target: booking,
@@ -155,6 +268,21 @@ export const VENDOR_NOTIFICATION_TYPES = {
   },
 
   // ── Payments ─────────────────────────────────────────────────────────────
+  "payments.overdue": {
+    category: "payments",
+    needsAction: true,
+    target: paymentsOf,
+    push: {
+      title: () => "Payment overdue, follow up",
+      body: (ctx) => `A payment for ${pkg(ctx)} is past its due date. Follow up with the customer.`,
+    },
+    title: () => "Payment overdue, follow up",
+    body: (ctx) =>
+      sentence(
+        `${ctx.milestoneTitle || "A payment"}${inr(ctx.amount) ? ` of ${inr(ctx.amount)}` : ""} was due ${ctx.dueLabel || "earlier"}.`,
+        `Follow up with ${ctx.customerName || "the customer"}.`
+      ),
+  },
   "payments.milestoneReceived": {
     category: "payments",
     target: booking,
@@ -212,6 +340,7 @@ export const VENDOR_NOTIFICATION_TYPES = {
     body: (ctx) => `${pkg(ctx)} is with our team. We'll tell you once it's reviewed.`,
   },
   "package.approved": {
+    push: true,
     category: "package",
     needsAction: true,
     target: pkgTarget,
@@ -220,6 +349,10 @@ export const VENDOR_NOTIFICATION_TYPES = {
     body: (ctx) => `${pkg(ctx)} is approved. Go live to start receiving bookings.`,
   },
   "package.changesNeeded": {
+    push: {
+      title: () => "Changes needed on your package",
+      body: (ctx) => `${pkg(ctx)} needs a few fixes. Open to see the notes.`,
+    },
     category: "package",
     needsAction: true,
     target: pkgTarget,
@@ -227,7 +360,26 @@ export const VENDOR_NOTIFICATION_TYPES = {
     title: () => "Changes needed on your package",
     body: (ctx) => ctx.reason || `${pkg(ctx)} needs a few fixes before it can be approved.`,
   },
+  "package.documentsRequired": {
+    category: "package",
+    needsAction: true,
+    target: pkgTarget,
+    showsPackageImage: (ctx) => Boolean(ctx.packageGroupId),
+    push: {
+      title: () => "Documents required for your package",
+      body: (ctx) => `Upload the requested documents so ${pkg(ctx)} can be reviewed.`,
+    },
+    title: () => "Documents required for your package",
+    body: (ctx) =>
+      ctx.documentLabels
+        ? `Upload ${ctx.documentLabels} so ${pkg(ctx)} can be reviewed.`
+        : `Upload the requested documents so ${pkg(ctx)} can be reviewed.`,
+  },
   "package.rejected": {
+    push: {
+      title: () => "Package rejected",
+      body: (ctx) => `${pkg(ctx)} was not approved. Open to see why.`,
+    },
     category: "package",
     target: () => ({ kind: "packages", id: null }),
     title: () => "Package rejected",
@@ -261,6 +413,10 @@ export const VENDOR_NOTIFICATION_TYPES = {
     body: () => "Your documents are approved. You can now send your packages for verification.",
   },
   "profile.changesRequested": {
+    push: {
+      title: () => "Document needs re-upload",
+      body: () => "Open Personal Documents to see what to fix.",
+    },
     category: "profile",
     needsAction: true,
     target: () => ({ kind: "documents", id: null }),
@@ -282,12 +438,31 @@ export const VENDOR_NOTIFICATION_TYPES = {
 
   // ── Support ──────────────────────────────────────────────────────────────
   "support.issueReported": {
+    push: {
+      title: () => "Customer reported an issue",
+      body: (ctx) => `On ${pkg(ctx)}. Your Event Manager has been notified.`,
+    },
     category: "support",
     needsAction: true,
     target: eventDay,
     title: (ctx) => `${who(ctx)} reported an issue`,
     body: (ctx) =>
       sentence(ctx.issueText ? `${ctx.issueText}.` : null, "Your Event Manager has been notified."),
+  },
+  "support.safetyReported": {
+    category: "support",
+    needsAction: true,
+    target: booking,
+    push: {
+      title: () => "Damage or safety concern reported",
+      body: (ctx) => `On ${pkg(ctx)}. Your Event Manager will contact you.`,
+    },
+    title: () => "Damage or safety concern reported",
+    body: (ctx) =>
+      sentence(
+        `${who(ctx)} flagged a safety concern on ${pkg(ctx)}.`,
+        "Your Event Manager will contact you. Reply to them as soon as you can."
+      ),
   },
 };
 
@@ -298,4 +473,5 @@ export const BOOKING_RESPONSE_TYPES = [
   "booking.newWithRequests",
   "booking.changesRequested",
   "booking.proposalAccepted",
+  "booking.responseClosing",
 ];

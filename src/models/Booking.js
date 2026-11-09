@@ -77,6 +77,19 @@ const istDayOf = (eventDate) => {
   return [ist.getUTCFullYear(), ist.getUTCMonth(), ist.getUTCDate()];
 };
 
+/**
+ * The event's IST calendar day as instants [start, end) plus its
+ * "YYYY-MM-DD" key, or null without a date — for "same day" queries that
+ * must not drift by the UTC offset.
+ */
+export const istDayRange = (eventDate) => {
+  if (!eventDate) return null;
+  const [y, m, d] = istDayOf(eventDate);
+  const start = new Date(Date.UTC(y, m, d) - IST_OFFSET_MS);
+  const pad = (n) => String(n).padStart(2, "0");
+  return { start, end: new Date(start.getTime() + DAY_MS), key: `${y}-${pad(m + 1)}-${pad(d)}` };
+};
+
 // "HH:MM" -> minutes past midnight, or null when absent/unparseable.
 const slotMinutes = (t) => {
   const match = /^(\d{1,2}):(\d{2})$/.exec(String(t ?? "").trim());

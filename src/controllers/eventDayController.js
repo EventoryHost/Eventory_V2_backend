@@ -107,6 +107,7 @@ export const completeSetup = async (req, res) => {
 
     booking.setupPhotos = validation.value.photos;
     booking.setupCompletedAt = new Date();
+    resolveVendorActions(booking.vendorId, booking.bookingId, ["eventDay.setupDueSoon", "eventDay.setupOverdue"]);
     return await saveAndRespond(res, booking, "Setup completed");
   } catch (error) {
     return failed(res, "Failed to complete setup", error);
@@ -263,7 +264,7 @@ export const updateDayRequest = async (req, res) => {
     // Rows are per request but not linked to one: clear them once nothing
     // is left pending.
     if (!booking.dayRequests.some((r) => r.status === "Pending")) {
-      resolveVendorActions(booking.vendorId, booking.bookingId, ["eventDay.dayRequest"]);
+      resolveVendorActions(booking.vendorId, booking.bookingId, ["eventDay.dayRequest", "eventDay.requestPending"]);
     }
     return await saveAndRespond(res, booking, "Update sent");
   } catch (error) {
