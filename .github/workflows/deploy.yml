@@ -68,6 +68,9 @@ jobs:
           SLACK_SIGNING_SECRET: ${{ secrets.SLACK_SIGNING_SECRET }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
           SLACK_HELP_CHANNEL_ID: ${{ secrets.SLACK_HELP_CHANNEL_ID }}
+          # Vendor push notifications (services/pushService.js): the whole
+          # service account JSON, base64 encoded. Own secret, like Slack's.
+          FIREBASE_SERVICE_ACCOUNT_BASE64: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_BASE64 }}
         run: |
           BRANCH="${{ steps.target.outputs.branch }}"
           APP_NAME="${{ steps.target.outputs.app_name }}"
@@ -92,6 +95,8 @@ jobs:
           echo "Slack signing secret present: $([ -n "$SLACK_SIGNING_SECRET" ] && echo yes || echo no)"
           echo "Slack bot token present: $([ -n "$SLACK_BOT_TOKEN" ] && echo yes || echo no)"
           echo "Slack channel id present: $([ -n "$SLACK_HELP_CHANNEL_ID" ] && echo yes || echo no)"
+          B64_FIREBASE=$(printf '%s' "$FIREBASE_SERVICE_ACCOUNT_BASE64" | base64 -w 0)
+          echo "Firebase service account present: $([ -n "$FIREBASE_SERVICE_ACCOUNT_BASE64" ] && echo yes || echo no)"
 
           ssh -i ~/.ssh/ec2_key "${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }}" \
             "APP_NAME='$APP_NAME' \
@@ -103,7 +108,8 @@ jobs:
              B64_SLACK_WEBHOOK='$B64_SLACK_WEBHOOK' \
              B64_SLACK_SIGNING='$B64_SLACK_SIGNING' \
              B64_SLACK_BOT='$B64_SLACK_BOT' \
-             B64_SLACK_CHANNEL='$B64_SLACK_CHANNEL'" bash -s << 'EOF'
+             B64_SLACK_CHANNEL='$B64_SLACK_CHANNEL' \
+             B64_FIREBASE='$B64_FIREBASE'" bash -s << 'EOF'
             set -e
 
             REPO_URL="https://github.com/EventoryHost/Eventory_V2_backend.git"
@@ -152,6 +158,13 @@ jobs:
             fi
             echo "Slack webhook in .env: $(grep -c '^SLACK_HELP_WEBHOOK_URL=.' .env || true)"
             echo "Slack bot token in .env: $(grep -c '^SLACK_BOT_TOKEN=.' .env || true)"
+
+            # Vendor push notifications, from its own GitHub Secret (when set).
+            if [ -n "$B64_FIREBASE" ]; then
+              sed -i "/^FIREBASE_SERVICE_ACCOUNT_BASE64=/d" .env
+              printf 'FIREBASE_SERVICE_ACCOUNT_BASE64=%s\n' "$(echo "$B64_FIREBASE" | base64 -d)" >> .env
+            fi
+            echo "Firebase service account in .env: $(grep -c '^FIREBASE_SERVICE_ACCOUNT_BASE64=.' .env || true)"
 
             pm2 delete "$APP_NAME" >/dev/null 2>&1 || true
             pm2 start server.js --name "$APP_NAME" --update-env

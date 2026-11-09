@@ -1,4 +1,5 @@
-import Booking from "../models/Booking.js";
+import Booking, { PRE_ACCEPTANCE_STATUSES, istDayRange } from "../models/Booking.js";
+import Package from "../models/Package.js";
 import { generateISTId } from "../utils/idGenerator.js";
 import { round2 } from "../utils/money.js";
 import { applyPricingBreakdown } from "../utils/pricingBreakdown.js";
@@ -302,6 +303,7 @@ export async function createBookingsFromCheckoutSession(session, payment, option
     }
 
     notifyNewBooking(booking);
+    notifyIfDoubleBooked(booking);
 
     createdBookingIds.push(booking._id);
 
@@ -355,4 +357,61 @@ function notifyNewBooking(booking) {
     // The webhook and the status poll can both finish one checkout.
     dedupeKey: `booking.new:${booking.bookingId}`,
   });
+}
+
+// "HH:MM" -> minutes past midnight, or null.
+const minutesOf = (t) => {
+  const match = /^(\d{1,2}):(\d{2})$/.exec(String(t ?? "").trim());
+  return match ? Number(match[1]) * 60 + Number(match[2]) : null;
+};
+
+// Two bookings clash unless both have a slot and the slots don't overlap.
+// A slot ending at or before its start runs past midnight.
+const slotsOverlap = (a, b) => {
+  const span = (x) => {
+    const start = minutesOf(x.startTime);
+    const end = minutesOf(x.endTime);
+    if (start == null || end == null) return null;
+    return [start, end <= start ? end + 24 * 60 : end];
+  };
+  const [sa, sb] = [span(a), span(b)];
+  if (!sa || !sb) return true;
+  return sa[0] < sb[1] && sb[0] < sa[1];
+};
+
+/**
+ * Warns the vendor when a new booking lands on a day and slot already taken
+ * by as many live bookings as the package can run at once
+ * (bookingCapacity.simultaneousBookings, 1 when unset — the same limit
+ * packageAvailability.js applies). Bookings don't hold the date until the
+ * vendor accepts (see Booking.js slotOccupyingFilter), so requests beyond
+ * that limit can still arrive; this is the vendor's cue to pick. Never
+ * throws.
+ */
+async function notifyIfDoubleBooked(booking) {
+  try {
+    const day = istDayRange(booking.eventDate);
+    if (!day) return;
+    const sameDay = await Booking.find({
+      vendorId: booking.vendorId,
+      _id: { $ne: booking._id },
+      eventDate: { $gte: day.start, $lt: day.end },
+      status: { $in: [...PRE_ACCEPTANCE_STATUSES, "Confirmed"] },
+    })
+      .select("startTime endTime")
+      .lean();
+    const overlapping = sameDay.filter((other) => slotsOverlap(booking, other)).length;
+    if (!overlapping) return;
+    const pkg = booking.packageId
+      ? await Package.findById(booking.packageId).select("bookingCapacity").lean()
+      : null;
+    if (overlapping < (pkg?.bookingCapacity?.simultaneousBookings ?? 1)) return;
+    notifyVendor("booking.doubleBookingRisk", {
+      ...contextFromDeal(booking),
+      dateKey: day.key,
+      dedupeKey: `booking.doubleBooking:${booking.bookingId}`,
+    });
+  } catch (error) {
+    console.error(`[notify] double-booking check for ${booking?.bookingId} failed:`, error.message);
+  }
 }

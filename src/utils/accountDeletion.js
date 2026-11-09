@@ -8,6 +8,8 @@ import Enquiry from "../models/Enquiry.js";
 import Package from "../models/Package.js";
 import CalendarBlock from "../models/CalendarBlock.js";
 import Transaction from "../models/Transaction.js";
+import VendorDevice from "../models/VendorDevice.js";
+import VendorNotification from "../models/VendorNotification.js";
 
 /**
  * Retention window between a vendor requesting deletion and the account being
@@ -61,6 +63,9 @@ export async function purgeVendor(vendorId) {
     Package.deleteMany({ vendorId }),
     Enquiry.deleteMany({ vendorId }),
     CalendarBlock.deleteMany({ vendorId }),
+    // Their inbox, and the phones pushes went to.
+    VendorNotification.deleteMany({ vendorId }),
+    VendorDevice.deleteMany({ vendorId }),
   ]);
 
   // Jointly-owned records: sever the link to the person, keep the record.

@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import VendorNotification, { NOTIFICATION_CATEGORIES } from "../models/VendorNotification.js";
+import VendorDevice, { DEVICE_PLATFORMS } from "../models/VendorDevice.js";
 
 const MAX_LIMIT = 50;
 const DEFAULT_LIMIT = 20;
@@ -169,5 +170,61 @@ export const markAllNotificationsRead = async (req, res) => {
     });
   } catch (error) {
     return failed(res, "Failed to mark notifications as read", error);
+  }
+};
+
+// FCM tokens are ~150 characters; anything far longer is not one.
+const MAX_TOKEN_LENGTH = 4096;
+
+const parseDevice = (body = {}) => {
+  const token = typeof body.token === "string" ? body.token.trim() : "";
+  if (!token || token.length > MAX_TOKEN_LENGTH) return { error: "token is required" };
+  if (body.platform !== undefined && !DEVICE_PLATFORMS.includes(body.platform)) {
+    return { error: `platform must be one of: ${DEVICE_PLATFORMS.join(", ")}` };
+  }
+  return { token, platform: body.platform, appVersion: body.appVersion ? String(body.appVersion).slice(0, 32) : null };
+};
+
+/**
+ * @desc   Register this phone for pushes (called after login, on launch and
+ *         when FCM rotates the token). A token another vendor registered
+ *         moves to this vendor — one phone gets one vendor's pushes.
+ * @route  POST /api/notifications/vendor/:vendorId/devices
+ */
+export const registerDevice = async (req, res) => {
+  try {
+    const { vendorId } = req.params;
+    const device = parseDevice(req.body);
+    if (device.error) return invalid(res, device.error);
+    if (!device.platform) return invalid(res, `platform must be one of: ${DEVICE_PLATFORMS.join(", ")}`);
+
+    await VendorDevice.findOneAndUpdate(
+      { token: device.token },
+      {
+        $set: { vendorId, platform: device.platform, appVersion: device.appVersion, lastSeenAt: new Date() },
+      },
+      { upsert: true }
+    );
+    return res.status(200).json({ status: "SUCCESS" });
+  } catch (error) {
+    return failed(res, "Failed to register device", error);
+  }
+};
+
+/**
+ * @desc   Stop pushes to this phone (called on logout, before the session is
+ *         cleared). Only removes the token if it is this vendor's.
+ * @route  DELETE /api/notifications/vendor/:vendorId/devices
+ */
+export const unregisterDevice = async (req, res) => {
+  try {
+    const { vendorId } = req.params;
+    const device = parseDevice(req.body);
+    if (device.error) return invalid(res, device.error);
+
+    const result = await VendorDevice.deleteOne({ token: device.token, vendorId });
+    return res.status(200).json({ status: "SUCCESS", removed: result.deletedCount });
+  } catch (error) {
+    return failed(res, "Failed to unregister device", error);
   }
 };

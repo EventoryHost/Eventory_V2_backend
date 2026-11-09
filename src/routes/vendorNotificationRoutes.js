@@ -4,12 +4,17 @@ import {
   getVendorNotifications,
   markNotificationRead,
   markAllNotificationsRead,
+  registerDevice,
+  unregisterDevice,
 } from "../controllers/vendorNotificationController.js";
 
 const router = express.Router();
 
-// The caller must be the vendor named in the URL.
-const ownsVendor = requireVendor(ownerFromParam("vendorId"));
+// The caller must be the vendor named in the URL. Enforced whatever
+// VENDOR_AUTH_MODE says: only the vendor app calls these, it always sends its
+// token, and a stranger here could read a vendor's inbox or point their
+// pushes at another phone.
+const ownsVendor = requireVendor(ownerFromParam("vendorId"), { alwaysEnforce: true });
 
 /**
  * @swagger
@@ -46,7 +51,7 @@ const ownsVendor = requireVendor(ownerFromParam("vendorId"));
  *           properties:
  *             kind:
  *               type: string
- *               enum: [booking, eventDay, enquiry, payments, package, packages, profile, documents, support, none]
+ *               enum: [booking, eventDay, enquiry, payments, package, packages, profile, documents, support, calendar, none]
  *             id: { type: string, nullable: true }
  *         createdAt: { type: string, format: date-time }
  *     VendorNotificationUnreadCounts:
@@ -151,5 +156,52 @@ router.patch("/vendor/:vendorId/read-all", ownsVendor, markAllNotificationsRead)
  *       404: { description: Not this vendor's notification }
  */
 router.patch("/vendor/:vendorId/:notificationId/read", ownsVendor, markNotificationRead);
+
+/**
+ * @swagger
+ * /api/notifications/vendor/{vendorId}/devices:
+ *   post:
+ *     summary: Register this phone for push notifications
+ *     description: |
+ *       Called after login, on every launch and whenever FCM rotates the
+ *       token. A token registered by another vendor moves to this one, so a
+ *       shared phone only gets the signed-in vendor's pushes.
+ *     tags: [Vendor Notifications]
+ *     parameters:
+ *       - { in: path, name: vendorId, required: true, schema: { type: string } }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [token, platform]
+ *             properties:
+ *               token: { type: string, description: FCM registration token }
+ *               platform: { type: string, enum: [ios, android] }
+ *               appVersion: { type: string, example: 2.0.0+59 }
+ *     responses:
+ *       200: { description: Registered }
+ *       400: { description: Missing token or platform }
+ *   delete:
+ *     summary: Stop push notifications to this phone
+ *     description: Called on logout, before the session is cleared.
+ *     tags: [Vendor Notifications]
+ *     parameters:
+ *       - { in: path, name: vendorId, required: true, schema: { type: string } }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [token]
+ *             properties:
+ *               token: { type: string }
+ *     responses:
+ *       200: { description: Removed (removed is 0 if it was not registered to this vendor) }
+ */
+router.post("/vendor/:vendorId/devices", ownsVendor, registerDevice);
+router.delete("/vendor/:vendorId/devices", ownsVendor, unregisterDevice);
 
 export default router;
