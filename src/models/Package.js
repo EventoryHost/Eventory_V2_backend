@@ -5,16 +5,21 @@ import {
   EmActionSchema,
   PackageReviewEventSchema,
 } from "./schemas/emActionSchema.js";
+import { PackageCommercialSchema } from "./schemas/commercialSchemas.js";
 
 /**
  * The package lifecycle.
  *
- *   Draft ──submit──> Under Review ──┬── approve ──────> Approved ──go-live──> Live
+ *   Draft ──submit──> Under Review ──┬── approve ──────> Approved ──go-live──> Live ⇄ Paused
  *                                    ├── raise-action ─> Action Required ──resubmit──> Under Review
  *                                    └── reject ───────> Deleted
  *
  * A package stays editable while it is Under Review, and resubmitting it there
  * simply puts the revision back in front of the EM.
+ *
+ * Pause and resume move a published package between Live and Paused: a paused
+ * package leaves the marketplace but keeps its review, and resuming needs no
+ * new approval. Paused is frozen for editing, like Live.
  *
  * "Approved" is deliberately distinct from "Live": the EM clears a package for
  * sale, the vendor decides when it actually appears on the marketplace.
@@ -26,6 +31,7 @@ export const PACKAGE_STATUSES = [
   "Approved",
   "Live",
   "Deleted",
+  "Paused",
 ];
 
 /** Statuses in which the vendor may still edit the package. */
@@ -384,14 +390,45 @@ const PackageSchema = new mongoose.Schema(
 
     assignedEmId: { type: String, default: null },
     assignedEmName: { type: String, default: null },
+
+    // Commercial Engine inputs + publication baseline (PRD §6, §13) — see
+    // models/schemas/commercialSchemas.js and services/commercial/.
+    // select:false — holds B2B, verified B2C, market benchmark and category,
+    // which customers must never see; every package read that is sent to a
+    // customer stays clean by default. Engine code selects "+commercial".
+    commercial: { type: PackageCommercialSchema, default: () => ({}), select: false },
+    deletedAt: { type: Date, default: null },
   },
   packageOptions
 );
+
+function stampDeletedAtOnUpdate() {
+  const update = this.getUpdate();
+  if (!update || Array.isArray(update)) return;
+  const status = update.$set?.packageStatus ?? update.packageStatus;
+  if (status === undefined) return;
+  update.$set = {
+    ...update.$set,
+    deletedAt: status === "Deleted" ? new Date() : null,
+  };
+}
+
+PackageSchema.pre(
+  ["findOneAndUpdate", "updateOne", "updateMany"],
+  stampDeletedAtOnUpdate
+);
+
+PackageSchema.pre("save", function () {
+  if (this.isModified("packageStatus")) {
+    this.deletedAt = this.packageStatus === "Deleted" ? new Date() : null;
+  }
+});
 
 // Loading every variant of one logical package (the common read).
 PackageSchema.index({ packageGroupId: 1, variantType: 1 });
 // Listing a vendor's packages, optionally filtered by status.
 PackageSchema.index({ vendorId: 1, packageStatus: 1 });
+PackageSchema.index({ packageStatus: 1, deletedAt: 1 });
 
 const Package = mongoose.model("Package", PackageSchema);
 

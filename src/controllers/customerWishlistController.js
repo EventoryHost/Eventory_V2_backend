@@ -9,6 +9,7 @@ import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 import { bumpVendorWishlistCount, bumpVendorWishlistCounts, vendorRefForWishlistItem } from "../utils/wishlistCount.js";
 import { VISIBLE_VENDOR_FILTER, hiddenVendorKeys, visibleVendorIdClause } from "../utils/customerVisibility.js";
+import { recordCommercialEvent } from "../services/commercial/commercialEvents.js";
 
 /**
  * Whether a saved item's package or vendor is still visible to customers
@@ -75,6 +76,12 @@ export const addWishlistItem = async (req, res) => {
       vendorId: itemType === "Vendor" ? vendorId : null,
       note: note || "",
       priceSnapshot,
+    });
+    recordCommercialEvent("WISHLIST_ADD", {
+      customerId: req.customer._id,
+      packageId: item.packageId,
+      vendorId: item.vendorId,
+      price: priceSnapshot ?? null,
     });
 
     // +1 only on a create that actually happened — a re-save of the same
@@ -183,6 +190,11 @@ export const removeWishlistItem = async (req, res) => {
     if (!item) {
       return res.status(404).json({ status: "FAILED", message: "Wishlist item not found" });
     }
+    recordCommercialEvent("WISHLIST_REMOVE", {
+      customerId: req.customer._id,
+      packageId: item.packageId,
+      vendorId: item.vendorId,
+    });
 
     // findOneAndDelete hands back the deleted doc, so the vendor is still
     // resolvable here — it would not be after the row is gone.

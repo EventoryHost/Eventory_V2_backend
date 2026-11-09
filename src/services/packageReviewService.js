@@ -4,6 +4,7 @@ import { buildGroupFilter } from "../utils/packageGroup.js";
 import { ReviewTransitionError } from "../utils/reviewTransitionError.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { profileGaps, READINESS_FIELDS } from "./vendorReadinessService.js";
+import { reviewGroupCommercials, assertGroupCanGoLive } from "./commercial/commercialService.js";
 
 /**
  * The package approval state machine.
@@ -36,6 +37,8 @@ const TRANSITIONS = {
     to: "Deleted",
   },
   WentLive: { from: ["Approved"], to: "Live" },
+  Paused: { from: ["Live"], to: "Paused" },
+  Resumed: { from: ["Paused"], to: "Live" },
 };
 
 // Shared with the vendor review service; re-exported so existing imports keep working.
@@ -143,9 +146,16 @@ const assertVendorReady = async (vendorIdRaw) => {
   }
 };
 
-/** @desc EM clears the package for sale. The vendor still has to publish it. */
-export const approveGroup = async (groupFilter, { by } = {}) =>
-  transition(groupFilter, "Approved", { by, set: { emAction: null } });
+/**
+ * @desc EM clears the package for sale. The vendor still has to publish it.
+ * Approval also runs the Commercial Engine publication review (PRD §13.3)
+ * and stores its outcome per variant; go-live enforces it.
+ */
+export const approveGroup = async (groupFilter, { by } = {}) => {
+  const result = await transition(groupFilter, "Approved", { by, set: { emAction: null } });
+  result.commercial = await reviewGroupCommercials(groupFilter, { by });
+  return result;
+};
 
 /**
  * @desc The review as it currently stands. Every variant carries the same
@@ -275,9 +285,22 @@ export const rejectGroup = async (groupFilter, { reason, by } = {}) =>
     },
   });
 
-/** @desc Vendor publishes an approved package to the marketplace. */
-export const goLiveGroup = async (groupFilter, { by } = {}) =>
-  transition(groupFilter, "WentLive", { by });
+/**
+ * @desc Vendor publishes an approved package to the marketplace. Refused
+ * while its commercial review says PRICE_REVIEW_REQUIRED.
+ */
+export const goLiveGroup = async (groupFilter, { by } = {}) => {
+  await assertGroupCanGoLive(groupFilter, { by });
+  return transition(groupFilter, "WentLive", { by });
+};
+
+/** @desc Vendor takes a live package off the marketplace without losing its approval. */
+export const pauseGroup = async (groupFilter, { by } = {}) =>
+  transition(groupFilter, "Paused", { by });
+
+/** @desc Vendor puts a paused package back on the marketplace. */
+export const resumeGroup = async (groupFilter, { by } = {}) =>
+  transition(groupFilter, "Resumed", { by });
 
 /** @desc Convenience wrapper for callers holding a packageGroupId string. */
 export const resolveGroup = (packageGroupId) => buildGroupFilter(packageGroupId);
@@ -291,6 +314,8 @@ export default {
   raiseActionGroup,
   rejectGroup,
   goLiveGroup,
+  pauseGroup,
+  resumeGroup,
   resolveGroup,
   ReviewTransitionError,
 };

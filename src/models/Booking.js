@@ -1,6 +1,7 @@
 import mongoose from "mongoose";
 import { generateISTId } from "../utils/idGenerator.js";
 import { normalizePhone } from "../utils/phone.js";
+import { registerBookingCounterHooks } from "../services/commercial/bookingCounters.js";
 import {
   CHANGE_REQUEST_STATUSES,
   ChangeRequestSchema,
@@ -641,6 +642,15 @@ const BookingSchema = new mongoose.Schema(
     convenienceFee: { type: Number, default: null },
     convenienceFeeBreakdown: { type: mongoose.Schema.Types.Mixed, default: null },
 
+    // Commercial Engine transaction snapshot (PRD §16): every amount,
+    // decision component and rule version used to price this booking.
+    // Frozen at creation — later rule/category/package changes never
+    // touch it. `convenienceFee` above stays the customer-facing total of
+    // the Eventory Service Fee incl. its GST, for existing readers.
+    // select:false — commission, category and PCI are never sent to the
+    // customer or vendor apps; payout/admin code selects "+commercialSnapshot".
+    commercialSnapshot: { type: mongoose.Schema.Types.Mixed, default: null, select: false },
+
     // ─── Event day (see the "Event day" section above) ───
     // Each step is stamped when the vendor completes it; null means not yet.
     // Vendor arrived at the venue. Only possible on the event day
@@ -734,5 +744,8 @@ BookingSchema.index(
   { "groundStaff.code": 1 },
   { unique: true, partialFilterExpression: { "groundStaff.code": { $type: "string" } } }
 );
+
+// Commercial Engine vendor behaviour counters (PRD §5.2) from status changes.
+registerBookingCounterHooks(BookingSchema);
 
 export default mongoose.model("Booking", BookingSchema);

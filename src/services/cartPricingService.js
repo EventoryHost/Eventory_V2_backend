@@ -3,10 +3,17 @@ import CartItem from "../models/CartItem.js";
 import Package from "../models/Package.js";
 import Vendor from "../models/Vendor.js";
 import { round2 } from "../utils/money.js";
-import { getEffectivePackagePrice } from "../utils/packagePrice.js";
-import { computeLineConvenienceFee } from "./convenienceFeeService.js";
+import Booking from "../models/Booking.js";
 import { computeMilestoneDueDate } from "../utils/milestoneDueDate.js";
 import { hiddenVendorKeys } from "../utils/customerVisibility.js";
+import { getActiveRules } from "./commercial/ruleSetService.js";
+import { priceLine, toSnapshot } from "./commercial/pricingEngine.js";
+import {
+  buildBaseline,
+  buildEngineVendor,
+  defaultBookingMode,
+  packageVendorB2B,
+} from "./commercial/commercialContextService.js";
 
 /**
  * Cart pricing/due-now calculation — Phase 3 Step 14. This is the
@@ -31,20 +38,22 @@ import { hiddenVendorKeys } from "../utils/customerVisibility.js";
  * see info.txt.
  */
 
-// Convenience fee — REPLACED 2026-09-10. The old version was a single flat
-// env-var percentage applied to the whole order subtotal, defaulting to 0
-// ("unconfigured") because the % was an open product decision. The user has
-// now supplied the real model (Eventory_S3_Data_*.pdf, 3 lookup tables) —
-// it's a PER-VENDOR-LINE fee computed from the vendor's score -> category,
-// the line's price slab, and days-to-event. See convenienceFeeService.js
-// for the tables and resolvers. Formula (matched to the Business v1 admin
-// tool's CustomOrderForm.tsx exactly): fee = (linePrice * percentage/100) *
-// 1.18 — baseFee and weight are looked up but not applied; the 18% is v1's
-// own "Tax on Convenience" baked into one number.
+// Convenience fee = the Eventory Service Fee from the Commercial Engine
+// (PRD v1.0, src/services/commercial/), REPLACING the 2026-09-10 lookup-table
+// fee (convenienceFeeService.js, now unused). Per vendor line the engine
+// prices: vendor commission, MRER floor, the service fee from its five
+// components, mode floor/ceiling, weak-PCI protection, then picks an
+// attractive customer price inside a 1%-of-B2B corridor and back-solves the
+// taxable fee + 18% GST from it. `convenienceFee` on a line is that fee
+// INCLUDING its GST (same meaning existing readers already rely on);
+// serviceFeeTaxable / serviceFeeGst carry the split for invoicing.
+//
+// The order total is no longer rounded up to the next ₹100 — rounding now
+// happens per line inside the engine's corridor (PRD §11).
 //
 // Master kill-switch: set CONVENIENCE_FEE_DISABLED=true to suppress the fee
-// everywhere (computed as 0, flagged) without a code change — a dark-launch
-// / rollback hatch, since this is real money on a freshly-built model.
+// everywhere (computed as 0, flagged) without a code change. Commission is
+// still computed and snapshotted.
 function convenienceFeeDisabled() {
   return String(process.env.CONVENIENCE_FEE_DISABLED || "").toLowerCase() === "true";
 }
@@ -141,11 +150,45 @@ function computeLineMilestones(lineTotal, pkg, eventDate) {
  * documents) can reuse the exact same math as the Cart quote endpoint,
  * rather than a third, potentially-drifting reimplementation.
  */
-export async function computeQuoteForLines(lines, discount = 0) {
+/**
+ * Zero-Pay eligibility context for the engine (PRD §12.1): logged-in, how
+ * many zero-pay bookings are still open, and whether the customer has any
+ * completed history (new customers get max_active_zero_pay_bookings).
+ * Outstanding Eventory balance isn't tracked yet — always 0.
+ */
+// Reason codes a customer may see. Anything describing Eventory's own
+// economics (PCI, CPCI, fee ceiling, MRER, category) collapses to one
+// neutral code — the customer never sees vendor B2B economics (PRD §17.4).
+const CUSTOMER_REASONS = new Set([
+  "MISSING_EVENT_DATE",
+  "MODE_NOT_SUPPORTED",
+  "ZERO_PAY_LOGIN_REQUIRED",
+  "ZERO_PAY_OUTSTANDING_BALANCE",
+  "ZERO_PAY_ACTIVE_LIMIT",
+]);
+
+function customerSafeReasons(codes) {
+  const safe = codes.filter((c) => CUSTOMER_REASONS.has(c));
+  return codes.length > safe.length ? [...safe, "PRICE_UNDER_REVIEW"] : safe;
+}
+
+const OPEN_BOOKING_STATUSES =["NewBooking", "Viewed", "InDiscussion", "Confirmed"];
+
+async function zeroPayCustomerContext(customerId) {
+  if (!customerId) return { loggedIn: false };
+  const id = String(customerId);
+  const [activeZeroPayBookings, completedBookings] = await Promise.all([
+    Booking.countDocuments({ customerId: id, paymentType: "FreeBooking", status: { $in: OPEN_BOOKING_STATUSES } }),
+    Booking.countDocuments({ customerId: id, status: "Completed" }),
+  ]);
+  return { loggedIn: true, outstandingBalance: 0, activeZeroPayBookings, completedBookings };
+}
+
+export async function computeQuoteForLines(lines, discount = 0, { customerId = null } = {}) {
   if (!lines || lines.length === 0) return null;
 
   const packageIds = [...new Set(lines.map((l) => String(l.packageId)))];
-  const packages = await Package.find({ _id: { $in: packageIds } }).lean();
+  const packages = await Package.find({ _id: { $in: packageIds } }).select("+commercial").lean();
   const packageById = new Map(packages.map((p) => [String(p._id), p]));
 
   // Vendors — needed for the convenience-fee score (bookingsPerYear /
@@ -165,7 +208,7 @@ export async function computeQuoteForLines(lines, discount = 0) {
   // stays purely internal to this function. See computeGst's own comment.
   const vendors = vendorIds.length
     ? await Vendor.find({ $or: [{ _id: { $in: validObjectIds } }, { id: { $in: vendorIds } }] })
-        .select("bookingsPerYear experience teamSize gstNumber")
+        .select("id bookingsPerYear experience teamSize gstNumber commercial")
         .lean()
     : [];
   const vendorById = new Map(vendors.flatMap((v) => [[String(v._id), v], [v.id, v]]));
@@ -173,6 +216,8 @@ export async function computeQuoteForLines(lines, discount = 0) {
   const feeDisabled = convenienceFeeDisabled();
   const now = new Date();
   const hiddenVendors = new Set(await hiddenVendorKeys());
+  const rules = await getActiveRules();
+  const customer = await zeroPayCustomerContext(customerId);
 
   const lineQuotes = lines.map((item) => {
     const pkg = packageById.get(String(item.packageId));
@@ -195,14 +240,17 @@ export async function computeQuoteForLines(lines, discount = 0) {
     // for one another. Was silently dropping teamAndEquipment.price
     // whenever packagePricing.price was already set (most packages outside
     // Decorator/Caterer), undercharging every quote with one configured.
-    const currentPrice = getEffectivePackagePrice(pkg);
+    // Package.commercial.vendorB2BPrice when the vendor has set one (PRD
+    // §6.2), else the same effective price as before.
+    const currentPrice = packageVendorB2B(pkg);
     const quantity = item.quantity || 1;
     const addonsTotal = (item.selectedAddOns || []).reduce((sum, a) => sum + a.price * a.quantity, 0);
     const chargeableItemsTotal = (item.selectedItems || []).filter((s) => s.isChargeable).reduce((sum, s) => sum + (s.price || 0), 0);
     const packagePriceTotal = round2(currentPrice * quantity);
     const lineSubtotal = round2(packagePriceTotal + addonsTotal + chargeableItemsTotal);
 
-    const vendorHasGst = Boolean(vendorById.get(String(pkg.vendorId))?.gstNumber);
+    const vendor = vendorById.get(String(pkg.vendorId)) || vendorById.get(String(item.vendorId));
+    const vendorHasGst = Boolean(vendor?.gstNumber);
     const { gstInclusive, gstRatePercent, gstAmount } = computeGst(
       lineSubtotal,
       pkg.step3_policiesAndCharges,
@@ -225,20 +273,31 @@ export async function computeQuoteForLines(lines, discount = 0) {
     // what's actually charged.
     const milestones = computeLineMilestones(lineTotalInclGst, pkg, item.eventDetails?.date);
 
-    // Convenience fee — per vendor line. linePrice = the pre-GST subtotal
-    // (assumption #1 in convenienceFeeService.js). `configured:false` when
-    // the vendor type is unknown, the line has no event date yet, or the
-    // master kill-switch is on — in every such case fee is null and adds 0
-    // to the total, same honest pattern the old flat-% version used.
-    const convenience = feeDisabled
-      ? { configured: false, fee: null, reason: "Convenience fee is disabled (CONVENIENCE_FEE_DISABLED)", breakdown: null }
-      : computeLineConvenienceFee({
-          vendorType: pkg.vendorType,
-          vendor: vendorById.get(String(item.vendorId)),
-          linePrice: lineSubtotal,
+    // Commercial Engine — Vendor B2B for the line is its pre-GST subtotal
+    // (package price × quantity + add-ons + chargeable items). Vendor GST is
+    // the amount already priced above, so gstInclusive packages add none.
+    const bookingMode = defaultBookingMode(pkg);
+    const { baseline } = buildBaseline({ pkg, vendor, rules, vendorB2B: lineSubtotal });
+    const priced = priceLine(
+      {
+        vendor: buildEngineVendor(vendor, { vendorGst: gstAmount || 0 }),
+        baseline,
+        runtime: {
+          bookingMode,
+          negotiationMode: pkg.commercial?.negotiationMode ?? "NONE",
           eventDate: item.eventDetails?.date,
-          now,
-        });
+          bookingDate: now,
+          customer,
+        },
+      },
+      rules
+    );
+    const engineFee = Boolean(priced.serviceFee);
+    const convenience = feeDisabled
+      ? { configured: false, fee: null, reason: "Convenience fee is disabled (CONVENIENCE_FEE_DISABLED)" }
+      : engineFee
+        ? { configured: true, fee: round2(priced.serviceFee.taxableFee + priced.serviceFee.gstOnFee), reason: null }
+        : { configured: false, fee: null, reason: customerSafeReasons(priced.reasonCodes).join(", ") };
 
     return {
       lineId: item.lineId,
@@ -261,7 +320,42 @@ export async function computeQuoteForLines(lines, discount = 0) {
       convenienceFee: convenience.fee,
       convenienceFeeConfigured: convenience.configured,
       convenienceFeeReason: convenience.reason,
-      convenienceFeeBreakdown: convenience.breakdown,
+      serviceFeeTaxable: convenience.configured ? priced.serviceFee.taxableFee : null,
+      serviceFeeGst: convenience.configured ? priced.serviceFee.gstOnFee : null,
+      // Customer-safe summary only: no category, PCI, commission or B2B.
+      convenienceFeeBreakdown: convenience.configured
+        ? { engine: "COMMERCIAL_V1", ratePct: priced.serviceFee.finalRate, gstPct: rules.tax.gstOnServiceFeePct }
+        : null,
+      bookingMode,
+      commercialStatus: priced.status,
+      commercialReasonCodes: customerSafeReasons(priced.reasonCodes),
+      // Internal — frozen onto the Booking (commercialSnapshot), never
+      // serialized to the customer (see stripCommercialInternals).
+      _commercial: engineFee
+        ? {
+            ...toSnapshot(priced),
+            bookingMode,
+            negotiationMode: priced.inputs.negotiationMode,
+            daysToEventAtBooking: priced.inputs.daysToEvent,
+            commercialCategory: priced.inputs.category,
+            packageBand: priced.inputs.band,
+            pciBand: priced.inputs.pciBand,
+            vendorServiceValue: priced.settlement.vendorServiceValue,
+            vendorGst: priced.settlement.vendorGst,
+            vendorCommissionRate: priced.commission.rate,
+            vendorCommissionShadow: priced.commission.shadow,
+            vendorCommissionInTrial: priced.commission.inTrial,
+            gstOnCommission: priced.settlement.gstOnCommission,
+            tcs: priced.settlement.tcs,
+            vendorSettlement: priced.settlement.settlement,
+            serviceFeeGst: priced.serviceFee.gstOnFee,
+            customerPrice: priced.customer.displayPrice,
+            cpci: priced.cpci.cpci,
+            cpciBand: priced.cpci.band,
+            serviceFeeCharged: convenience.configured,
+            pricedAt: now,
+          }
+        : null,
     };
   });
 
@@ -277,21 +371,22 @@ export async function computeQuoteForLines(lines, discount = 0) {
   // EVERY available line produced a real fee, so the frontend can show
   // "₹X (+ more once you add event dates)" rather than a falsely-final
   // number.
-  const rawConvenienceFee = round2(availableLines.reduce((sum, l) => sum + (l.convenienceFee || 0), 0));
+  const convenienceFee = round2(availableLines.reduce((sum, l) => sum + (l.convenienceFee || 0), 0));
   const convenienceFeeComplete =
     availableLines.length > 0 && availableLines.every((l) => l.convenienceFeeConfigured);
-  const convenienceFeeConfigured = rawConvenienceFee > 0 || convenienceFeeComplete;
+  const convenienceFeeConfigured = convenienceFee > 0 || convenienceFeeComplete;
 
-  // Round the customer's final payable total up to the next ₹100 (e.g. 999
-  // -> 1000, 2370 -> 2400) — PM spec, mirrored from the business admin's
-  // custom-order round-off (Math.ceil(x/100)*100). The gap this creates is
-  // never a separate "round off" line the customer would notice: it's folded
-  // straight into convenienceFee, so subtotal + gstTotal + convenienceFee
-  // still sums exactly to grandTotal — nothing to visibly not add up.
-  const rawGrandTotal = Math.max(0, subtotal + gstTotal + rawConvenienceFee - discount);
-  const grandTotal = rawGrandTotal > 0 ? Math.ceil(rawGrandTotal / 100) * 100 : 0;
-  const roundOffGap = round2(grandTotal - rawGrandTotal);
-  const convenienceFee = round2(rawConvenienceFee + roundOffGap);
+  // No order-level round-up any more: each line's convenienceFee already
+  // lands its line on an attractive price point (engine merchandising), so
+  // the total is simply the sum. Kept to the rupee for the payment gateway.
+  const grandTotal = round2(Math.max(0, subtotal + gstTotal + convenienceFee - discount));
+
+  // A line the engine couldn't approve for its booking mode (Quote below
+  // CORE, weak PCI, fee ceiling breach, CPCI too high, Zero-Pay
+  // ineligibility) can't be paid for at a fixed price — checkout refuses it.
+  const commercialBlockedLines = availableLines
+    .filter((l) => l.commercialStatus !== "APPROVED")
+    .map((l) => ({ lineId: l.lineId, packageId: l.packageId, status: l.commercialStatus, reasonCodes: l.commercialReasonCodes }));
 
   // Reconcile the payment schedule against the real payable total. Each
   // line's milestones (computeLineMilestones above) only sum to that one
@@ -305,7 +400,8 @@ export async function computeQuoteForLines(lines, discount = 0) {
   // than leaving it unreconciled). Fix: inject the gap into the LAST
   // milestone of the LAST available line, same "last slot absorbs the
   // drift" pattern bookingController.js already uses for whole-rupee
-  // milestone rounding.
+  // milestone rounding. (Since the Commercial Engine there's no order-level
+  // round-off; the gap is the service fee less any discount.)
   const allMilestoneAmounts = availableLines.flatMap((l) =>
     l.milestones.map((m) => m.amount).filter((a) => a != null)
   );
@@ -353,7 +449,18 @@ export async function computeQuoteForLines(lines, discount = 0) {
 
   const remainingTotal = allTokensConfigured ? round2(grandTotal - tokenAmountTotal) : null;
 
+  // Internal engine snapshots are lifted off the customer-facing lines.
+  // Callers persist them server-side (CheckoutSession.commercialSnapshots)
+  // and must never send them to the customer — they hold commission,
+  // category, PCI and B2B economics (PRD §17.4).
+  const commercialSnapshots = {};
+  for (const l of lineQuotes) {
+    if (l._commercial) commercialSnapshots[String(l.lineId)] = l._commercial;
+    delete l._commercial;
+  }
+
   return {
+    commercialSnapshots,
     lines: lineQuotes,
     subtotal,
     gstTotal,
@@ -365,6 +472,7 @@ export async function computeQuoteForLines(lines, discount = 0) {
     tokenAmountTotal: allTokensConfigured ? tokenAmountTotal : null,
     remainingTotal,
     allTokensConfigured,
+    commercialBlockedLines,
     note: allTokensConfigured
       ? null
       : "One or more selected vendors have no token/advance configured on their package (bookingSettings.paymentType/token) — tokenAmountTotal and remainingTotal are withheld rather than guessed. Never defaults to 25% or any other assumed percentage.",
@@ -392,7 +500,9 @@ export async function computeCartQuote(cart) {
     packageSnapshot: item.packageSnapshot,
   }));
 
-  return computeQuoteForLines(lines, cart.coupon?.discountAmount || 0);
+  const quote = await computeQuoteForLines(lines, cart.coupon?.discountAmount || 0, { customerId: cart.customerId });
+  if (quote) delete quote.commercialSnapshots;
+  return quote;
 }
 
 export default computeCartQuote;

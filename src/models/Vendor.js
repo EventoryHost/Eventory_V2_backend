@@ -12,6 +12,7 @@ import {
 import { computeCompletion } from "../utils/profileCompletion.js";
 import { isServiceAreaItem } from "../utils/serviceAreas.js";
 import { deriveStatus } from "../utils/vendorVerificationStatus.js";
+import { VendorCommercialSchema } from "./schemas/commercialSchemas.js";
 
 const VendorSchema = new mongoose.Schema({
   id: {
@@ -228,6 +229,12 @@ const VendorSchema = new mongoose.Schema({
     type: String,
     default: null,
   },
+
+  // Commercial Engine demand inputs, behaviour counters, tier and trial
+  // state (PRD §3, §5, §9.1) — see models/schemas/commercialSchemas.js.
+  // select:false — tier, score and counters are Eventory-internal; engine
+  // code selects "commercial" explicitly.
+  commercial: { type: VendorCommercialSchema, default: () => ({}), select: false },
 
   createdAt: {
     type: Date,

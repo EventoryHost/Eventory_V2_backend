@@ -1,5 +1,6 @@
 import mongoose from "mongoose";
 import { generateISTId } from "../utils/idGenerator.js";
+import { registerEnquiryCounterHooks } from "../services/commercial/enquiryCounters.js";
 import {
   AttachmentSchema,
   ChangeRequestSchema,
@@ -294,5 +295,8 @@ const EnquirySchema = new mongoose.Schema(
 // Compound indexes
 EnquirySchema.index({ vendorId: 1, status: 1 });
 EnquirySchema.index({ vendorId: 1, eventDate: 1 });
+
+// Commercial Engine: quote requests are qualified leads (PRD §5.1).
+registerEnquiryCounterHooks(EnquirySchema);
 
 export default mongoose.model("Enquiry", EnquirySchema);

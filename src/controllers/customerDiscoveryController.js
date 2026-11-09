@@ -12,10 +12,32 @@ import { findServiceArea, isKnownServiceArea } from "../data/serviceLocalities.j
 import { round2 } from "../utils/money.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
 import { buildGroupFilter } from "../utils/packageGroupFilter.js";
-import { getPackageBasePrice, getEffectivePackagePrice } from "../utils/packagePrice.js";
-import { computeLineConvenienceFee } from "../services/convenienceFeeService.js";
+import { getPackageBasePrice } from "../utils/packagePrice.js";
+import { previewPackagePricing } from "../services/commercial/commercialService.js";
 import { getLiveEventCategories } from "../utils/liveEventCategoriesCache.js";
 import { VISIBLE_VENDOR_FILTER, hiddenVendorKeys, visibleVendorIdClause } from "../utils/customerVisibility.js";
+
+/**
+ * PDP fee preview. Same `{ configured, fee, reason }` shape the old
+ * convenienceFeeService returned, so the frontend keeps working; `fee` is
+ * the Eventory Service Fee incl. GST, `displayPrice` the merchandised total.
+ */
+async function serviceFeePreview(pkg, date) {
+  if (!date) return { configured: false, fee: null, reason: "Pick an event date to see the service fee" };
+  const preview = await previewPackagePricing(pkg, { eventDate: date });
+  const r = preview.modes[preview.defaultMode];
+  if (!r?.serviceFee) return { configured: false, fee: null, reason: "Service fee unavailable for this date" };
+  return {
+    configured: true,
+    fee: round2(r.serviceFee.taxableFee + r.serviceFee.gstOnFee),
+    taxableFee: r.serviceFee.taxableFee,
+    gstOnFee: r.serviceFee.gstOnFee,
+    displayPrice: r.customer.displayPrice,
+    bookingMode: preview.defaultMode,
+    bookable: r.status === "APPROVED",
+    reason: null,
+  };
+}
 
 /**
  * Public (no-auth), read-only discovery endpoints for the customer side:
@@ -508,12 +530,11 @@ export const getPackageDetail = async (req, res) => {
     // the cart line subtotal will be for a plain add-to-cart. The resolved
     // pkg.vendorId already carries teamSize/bookingsPerYear/experience
     // (PUBLIC_VENDOR_FIELDS whitelist).
-    pricingPreview.convenienceFee = computeLineConvenienceFee({
-      vendorType: pkg.vendorType,
-      vendor: pkg.vendorId,
-      linePrice: getEffectivePackagePrice(pkg),
-      eventDate: date || null,
-    });
+    // Commercial Engine since 2026-11 (same engine as the cart quote): the
+    // Eventory Service Fee for this package on the chosen date in its
+    // default booking mode. Customer-safe fields only — no commission,
+    // category, PCI or B2B economics leave the server.
+    pricingPreview.convenienceFee = await serviceFeePreview(pkg, date);
 
     return res.status(200).json({
       status: "SUCCESS",
@@ -1488,6 +1509,25 @@ export const browseVendors = async (req, res) => {
     });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to browse vendors", error: error.message });
+  }
+};
+
+/**
+ * The Become a Vendor hero's "Total Number of Vendors on Eventory" stat —
+ * real bug fixed (PM reported 2026-11-02): the frontend previously read
+ * browseVendors' `.total` off a `?limit=1` call, which is filtered by
+ * VISIBLE_VENDOR_FILTER (excludes deactivated/Unlive vendors and anyone
+ * under 50% onboarding completion) — a number meant for "how many vendors
+ * can a customer actually browse", not "how many vendors has Eventory
+ * signed up", which is what this stat is supposed to be bragging about.
+ * This counts every Vendor document, unfiltered.
+ */
+export const getVendorsTotalCount = async (req, res) => {
+  try {
+    const total = await Vendor.countDocuments({});
+    return res.status(200).json({ status: "SUCCESS", total });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to count vendors", error: error.message });
   }
 };
 
