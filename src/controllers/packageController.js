@@ -39,6 +39,20 @@ const lockedEditResponse = (packageStatus) =>
       }
     : null;
 
+// Commercial Engine fields a VENDOR may set (PRD §6.2). Everything else on
+// Package.commercial (approved criticality, verified B2C, market benchmark,
+// publication outcome) is EM/admin-only — /api/admin/commercial.
+const VENDOR_COMMERCIAL_FIELDS = {
+  vendorB2BPrice: (v) => v === null || (typeof v === "number" && v >= 0),
+  vendorNormalB2CPrice: (v) => v === null || (typeof v === "number" && v >= 0),
+  vendorFloorPrice: (v) => v === null || (typeof v === "number" && v >= 0),
+  allowVendorSideNegotiation: (v) => typeof v === "boolean",
+  vendorProposedCriticality: (v) => v === null || ["CRITICAL", "NON_CRITICAL"].includes(v),
+  negotiationMode: (v) => ["NONE", "LIMITED", "CUSTOM"].includes(v),
+  bookingModesSupported: (v) =>
+    Array.isArray(v) && v.every((m) => ["ADVANCE_PAY_BOOK", "ZERO_PAY_BOOK", "ENQUIRE_QUOTE"].includes(m)),
+};
+
 // packageStatus is writable through the plain update endpoints only for soft
 // delete and restore. Every other transition goes through the review service,
 // so that a client cannot set "Live" directly and skip approval entirely.
@@ -307,6 +321,44 @@ export const updatePackageStep = async (req, res) => {
  * @desc Update top-level package fields (e.g. variantType for rename).
  * Body: { variantType?: string }
  */
+/**
+ * @desc    Vendor's own commercial inputs for a package (PRD §6.2)
+ * @route   PUT /api/packages/:packageId/commercial
+ * Body: any of VENDOR_COMMERCIAL_FIELDS. Same edit lock as package content —
+ * a change after approval goes back through review, which re-runs the
+ * commercial review.
+ */
+export const updatePackageCommercial = async (req, res) => {
+  try {
+    const pkg = await Package.findById(req.params.packageId).select("packageStatus").lean();
+    if (!pkg) return res.status(404).json({ status: "FAILED", message: "Package not found" });
+    const locked = lockedEditResponse(pkg.packageStatus);
+    if (locked) return res.status(409).json(locked);
+
+    const set = {};
+    for (const [key, valid] of Object.entries(VENDOR_COMMERCIAL_FIELDS)) {
+      if (!(key in (req.body || {}))) continue;
+      if (!valid(req.body[key])) {
+        return res.status(400).json({ status: "FAILED", message: `Invalid value for ${key}` });
+      }
+      set[`commercial.${key}`] = req.body[key];
+    }
+    if (!Object.keys(set).length) {
+      return res.status(400).json({ status: "FAILED", message: "No commercial fields provided" });
+    }
+
+    await Package.updateOne({ _id: pkg._id }, { $set: set });
+    const updated = await Package.findById(pkg._id).select("commercial").lean();
+    const c = updated.commercial || {};
+    return res.status(200).json({
+      status: "SUCCESS",
+      commercial: Object.fromEntries(Object.keys(VENDOR_COMMERCIAL_FIELDS).map((k) => [k, c[k] ?? null])),
+    });
+  } catch (error) {
+    return res.status(500).json({ status: "ERROR", message: "Failed to update package commercials", error: error.message });
+  }
+};
+
 export const updatePackage = async (req, res) => {
   try {
     const { packageId } = req.params;

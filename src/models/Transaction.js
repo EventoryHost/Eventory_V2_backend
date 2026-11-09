@@ -66,6 +66,13 @@ const TransactionSchema = new mongoose.Schema(
     commission: { type: Number, default: null },
     commissionRatePercent: { type: Number, default: null },
     gstOnCommission: { type: Number, default: null },
+    // TCS withheld for GST-registered vendors (PRD §15.3), and the rule
+    // version the commission came from (null on pre-engine records).
+    tcs: { type: Number, default: null },
+    // The part of grossAmount that is the vendor's own invoice value — the
+    // final milestone also carries the Eventory Service Fee, which is not.
+    vendorGrossAmount: { type: Number, default: null },
+    pricingRuleVersion: { type: String, default: null },
     // Cashfree Payouts transfer reference — set by the business admin
     // portal once it actually fires a transfer; null while a record is
     // still "PaymentDue".

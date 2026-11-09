@@ -20,6 +20,10 @@ import {
   requestVendorDeletion,
   cancelVendorDeletion,
 } from "../controllers/vendorController.js";
+import { getVendorCommercialTerms } from "../controllers/vendorCommercialController.js";
+
+// Commission range, trial progress and per-package commission range (Commercial Engine).
+router.get("/:id/commercial-terms", ownsVendor, getVendorCommercialTerms);
 
 /**
  * @swagger

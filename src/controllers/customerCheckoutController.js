@@ -4,6 +4,7 @@ import Cart from "../models/Cart.js";
 import CartItem from "../models/CartItem.js";
 import Package from "../models/Package.js";
 import { computeQuoteForLines } from "../services/cartPricingService.js";
+import { recordCommercialEvent } from "../services/commercial/commercialEvents.js";
 import { computeContactValidation, computeLinesValidation } from "../services/checkoutValidationService.js";
 import { computeAvailability } from "../utils/packageAvailability.js";
 import { resolveVendorRefId } from "../utils/resolveVendor.js";
@@ -133,7 +134,11 @@ async function lockQuote(session, discount = 0) {
     eventDetails: l.eventDetails,
     packageSnapshot: l.packageSnapshot,
   }));
-  session.lockedQuote = lines.length ? await computeQuoteForLines(lines, discount) : null;
+  const quote = lines.length ? await computeQuoteForLines(lines, discount, { customerId: session.customerId }) : null;
+  // Engine internals stay server-side (CheckoutSession's toJSON drops them).
+  session.commercialSnapshots = quote?.commercialSnapshots ?? null;
+  if (quote) delete quote.commercialSnapshots;
+  session.lockedQuote = quote;
   session.lockedAt = new Date();
   session.expiresAt = new Date(Date.now() + SESSION_TTL_MS);
 }
@@ -326,6 +331,15 @@ export const createCheckoutSession = async (req, res) => {
     });
     await lockQuote(session, discount);
     await session.save();
+    for (const line of session.lines) {
+      recordCommercialEvent("CHECKOUT_STARTED", {
+        customerId: session.customerId,
+        packageId: line.packageId,
+        vendorId: line.vendorId,
+        eventDate: line.eventDetails?.date ?? null,
+        meta: { checkoutSessionId: String(session._id), source },
+      });
+    }
 
     const availabilityResult = await computeLinesAvailability(session);
     return respondWithSession(res, 201, session, availabilityResult, req.customer);
