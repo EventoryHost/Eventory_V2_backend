@@ -1,4 +1,7 @@
 import { Server } from "socket.io";
+import { vendorIdFromToken } from "../middlewares/vendorAuth.js";
+import SupportChat from "../models/SupportChat.js";
+import { chatRoom, QUEUE_ROOM } from "../services/supportChatService.js";
 
 /**
  * Phase 6 Step 27ish — Anonymous Chat / lead-gen chatbot. Real-time layer,
@@ -60,9 +63,51 @@ export function initSocket(httpServer) {
         socket.leave(room(chatId.trim()));
       }
     });
+
+    registerSupportChat(socket);
   });
 
   return io;
+}
+
+/**
+ * Vendor ↔ Event Manager support chat (services/supportChatService.js lists
+ * the rooms and events). The vendor app connects with
+ * `auth: { token: <vendor JWT> }` and may only join its own chats. The admin
+ * panel connects with `auth: { role: "em" }` — the same access model as its
+ * /api/admin routes — and may join any chat and the waiting-chats queue.
+ */
+function registerSupportChat(socket) {
+  const auth = socket.handshake.auth ?? {};
+  const vendorId = typeof auth.token === "string" ? vendorIdFromToken(auth.token) : null;
+  const isEm = auth.role === "em";
+  const reply = (ack, body) => (typeof ack === "function" ? ack(body) : undefined);
+
+  socket.on("support:join", async (chatId, ack) => {
+    try {
+      if (typeof chatId !== "string" || !chatId.trim()) return reply(ack, { ok: false, error: "chatId required" });
+      const id = chatId.trim();
+      if (!isEm) {
+        if (!vendorId) return reply(ack, { ok: false, error: "Authentication required" });
+        if (!(await SupportChat.exists({ chatId: id, vendorId }))) return reply(ack, { ok: false, error: "Chat not found" });
+      }
+      socket.join(chatRoom(id));
+      return reply(ack, { ok: true });
+    } catch (error) {
+      console.error("support:join error:", error.message);
+      return reply(ack, { ok: false, error: "Could not join" });
+    }
+  });
+
+  socket.on("support:leave", (chatId) => {
+    if (typeof chatId === "string" && chatId.trim()) socket.leave(chatRoom(chatId.trim()));
+  });
+
+  socket.on("support:join_queue", (ack) => {
+    if (!isEm) return reply(ack, { ok: false, error: "Not allowed" });
+    socket.join(QUEUE_ROOM);
+    return reply(ack, { ok: true });
+  });
 }
 
 export default initSocket;
