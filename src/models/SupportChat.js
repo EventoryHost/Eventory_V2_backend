@@ -6,15 +6,16 @@ import mongoose from "mongoose";
  * (topic publish_package) or a booking (topic booking) in the vendor app.
  *
  * Lifecycle (status):
- *   automated       — the app is running its quick-reply flow on the phone
+ *   automated       — the server is running the quick-reply flow
  *   call_requested  — vendor tapped "Not quite, call me"; an EM should call
  *   waiting_for_em  — vendor tapped "Something else"; has a ticketNumber
  *   with_em         — an EM joined; vendor and EM chat in free text
  *   resolved        — closed by the vendor ("Yes, that helps") or an EM
  *
- * Free-text messages live in SupportMessage. The quick replies the vendor
- * tapped before handover are kept here in `transcript` so the EM can read
- * what was already tried.
+ * Free-text messages live in SupportMessage. The quick-reply conversation
+ * (bot questions and the replies the vendor tapped) is kept here in
+ * `transcript`, `options` are the replies offered next, and `context` holds
+ * what the app showed when Help was opened (step name, booking facts…).
  */
 export const SUPPORT_CHAT_STATUSES = ["automated", "call_requested", "waiting_for_em", "with_em", "resolved"];
 export const SUPPORT_CHAT_TOPICS = ["package_setup", "publish_package", "booking"];
@@ -24,6 +25,14 @@ const TranscriptLineSchema = new mongoose.Schema(
     from: { type: String, enum: ["bot", "vendor"], required: true },
     text: { type: String, required: true },
     at: { type: Date, required: true },
+  },
+  { _id: false }
+);
+
+const ReplyOptionSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true },
+    label: { type: String, required: true },
   },
   { _id: false }
 );
@@ -43,7 +52,9 @@ const SupportChatSchema = new mongoose.Schema(
     emId: { type: String, default: null },
     emName: { type: String, default: null },
 
+    context: { type: mongoose.Schema.Types.Mixed, default: {} },
     transcript: { type: [TranscriptLineSchema], default: [] },
+    options: { type: [ReplyOptionSchema], default: [] },
 
     handedOverAt: { type: Date, default: null },
     callRequestedAt: { type: Date, default: null },

@@ -12,10 +12,12 @@ import {
   serializeChat,
   serializeMessage,
 } from "../services/supportChatService.js";
+import { OPTION_IDS, OUTCOMES, selectOption, startFlow } from "../services/supportFlows/supportFlowEngine.js";
 import { resolveVendorRefId } from "../utils/resolveVendor.js";
 
 /**
- * Vendor side of the Help & Support chat (vendor app → Package Setup → Help).
+ * Vendor side of the Help & Support chat (vendor app → Help on a package step,
+ * the publish screen or a booking).
  * Every route runs behind requireVendorIdentity, so req.authVendorId is the
  * calling vendor and a chat is only ever looked up together with it.
  */
@@ -44,16 +46,21 @@ const bookingBelongsTo = async (bookingId, vendorId) => {
   return owner === vendorId;
 };
 
+const freshFlow = (chat, now) => {
+  const { lines, options } = startFlow(chat);
+  return { transcript: lines.map((line) => ({ ...line, at: now })), options };
+};
+
 /**
- * @desc Open Help on a step: the vendor's unresolved chat for that package
- * and step, or a new one. Messages are returned once the chat has left the
- * automated stage, so the app can redraw it.
+ * @desc Open Help on a step, the publish screen or a booking: the vendor's
+ * unresolved chat for it, or a new one. A chat still in the quick-reply stage
+ * starts its flow again from the top.
  * @route POST /api/support/chats
  */
 export const openSupportChat = async (req, res) => {
   try {
     const vendorId = req.authVendorId;
-    const { topic } = req.body;
+    const { topic, context } = req.body;
     const step = topic === "package_setup" ? req.body.step : null;
     const packageId = req.body.packageId ?? null;
     const bookingId = topic === "booking" ? req.body.bookingId : null;
@@ -65,7 +72,7 @@ export const openSupportChat = async (req, res) => {
       return fail(res, 403, "You are not authorized to access this resource");
     }
 
-    let chat = await SupportChat.findOne({
+    const found = await SupportChat.findOne({
       vendorId,
       topic,
       packageId,
@@ -73,113 +80,84 @@ export const openSupportChat = async (req, res) => {
       bookingId,
       status: { $ne: "resolved" },
     }).sort({ createdAt: -1 });
-    const created = !chat;
-    if (created) chat = await SupportChat.create({ chatId: newChatId(), vendorId, topic, packageId, step, bookingId });
 
-    const messages = chat.status === "automated" ? [] : await listMessages(chat.chatId);
-    return res.status(created ? 201 : 200).json({ success: true, data: { chat: serializeChat(chat), messages } });
+    if (found && found.status !== "automated") {
+      return res.json({
+        success: true,
+        data: { chat: serializeChat(found), messages: await listMessages(found.chatId) },
+      });
+    }
+
+    const now = new Date();
+    const fields = { topic, packageId, step, bookingId, context };
+    const chat = found
+      ? await SupportChat.findOneAndUpdate(
+          { _id: found._id, status: "automated" },
+          { $set: { context, ...freshFlow(fields, now) } },
+          { returnDocument: "after" }
+        )
+      : await SupportChat.create({ chatId: newChatId(), vendorId, ...fields, ...freshFlow(fields, now) });
+    if (!chat) return fail(res, 409, "This chat changed. Open Help again.");
+
+    return res.status(found ? 200 : 201).json({ success: true, data: { chat: serializeChat(chat), messages: [] } });
   } catch (error) {
     console.error("openSupportChat error:", error);
     return fail(res, 500, "Could not open the chat");
   }
 };
 
-/**
- * @desc "Something else": the chat gets a ticket number and waits for an EM.
- * Repeating the call after it succeeded returns the same ticket.
- * @route POST /api/support/chats/:chatId/handover
- */
-export const handoverSupportChat = async (req, res) => {
-  try {
-    const chat = await ownChat(req, res);
-    if (!chat) return;
-    if (chat.ticketNumber) return res.json({ success: true, data: { chat: serializeChat(chat) } });
-    if (chat.status !== "automated") return fail(res, 409, "This chat can no longer be handed over");
+const OUTCOME_UPDATES = {
+  [OUTCOMES.continue]: () => ({}),
+  [OUTCOMES.resolved]: (now) => ({ status: "resolved", resolvedAt: now, resolvedBy: "vendor" }),
+  [OUTCOMES.callRequested]: (now) => ({ status: "call_requested", callRequestedAt: now }),
+  [OUTCOMES.ticket]: (now, ticketNumber) => ({ status: "waiting_for_em", ticketNumber, handedOverAt: now }),
+};
 
-    const ticketNumber = await nextTicketNumber();
-    const updated = await SupportChat.findOneAndUpdate(
-      { _id: chat._id, status: "automated" },
-      {
-        $set: {
-          status: "waiting_for_em",
-          ticketNumber,
-          handedOverAt: new Date(),
-          transcript: req.body.transcript,
-        },
-      },
-      { returnDocument: "after" }
-    );
-    if (!updated) {
-      const current = await SupportChat.findById(chat._id);
-      if (current?.ticketNumber) return res.json({ success: true, data: { chat: serializeChat(current) } });
-      return fail(res, 409, "This chat can no longer be handed over");
-    }
-
-    await addMessage(updated.chatId, {
-      sender: "system",
-      event: "ticket_opened",
-      text: `Ticket #${ticketNumber} opened`,
-    });
-    emitToQueue(req, "chat:waiting", serializeChat(updated));
-    return res.json({ success: true, data: { chat: serializeChat(updated) } });
-  } catch (error) {
-    console.error("handoverSupportChat error:", error);
-    return fail(res, 500, "Could not open a ticket");
-  }
+const OUTCOME_EVENTS = {
+  [OUTCOMES.resolved]: () => ({ event: "resolved", text: "Marked as resolved" }),
+  [OUTCOMES.callRequested]: () => ({ event: "call_requested", text: "Support will call you" }),
+  [OUTCOMES.ticket]: (ticketNumber) => ({ event: "ticket_opened", text: `Ticket #${ticketNumber} opened` }),
 };
 
 /**
- * @desc "Not quite, call me": the admin panel lists the chat so an EM calls.
- * @route POST /api/support/chats/:chatId/call-request
+ * @desc The vendor tapped a quick reply. The server runs the flow, saves the
+ * reply and the bot's answer, and returns the chat with the next options.
+ * "Something else" opens a ticket, "Not quite, call me" asks for a call and
+ * "Yes, that helps" / "End Chat" close the chat.
+ * @route POST /api/support/chats/:chatId/select
  */
-export const requestSupportCall = async (req, res) => {
+export const selectSupportOption = async (req, res) => {
   try {
     const chat = await ownChat(req, res);
     if (!chat) return;
-    if (chat.status === "call_requested") return res.json({ success: true, data: { chat: serializeChat(chat) } });
+    const { optionId } = req.body;
+    if (chat.status !== "automated") return fail(res, 409, "This chat has moved on. Open Help again.");
+    if (!chat.options.some((o) => o.id === optionId)) return fail(res, 409, "That reply isn't available any more");
 
+    const ticketNumber = optionId === OPTION_IDS.ticket ? await nextTicketNumber() : null;
+    const step = selectOption(chat, optionId, { ticketNumber });
+    if (!step) return fail(res, 409, "That reply isn't available any more");
+
+    const now = new Date();
     const updated = await SupportChat.findOneAndUpdate(
-      { _id: chat._id, status: "automated" },
-      { $set: { status: "call_requested", callRequestedAt: new Date(), transcript: req.body.transcript } },
-      { returnDocument: "after" }
-    );
-    if (!updated) return fail(res, 409, "A call can't be requested on this chat");
-    return res.json({ success: true, data: { chat: serializeChat(updated) } });
-  } catch (error) {
-    console.error("requestSupportCall error:", error);
-    return fail(res, 500, "Could not request a call");
-  }
-};
-
-/**
- * @desc "Yes, that helps" during the automated stage.
- * @route POST /api/support/chats/:chatId/resolve
- */
-export const resolveSupportChatByVendor = async (req, res) => {
-  try {
-    const chat = await ownChat(req, res);
-    if (!chat) return;
-    if (chat.status === "resolved") return res.json({ success: true, data: { chat: serializeChat(chat) } });
-
-    const updated = await SupportChat.findOneAndUpdate(
-      { _id: chat._id, status: "automated" },
+      { _id: chat._id, status: "automated", transcript: { $size: chat.transcript.length } },
       {
-        $set: {
-          status: "resolved",
-          resolvedAt: new Date(),
-          resolvedBy: "vendor",
-          transcript: req.body.transcript,
-        },
+        $set: { options: step.options, ...OUTCOME_UPDATES[step.outcome](now, ticketNumber) },
+        $push: { transcript: { $each: step.lines.map((line) => ({ ...line, at: now })) } },
       },
       { returnDocument: "after" }
     );
-    if (!updated) return fail(res, 409, "This chat can't be resolved from the app");
+    if (!updated) return fail(res, 409, "This chat changed. Open Help again.");
 
-    await addMessage(updated.chatId, { sender: "system", event: "resolved", text: "Marked as resolved" });
-    return res.json({ success: true, data: { chat: serializeChat(updated) } });
+    const event = OUTCOME_EVENTS[step.outcome]?.(ticketNumber);
+    if (event) await addMessage(updated.chatId, { sender: "system", ...event });
+    if (step.outcome === OUTCOMES.ticket) emitToQueue(req, "chat:waiting", serializeChat(updated));
+
+    const messages = updated.status === "automated" ? [] : await listMessages(updated.chatId);
+    return res.json({ success: true, data: { chat: serializeChat(updated), messages } });
   } catch (error) {
-    console.error("resolveSupportChatByVendor error:", error);
-    return fail(res, 500, "Could not close the chat");
+    console.error("selectSupportOption error:", error);
+    return fail(res, 500, "Could not send your reply");
   }
 };
 

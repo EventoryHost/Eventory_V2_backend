@@ -7,7 +7,7 @@ import mongoose from "mongoose";
  * without matching on text.
  */
 export const SUPPORT_MESSAGE_SENDERS = ["vendor", "em", "system"];
-export const SUPPORT_SYSTEM_EVENTS = ["ticket_opened", "em_joined", "resolved"];
+export const SUPPORT_SYSTEM_EVENTS = ["ticket_opened", "call_requested", "em_joined", "resolved"];
 
 const SupportMessageSchema = new mongoose.Schema(
   {

@@ -1,17 +1,15 @@
 import express from "express";
 import {
   getSupportChatMessages,
-  handoverSupportChat,
   openSupportChat,
-  requestSupportCall,
-  resolveSupportChatByVendor,
+  selectSupportOption,
   sendVendorSupportMessage,
 } from "../controllers/supportChatController.js";
 import { requireVendor } from "../middlewares/vendorAuth.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
 import {
   openSupportChatSchema,
-  supportTranscriptSchema,
+  selectSupportOptionSchema,
   vendorSupportMessageSchema,
 } from "../validators/supportChatValidators.js";
 
@@ -33,9 +31,7 @@ const requireVendorIdentity = [
 router.use(requireVendorIdentity);
 
 router.post("/", validateRequest(openSupportChatSchema), openSupportChat);
-router.post("/:chatId/handover", validateRequest(supportTranscriptSchema), handoverSupportChat);
-router.post("/:chatId/call-request", validateRequest(supportTranscriptSchema), requestSupportCall);
-router.post("/:chatId/resolve", validateRequest(supportTranscriptSchema), resolveSupportChatByVendor);
+router.post("/:chatId/select", validateRequest(selectSupportOptionSchema), selectSupportOption);
 router.get("/:chatId/messages", getSupportChatMessages);
 router.post("/:chatId/messages", validateRequest(vendorSupportMessageSchema), sendVendorSupportMessage);
 

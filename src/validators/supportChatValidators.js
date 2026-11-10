@@ -1,13 +1,49 @@
 import { z } from "zod";
 import { SUPPORT_CHAT_TOPICS } from "../models/SupportChat.js";
 
-const transcriptLine = z.object({
-  from: z.enum(["bot", "vendor"]),
-  text: z.string().trim().min(1).max(2000),
-  at: z.coerce.date(),
+const label = z.string().trim().max(200);
+
+const bookingFacts = z.object({
+  bookingRef: label,
+  stage: z.enum([
+    "newBooking",
+    "inDiscussion",
+    "confirmed",
+    "checkedIn",
+    "settingUp",
+    "takePayment",
+    "live",
+    "wrappingUp",
+    "completed",
+    "cancelled",
+  ]),
+  customerName: label,
+  eventName: label,
+  eventDate: label,
+  isFreeBooking: z.boolean().default(false),
+  cancelledByCustomer: z.boolean().default(false),
+  timeLeftToRespond: label.nullish(),
+  expiresAt: label.nullish(),
+  venue: label.nullish(),
+  setupDue: label.nullish(),
+  eventStart: label.nullish(),
+  eventEnd: label.nullish(),
+  amountDue: label.nullish(),
+  onGroundContact: label.nullish(),
+  slot: label.nullish(),
 });
 
-const transcript = z.array(transcriptLine).max(200);
+/** What the app shows on the chat card; the bot's intro and booking answers use it. */
+const chatContext = z
+  .object({
+    vendorType: label.nullish(),
+    packageName: label.default(""),
+    totalSteps: z.coerce.number().int().min(1).max(20).nullish(),
+    stepName: label.nullish(),
+    variantName: label.nullish(),
+    booking: bookingFacts.nullish(),
+  })
+  .default({});
 
 /** Vendor opens Help on a Package Setup step, the publish screen or a booking. */
 export const openSupportChatSchema = z
@@ -16,19 +52,20 @@ export const openSupportChatSchema = z
     packageId: z.string().trim().min(1).max(64).optional(),
     step: z.coerce.number().int().min(1).max(20).optional(),
     bookingId: z.string().trim().min(1).max(64).optional(),
+    context: chatContext,
   })
   .refine((body) => body.topic !== "package_setup" || body.step != null, {
     message: "step is required for package setup help",
     path: ["step"],
   })
-  .refine((body) => body.topic !== "booking" || body.bookingId != null, {
-    message: "bookingId is required for booking help",
+  .refine((body) => body.topic !== "booking" || (body.bookingId != null && body.context.booking != null), {
+    message: "bookingId and the booking details are required for booking help",
     path: ["bookingId"],
   });
 
-/** Handover / call request / "Yes, that helps" — the quick replies so far. */
-export const supportTranscriptSchema = z.object({
-  transcript: transcript.default([]),
+/** The vendor tapped one of the quick replies the server offered. */
+export const selectSupportOptionSchema = z.object({
+  optionId: z.string().trim().min(1).max(100),
 });
 
 const messageBody = {

@@ -55,6 +55,8 @@ export const serializeChat = (c) => ({
   emId: c.emId ?? null,
   emName: c.emName ?? null,
   transcript: (c.transcript ?? []).map(({ from, text, at }) => ({ from, text, at })),
+  options: (c.options ?? []).map(({ id, label }) => ({ id, label })),
+  context: c.context ?? {},
   handedOverAt: c.handedOverAt ?? null,
   callRequestedAt: c.callRequestedAt ?? null,
   resolvedAt: c.resolvedAt ?? null,
