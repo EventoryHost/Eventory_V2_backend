@@ -19,6 +19,7 @@ import {
 import AreaWaitlist from "../models/AreaWaitlist.js";
 import Booking from "../models/Booking.js";
 import { raiseBookingIssue } from "../services/bookingIssueService.js";
+import { contextFromDeal, notifyVendor } from "../services/vendorNotificationService.js";
 import HelpConversation from "../models/HelpConversation.js";
 import { lookupArea } from "../services/areaLookupService.js";
 import { resolveArea } from "../utils/helpServiceAreas.js";
@@ -547,6 +548,14 @@ export const createBookingHelpRequest = async (req, res) => {
               : "Other";
         const raised = doc && raiseBookingIssue(doc, { category, description: `${report.label} (${ticket}): ${b.text}` }, "Customer");
         if (raised && !raised.error) await doc.save();
+        // The vendor hears about it too; safety reports get their own alert.
+        if (doc) {
+          notifyVendor(report.issue === "safety" ? "support.safetyReported" : "support.issueReported", {
+            ...contextFromDeal(doc),
+            issueText: report.label,
+            dedupeKey: `support.report:${ticket}`,
+          });
+        }
       } catch (err) {
         console.error("[createBookingHelpRequest] issue record failed:", err.message);
       }

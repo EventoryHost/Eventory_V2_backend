@@ -841,7 +841,11 @@ export const updateBooking = async (req, res) => {
 
     await booking.save();
     // The vendor answered the requests; a new proposal is with the customer.
-    resolveVendorActions(booking.vendorId, booking.bookingId, ["booking.newWithRequests", "booking.changesRequested"]);
+    resolveVendorActions(booking.vendorId, booking.bookingId, [
+      "booking.newWithRequests",
+      "booking.changesRequested",
+      "booking.customisationRequested",
+    ]);
 
     if (confirm) await syncPackageBooked(booking.packageId, booking.eventDate);
 

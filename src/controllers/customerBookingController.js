@@ -673,7 +673,10 @@ export const acceptProposal = async (req, res) => {
 
     // The proposal they were answering is settled; the new row says what's
     // next (confirm, or nothing when it re-confirmed itself).
-    resolveVendorActions(booking.vendorId, booking.bookingId, ["booking.changesRequested"]).then(() =>
+    resolveVendorActions(booking.vendorId, booking.bookingId, [
+      "booking.changesRequested",
+      "booking.customisationRequested",
+    ]).then(() =>
       notifyVendor("booking.proposalAccepted", { ...contextFromDeal(booking), reconfirmed: reconfirming })
     );
 
@@ -733,7 +736,9 @@ export const addCustomizeRequests = async (req, res) => {
     booking.status = "InDiscussion";
     await booking.save();
 
-    notifyVendor("booking.changesRequested", {
+    // On a booking the vendor already confirmed this is a customisation of
+    // a done deal, not part of the original negotiation — its own alert.
+    notifyVendor(booking.confirmedAt ? "booking.customisationRequested" : "booking.changesRequested", {
       ...contextFromDeal(booking),
       requestCount: req.body.requests.length,
     });

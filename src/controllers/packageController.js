@@ -668,7 +668,7 @@ export const submitPackageGroup = async (req, res) => {
       by: req.body?.submittedBy,
     });
     notifyPackageGroup("package.submitted", groupFilter, {
-      resolveActions: ["package.changesNeeded"],
+      resolveActions: ["package.changesNeeded", "package.documentsRequired"],
     });
 
     return res.status(200).json({
@@ -697,7 +697,7 @@ export const submitPackage = async (req, res) => {
 
     const result = await submitGroup(groupFilter, { by: req.body?.submittedBy });
     notifyPackageGroup("package.submitted", groupFilter, {
-      resolveActions: ["package.changesNeeded"],
+      resolveActions: ["package.changesNeeded", "package.documentsRequired"],
     });
 
     return res.status(200).json({

@@ -41,6 +41,8 @@ export const NOTIFICATION_TARGET_KINDS = [
   "profile",
   "documents",
   "support",
+  // A calendar day ("YYYY-MM-DD" in IST) — e.g. two bookings on one date.
+  "calendar",
   "none",
 ];
 

@@ -1,7 +1,7 @@
 import Booking from "../models/Booking.js";
 import { round2 } from "../utils/money.js";
 import { recordVendorMilestoneDue } from "./vendorPayoutService.js";
-import { contextFromDeal, notifyVendor } from "./vendorNotificationService.js";
+import { contextFromDeal, notifyVendor, resolveVendorActions } from "./vendorNotificationService.js";
 
 /**
  * Applies a confirmed-PAID Step 22 milestone payment to its Booking — Phase
@@ -102,6 +102,12 @@ function notifyMilestonePaid(booking, milestone, payment, shortBy) {
     dedupeKey: `payments.received:${payment._id}`,
   };
   const remaining = round2((booking.totalAmount || 0) - (booking.totalReceived || 0));
+  // Nothing past due any more: the overdue reminder has done its job.
+  const now = new Date();
+  const stillOverdue = (booking.paymentMilestones || []).some(
+    (m) => m.status !== "Received" && m.dueDate && m.dueDate < now
+  );
+  if (!stillOverdue) resolveVendorActions(booking.vendorId, booking.bookingId, ["payments.overdue"]);
   if (shortBy > 0.01) {
     notifyVendor("payments.partialReceived", { ...ctx, shortBy, due: round2(shortBy + payment.amount) });
   } else if (remaining <= 0.01) {
