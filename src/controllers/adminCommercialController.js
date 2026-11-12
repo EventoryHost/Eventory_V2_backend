@@ -506,11 +506,17 @@ export const simulateEngine = async (req, res) => {
 
     const publication = evaluatePublication(
       {
-        vendor: { gstRegistered: !!vendor.gstRegistered, gstRatePct: numOrNull(vendor.gstRatePct) ?? 18 },
+        vendor: {
+          gstRegistered: !!vendor.gstRegistered,
+          monetizationModel: vendor.monetizationModel || "COMMISSION",
+          successfulBookingsCount: numOrNull(vendor.successfulBookingsCount) ?? 0,
+        },
         demand,
         pkg: {
           eventoryApprovedCriticality: pkg.criticality || null,
           vendorB2BPrice: vendorB2B,
+          vendorGst: vendor.gstRegistered ? Math.round(vendorB2B * (numOrNull(vendor.gstRatePct) ?? 18)) / 100 : 0,
+          negotiationMode: runtime.negotiationMode || "NONE",
           b2cPriceVerified: !!pkg.b2cPriceVerified,
           verifiedVendorB2CPrice: numOrNull(pkg.verifiedVendorB2CPrice),
           marketPriceLow: numOrNull(pkg.marketPriceLow),

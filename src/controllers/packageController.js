@@ -3,6 +3,7 @@ import Vendor from "../models/Vendor.js";
 import { getModelForVendor } from "../utils/modelRegistry.js";
 import { upgradeLegacyDurationKeys } from "../utils/legacyDurationKeys.js";
 import { generateISTId } from "../utils/idGenerator.js";
+import { EDITABLE_PACKAGE_COMMERCIAL_KEYS } from "../models/schemas/commercialSchemas.js";
 import {
   contextFromPackage,
   notifyPackageGroup,
@@ -243,6 +244,8 @@ const STEP_FIELDS = {
   6: "paymentMilestones",
   7: "availabilitySettings",
   8: "bookingCapacity",
+  // Admin only — see updatePackageStep.
+  9: "commercial",
 };
 
 /**
@@ -271,6 +274,21 @@ export const updatePackageStep = async (req, res) => {
       return res.status(400).json({ status: "FAILED", message: "Invalid step number" });
     }
 
+    // Step 9 (commercial) is the EM's pricing data: admin only. The editor
+    // sends the whole stored block back, so only the editable keys are kept —
+    // the review outcome, baseline and version are written by the review
+    // itself, never by an edit. Vendors set their own values via
+    // PUT /:packageId/commercial.
+    const isCommercial = updateField === STEP_FIELDS[9];
+    if (isCommercial) {
+      if (!req.isAdmin) {
+        return res.status(403).json({ status: "FAILED", message: "Commercial details are edited by Eventory" });
+      }
+      for (const key of Object.keys(stepData || {})) {
+        if (!EDITABLE_PACKAGE_COMMERCIAL_KEYS.includes(key)) delete stepData[key];
+      }
+    }
+
     if (updateField === STEP_FIELDS[2]) upgradeLegacyDurationKeys(stepData);
 
     // Convert stepData into flat dot-notation updates to prevent full-object replacement
@@ -286,7 +304,7 @@ export const updatePackageStep = async (req, res) => {
 
     const update = {};
     if (Object.keys(flatUpdates).length > 0) update.$set = flatUpdates;
-    if (markCompleted) {
+    if (markCompleted && !isCommercial) {
       update.$addToSet = { completedSteps: parseInt(stepNumber) };
     }
 
@@ -298,10 +316,13 @@ export const updatePackageStep = async (req, res) => {
       });
     }
 
-    const updatedPackage = await Model.findByIdAndUpdate(packageId, update, {
+    // Admin edits get the (select:false) commercial block back, so the admin
+    // editor keeps it in step with what was saved.
+    const query = Model.findByIdAndUpdate(packageId, update, {
       new: true,
       runValidators: true,
     });
+    const updatedPackage = await (req.isAdmin ? query.select("+commercial") : query);
 
     if (!updatedPackage) {
       return res.status(404).json({ status: "FAILED", message: "Package not found" });
@@ -604,7 +625,8 @@ export const updatePackageGroup = async (req, res) => {
     // written to every variant at once rather than one call per variant.
     if (step !== undefined) {
       const field = STEP_FIELDS[step];
-      if (!field) {
+      // Commercial (step 9) is admin-only edit-step, never a vendor group write.
+      if (!field || field === STEP_FIELDS[9]) {
         return res.status(400).json({ status: "FAILED", message: "Invalid step number" });
       }
       if (data && typeof data === "object" && !Array.isArray(data)) {

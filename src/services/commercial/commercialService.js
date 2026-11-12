@@ -16,6 +16,7 @@ import {
   buildBaseline,
   buildEngineVendor,
   defaultBookingMode,
+  packageVendorGst,
 } from "./commercialContextService.js";
 
 /**
@@ -103,7 +104,15 @@ export async function evaluatePackage(pkg, vendor) {
   if (!v) throw new ReviewTransitionError("Vendor profile not found", 404);
   const demand = resolveVendorDemand(v, rules);
   return evaluatePublication(
-    { vendor: { gstRegistered: Boolean(v.gstNumber) }, demand, pkg: publicationPackage(pkg) },
+    {
+      vendor: {
+        gstRegistered: Boolean(v.gstNumber),
+        monetizationModel: v.commercial?.monetizationModel ?? "TRIAL",
+        successfulBookingsCount: v.commercial?.successfulBookingsCount ?? 0,
+      },
+      demand,
+      pkg: publicationPackage(pkg, v),
+    },
     rules,
   );
 }
@@ -150,17 +159,15 @@ export async function reviewGroupCommercials(groupFilter, { by = null } = {}) {
 }
 
 /**
- * Go-live gate: a variant whose commercial review ended in
- * PRICE_REVIEW_REQUIRED can't be published. Variants approved before the
- * engine existed are reviewed now rather than blocked.
+ * Go-live gate: a variant whose commercial review ends in
+ * PRICE_REVIEW_REQUIRED can't be published. The review is re-run on every
+ * go-live, so whatever the EM corrected since approval (commercial values,
+ * the vendor's profile, rules) counts straight away.
  */
 export async function assertGroupCanGoLive(groupFilter, { by = null } = {}) {
-  const variants = await Package.find({ ...groupFilter, packageStatus: "Approved" })
-    .select("commercial.publicationOutcome")
-    .lean();
-  const results = variants.some((v) => !v.commercial?.publicationOutcome)
-    ? await reviewGroupCommercials(groupFilter, { by })
-    : variants.map((v) => ({ packageId: v._id, outcome: v.commercial.publicationOutcome }));
+  const approved = await Package.find({ ...groupFilter, packageStatus: "Approved" }).select("_id").lean();
+  const approvedIds = new Set(approved.map((v) => String(v._id)));
+  const results = (await reviewGroupCommercials(groupFilter, { by })).filter((r) => approvedIds.has(String(r.packageId)));
 
   const blocked = results.filter((r) => r.outcome === "PRICE_REVIEW_REQUIRED");
   if (blocked.length) {
@@ -184,7 +191,7 @@ export async function previewPackagePricing(pkgIn, { daysToEvent, eventDate, neg
   const { baseline, demand, criticality } = buildBaseline({ pkg, vendor, rules });
   const modes = priceAllModes(
     {
-      vendor: buildEngineVendor(vendor),
+      vendor: buildEngineVendor(vendor, { vendorGst: packageVendorGst(pkg, vendor) }),
       baseline,
       runtime: {
         daysToEvent,
