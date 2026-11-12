@@ -16,8 +16,9 @@ import { priceLine } from "./pricingEngine.js";
  *   PRICE_REVIEW_REQUIRED  B2B / benchmark / scope / data needs correction first
  *
  * Lead time is unknown at publication (no customer date), so commission is
- * checked as an envelope and CPCI is tested on the best-case customer price
- * (Advance, 21+ days, no negotiation — the lowest fee the package can show).
+ * checked as an envelope, and each fixed-price mode is priced at its best
+ * case (30 days out): a mode whose fee would break its ceiling even then is
+ * switched off, and CPCI is tested on the best-case Advance price.
  */
 
 export function evaluatePublication({ vendor, counters, demand: knownDemand, pkg }, rules = RULES_V1) {
@@ -70,35 +71,59 @@ export function evaluatePublication({ vendor, counters, demand: knownDemand, pkg
   snapshot.mct = computeMct(vendorB2B, band, rules);
   snapshot.commissionEnvelope = commissionEnvelope({ category, band, pciBand: pciResult.band }, rules);
 
-  const quoteEligible = bandAtLeast(band, rules.quoteMinBand, rules) && baseline.supportedModes.includes("ENQUIRE_QUOTE");
+  const supports = (m) => baseline.supportedModes.includes(m);
+  const quoteEligible = bandAtLeast(band, rules.quoteMinBand, rules) && supports("ENQUIRE_QUOTE");
 
-  // Best-case CPCI probe (only meaningful with a benchmark).
-  let bestCase = null;
-  if (baseline.marketMedian) {
-    bestCase = priceLine(
+  // §13.3 step 9 — best-case economics per fixed-price mode. Each mode the
+  // package offers is priced at its most favourable point (30 days out,
+  // the package's negotiation mode, normal commission). If even then the fee
+  // Eventory needs (MRER floor) is above the mode's ceiling, no customer
+  // could ever book that mode at a fixed price, so it is switched off here
+  // rather than refused at checkout. The trial is temporary: a mode that only
+  // fails while the vendor is in trial stays on, with a warning.
+  const probe = (bookingMode, monetizationModel) =>
+    priceLine(
       {
-        vendor: { gstRegistered: vendor.gstRegistered, gstRatePct: vendor.gstRatePct, monetizationModel: "COMMISSION" },
+        vendor: {
+          gstRegistered: vendor.gstRegistered,
+          vendorGst: pkg.vendorGst ?? null,
+          monetizationModel,
+          successfulBookingsCount: vendor.successfulBookingsCount ?? 0,
+        },
         baseline,
-        runtime: { bookingMode: "ADVANCE_PAY_BOOK", negotiationMode: "NONE", daysToEvent: 30 },
+        runtime: { bookingMode, negotiationMode: pkg.negotiationMode ?? "NONE", daysToEvent: 30 },
       },
       rules,
     );
-    snapshot.bestCaseCpci = bestCase.cpci;
-  }
+
+  const fixedModes = rules.fixedPriceModes.filter(supports);
+  const feasible = {};
   const warnings = baseline.marketMedian ? [] : ["NO_MARKET_BENCHMARK"];
+  let bestCase = null;
+  for (const mode of fixedModes) {
+    const result = probe(mode, "COMMISSION");
+    feasible[mode] = !result.serviceFee?.ceilingBreach;
+    if (!bestCase || mode === "ADVANCE_PAY_BOOK") bestCase = result;
+    if (feasible[mode] && vendor.monetizationModel === "TRIAL" && probe(mode, "TRIAL").serviceFee?.ceilingBreach) {
+      warnings.push(`TRIAL_FEE_CEILING_BREACH:${mode}`);
+    }
+  }
+  snapshot.fixedModeFeasible = feasible;
+  if (bestCase && baseline.marketMedian) snapshot.bestCaseCpci = bestCase.cpci;
 
-  let outcome = "APPROVED_FIXED";
   if (pciResult.band === "WEAK") reasons.push("WEAK_PCI");
-  if (bestCase?.cpci.band === "REVIEW_REQUIRED") reasons.push("CPCI_ABOVE_LIMIT");
-  const fixedBlocked = reasons.includes("WEAK_PCI") || reasons.includes("CPCI_ABOVE_LIMIT");
-  if (fixedBlocked) outcome = quoteEligible ? "QUOTE_ONLY" : "PRICE_REVIEW_REQUIRED";
+  if (baseline.marketMedian && bestCase?.cpci.band === "REVIEW_REQUIRED") reasons.push("CPCI_ABOVE_LIMIT");
+  if (fixedModes.length && !fixedModes.some((m) => feasible[m])) reasons.push("FEE_CEILING_BREACH");
 
-  const supports = (m) => baseline.supportedModes.includes(m);
-  const fixedOn = outcome === "APPROVED_FIXED";
+  const fixedBlocked = reasons.length > 0;
+  const fixedAvailable = !fixedBlocked && fixedModes.some((m) => feasible[m]);
+  if (!fixedModes.length && supports("ENQUIRE_QUOTE") && !quoteEligible) reasons.push("QUOTE_BELOW_CORE");
+  const outcome = fixedAvailable ? "APPROVED_FIXED" : quoteEligible ? "QUOTE_ONLY" : "PRICE_REVIEW_REQUIRED";
+
   const modes = {
-    ADVANCE_PAY_BOOK: fixedOn && supports("ADVANCE_PAY_BOOK"),
-    ZERO_PAY_BOOK: fixedOn && supports("ZERO_PAY_BOOK"),
-    ENQUIRE_QUOTE: outcome !== "PRICE_REVIEW_REQUIRED" && quoteEligible,
+    ADVANCE_PAY_BOOK: !fixedBlocked && supports("ADVANCE_PAY_BOOK") && Boolean(feasible.ADVANCE_PAY_BOOK),
+    ZERO_PAY_BOOK: !fixedBlocked && supports("ZERO_PAY_BOOK") && Boolean(feasible.ZERO_PAY_BOOK),
+    ENQUIRE_QUOTE: quoteEligible,
   };
 
   return { outcome, reasonCodes: reasons, warnings, modes, baseline, snapshot, demand };

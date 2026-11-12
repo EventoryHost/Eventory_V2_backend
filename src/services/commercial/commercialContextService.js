@@ -14,6 +14,7 @@ import { packageBand, pci as computePci } from "./marketEngine.js";
  *   - criticality: EM-approved value, else the legacy per-vendor-type map
  *   - Vendor B2B: Package.commercial.vendorB2BPrice, else the package's
  *     effective price (what the vendor already charges through Eventory)
+ *     with any included GST taken out (splitVendorPrice)
  *   - booking modes: Package.commercial.bookingModesSupported, else derived
  *     from bookingSettings (Enquiry -> Quote, Free -> Zero Pay, Token -> Advance)
  */
@@ -64,8 +65,43 @@ export function packageCriticality(pkg) {
   return pkg?.commercial?.eventoryApprovedCriticality ?? LEGACY_CRITICALITY[pkg?.vendorType] ?? null;
 }
 
-export function packageVendorB2B(pkg) {
-  return pkg?.commercial?.vendorB2BPrice ?? getEffectivePackagePrice(pkg);
+/**
+ * Splits a vendor price into the PRE-GST Vendor B2B (PRD §6.2) and the
+ * vendor's GST, using the same rule the cart applies (cartPricingService
+ * computeGst): GST only when the vendor has a GSTIN AND the package sets a
+ * rate. A gstInclusive price has the GST taken OUT of it, an exclusive one
+ * has it added on top, so the engine never treats GST as vendor service value.
+ */
+export function splitVendorPrice(price, pkg, vendor) {
+  const charges = pkg?.step3_policiesAndCharges || {};
+  const rate = Number(charges.gstRatePercent);
+  if (!vendor?.gstNumber || !(rate > 0) || !(price > 0)) {
+    return { vendorB2B: round2(price || 0), vendorGst: 0 };
+  }
+  if (charges.gstInclusive) {
+    const vendorB2B = round2(price / (1 + rate / 100));
+    return { vendorB2B, vendorGst: round2(price - vendorB2B) };
+  }
+  return { vendorB2B: round2(price), vendorGst: round2((price * rate) / 100) };
+}
+
+/**
+ * The package's own pre-GST Vendor B2B. A vendor-entered vendorB2BPrice is
+ * already pre-GST by definition; the fallback (the package's effective
+ * price) goes through splitVendorPrice.
+ */
+export function packageVendorB2B(pkg, vendor) {
+  if (pkg?.commercial?.vendorB2BPrice != null) return pkg.commercial.vendorB2BPrice;
+  return splitVendorPrice(getEffectivePackagePrice(pkg), pkg, vendor).vendorB2B;
+}
+
+/** Package-level vendor GST to go with packageVendorB2B (previews, publication). */
+export function packageVendorGst(pkg, vendor) {
+  if (pkg?.commercial?.vendorB2BPrice != null) {
+    const rate = Number(pkg?.step3_policiesAndCharges?.gstRatePercent);
+    return vendor?.gstNumber && rate > 0 ? round2((pkg.commercial.vendorB2BPrice * rate) / 100) : 0;
+  }
+  return splitVendorPrice(getEffectivePackagePrice(pkg), pkg, vendor).vendorGst;
 }
 
 export function packageBookingModes(pkg) {
@@ -89,10 +125,10 @@ export function defaultBookingMode(pkg) {
 export function buildBaseline({ pkg, vendor, rules, vendorB2B }) {
   const demand = resolveVendorDemand(vendor, rules);
   const criticality = packageCriticality(pkg);
-  const b2b = round2(vendorB2B ?? packageVendorB2B(pkg));
+  const b2b = round2(vendorB2B ?? packageVendorB2B(pkg, vendor));
   const c = pkg?.commercial || {};
   // PCI is a property of the package price, not of a line's add-ons.
-  const pciResult = computePci(packageVendorB2B(pkg), c.b2cPriceVerified ? c.verifiedVendorB2CPrice : null, rules);
+  const pciResult = computePci(packageVendorB2B(pkg, vendor), c.b2cPriceVerified ? c.verifiedVendorB2CPrice : null, rules);
 
   return {
     demand,
@@ -120,11 +156,13 @@ export function buildEngineVendor(vendor, { vendorGst } = {}) {
 }
 
 /** Publication-engine package shape from a stored Package. */
-export function publicationPackage(pkg) {
+export function publicationPackage(pkg, vendor) {
   const c = pkg?.commercial || {};
   return {
     eventoryApprovedCriticality: packageCriticality(pkg),
-    vendorB2BPrice: packageVendorB2B(pkg),
+    vendorB2BPrice: packageVendorB2B(pkg, vendor),
+    vendorGst: packageVendorGst(pkg, vendor),
+    negotiationMode: c.negotiationMode ?? "NONE",
     b2cPriceVerified: c.b2cPriceVerified,
     verifiedVendorB2CPrice: c.verifiedVendorB2CPrice,
     marketPriceLow: c.marketPriceLow,
