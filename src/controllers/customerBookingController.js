@@ -19,6 +19,11 @@ import { round2 } from "../utils/money.js";
 import { raiseBookingIssue } from "../services/bookingIssueService.js";
 import { cancellationTerms } from "../utils/cancellationTerms.js";
 import { notifyBookingCancelled } from "../services/chatSlackNotifier.js";
+import {
+  contextFromDeal,
+  notifyVendor,
+  resolveVendorActions,
+} from "../services/vendorNotificationService.js";
 
 /**
  * "My Bookings" dashboard — Phase 5 Step 20. Pure read-only projection over
@@ -430,14 +435,17 @@ export const cancelBooking = async (req, res) => {
       console.error(`[cancelBooking] Failed to release slot for package ${booking.packageId}:`, err.message);
     }
 
-    // The team hears about it on Slack (the refund to process); there's
-    // still no vendor-side notification beyond the booking's own status.
+    // The team hears about it on Slack (the refund to process); the vendor
+    // in their inbox. Nothing is left for the vendor to act on.
     notifyBookingCancelled(booking).catch((err) =>
       console.error(`[cancelBooking] Slack notify failed for ${booking.bookingId}:`, err.message)
     );
-    console.warn(
+    resolveVendorActions(booking.vendorId, booking.bookingId).then(() =>
+      notifyVendor("booking.cancelledByCustomer", contextFromDeal(booking))
+    );
+    console.info(
       `[cancelBooking] Booking ${booking.bookingId} (vendor ${booking.vendorId}) cancelled by customer ${req.customer._id}. ` +
-        `Refund estimate: ${refundEstimate.amount}. No vendor/admin notification sent — no notification system exists yet.`
+        `Refund estimate: ${refundEstimate.amount}.`
     );
 
     return res.status(200).json({
@@ -512,6 +520,12 @@ export const raiseIssue = async (req, res) => {
       return res.status(result.code).json({ status: "FAILED", message: result.error });
     }
     await booking.save();
+
+    notifyVendor("support.issueReported", {
+      ...contextFromDeal(booking),
+      // The customer's own words; the category ("Items") reads badly alone.
+      issueText: result.issue?.description?.replace(/[.\s]+$/, "").slice(0, 120) || null,
+    });
 
     return res.status(201).json({ status: "SUCCESS", message: "Issue raised", issue: result.issue });
   } catch (error) {
@@ -657,10 +671,13 @@ export const acceptProposal = async (req, res) => {
       }
     }
 
-    // No notification system exists in this codebase yet — logged so the
-    // answer is visible server-side, same as cancelBooking.
-    console.warn(
-      `[acceptProposal] Booking ${booking.bookingId} (vendor ${booking.vendorId}): customer accepted the proposal${reconfirming ? " — booking confirmed again" : " — awaiting vendor confirmation"}. No vendor notification sent — no notification system exists yet.`
+    // The proposal they were answering is settled; the new row says what's
+    // next (confirm, or nothing when it re-confirmed itself).
+    resolveVendorActions(booking.vendorId, booking.bookingId, [
+      "booking.changesRequested",
+      "booking.customisationRequested",
+    ]).then(() =>
+      notifyVendor("booking.proposalAccepted", { ...contextFromDeal(booking), reconfirmed: reconfirming })
     );
 
     return res.status(200).json({
@@ -719,9 +736,12 @@ export const addCustomizeRequests = async (req, res) => {
     booking.status = "InDiscussion";
     await booking.save();
 
-    console.warn(
-      `[addCustomizeRequests] Booking ${booking.bookingId} (vendor ${booking.vendorId}): customer sent ${req.body.requests.length} more request(s). No vendor notification sent — no notification system exists yet.`
-    );
+    // On a booking the vendor already confirmed this is a customisation of
+    // a done deal, not part of the original negotiation — its own alert.
+    notifyVendor(booking.confirmedAt ? "booking.customisationRequested" : "booking.changesRequested", {
+      ...contextFromDeal(booking),
+      requestCount: req.body.requests.length,
+    });
 
     return res.status(201).json({
       status: "SUCCESS",
@@ -772,11 +792,10 @@ export const addDayRequest = async (req, res) => {
     booking.lastCustomerActivityAt = now;
     await booking.save();
 
-    // No notification system exists in this codebase yet — logged so the
-    // request is visible server-side, same as addCustomizeRequests.
-    console.warn(
-      `[addDayRequest] Booking ${booking.bookingId} (vendor ${booking.vendorId}): customer sent a day request. No vendor notification sent — no notification system exists yet.`
-    );
+    notifyVendor("eventDay.dayRequest", {
+      ...contextFromDeal(booking),
+      requestText: req.body.text,
+    });
 
     return res.status(201).json({
       status: "SUCCESS",

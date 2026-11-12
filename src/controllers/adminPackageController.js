@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { notifyPackageGroup } from "../services/vendorNotificationService.js";
 import Package, { PACKAGE_STATUSES } from "../models/Package.js";
 import Vendor from "../models/Vendor.js";
 import {
@@ -308,6 +309,9 @@ export const approvePackage = async (req, res) => {
 
     const result = await approveGroup(groupFilter, { by: req.body?.reviewedBy });
     const data = await Package.find(groupFilter).lean();
+    notifyPackageGroup("package.approved", groupFilter, {
+      resolveActions: ["package.changesNeeded", "package.documentsRequired"],
+    });
 
     res.status(200).json({
       success: true,
@@ -330,6 +334,35 @@ export const approvePackage = async (req, res) => {
  * back the review already built through review-item. Recoverable: the vendor
  * edits and resubmits. A terminal refusal is rejectPackage.
  */
+const DOC_LABELS = {
+  fssai: "your FSSAI licence",
+  tradeLicense: "your trade licence",
+  gst: "your GST certificate",
+};
+
+/**
+ * Tells the vendor their package came back from review. When every open row
+ * only asks for a business document, it is "Documents required" (opens the
+ * uploader); anything else to fix makes it "Changes needed". Never throws.
+ */
+const notifyReviewRaised = async (groupFilter, reason) => {
+  try {
+    const open = ((await getGroupAction(groupFilter))?.items || []).filter((i) => i.status === "Rejected");
+    const docs = open.filter((i) => i.type === "DocumentRequired");
+    if (open.length && docs.length === open.length) {
+      const labels = [...new Set(docs.map((d) => DOC_LABELS[d.docKey] || d.label).filter(Boolean))];
+      return notifyPackageGroup("package.documentsRequired", groupFilter, {
+        reason,
+        documentLabels: labels.length ? labels.join(" and ") : null,
+      });
+    }
+    return notifyPackageGroup("package.changesNeeded", groupFilter, { reason });
+  } catch (error) {
+    console.error("[notify] package review raised failed:", error.message);
+    return null;
+  }
+};
+
 export const raiseAction = async (req, res) => {
   try {
     const { error, action } = parseAction(req.body);
@@ -345,6 +378,7 @@ export const raiseAction = async (req, res) => {
       by: req.body?.reviewedBy,
     });
     const data = await Package.find(groupFilter).lean();
+    notifyReviewRaised(groupFilter, action?.summary?.trim() || null);
 
     res.status(200).json({
       success: true,
@@ -463,6 +497,7 @@ export const requestFix = async (req, res) => {
       by: req.body?.reviewedBy || req.adminUser?.username || "Admin",
     });
     const data = await Package.find(groupFilter).lean();
+    notifyReviewRaised(groupFilter, actionSummary || null);
 
     res.status(200).json({
       success: true,
@@ -501,6 +536,10 @@ export const rejectPackage = async (req, res) => {
       by: req.body?.reviewedBy || req.adminUser?.username || "Admin",
     });
     const data = await Package.find(groupFilter).lean();
+    notifyPackageGroup("package.rejected", groupFilter, {
+      reason: reason?.summary?.trim() || null,
+      resolveActions: ["package.approved", "package.changesNeeded", "package.documentsRequired"],
+    });
 
     res.status(200).json({
       success: true,
@@ -698,6 +737,7 @@ export const adminGoLive = async (req, res) => {
 
     const by = req.body?.by || req.adminUser?.username || "Admin";
     const result = await goLiveGroup(groupFilter, { by });
+    notifyPackageGroup("package.live", groupFilter, { resolveActions: ["package.approved"] });
 
     res.status(200).json({
       success: true,

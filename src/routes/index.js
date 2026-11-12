@@ -25,6 +25,7 @@ import enquiryRoutes from "./enquiryRoutes.js";
 import transactionRoutes from "./transactionRoutes.js";
 import redirectRoutes from "./redirectRoutes.js";
 import groundRoutes from "./groundRoutes.js";
+import vendorNotificationRoutes from "./vendorNotificationRoutes.js";
 
 // Admin Routes
 import adminVendorRoutes from "./adminVendorRoutes.js";
@@ -34,6 +35,8 @@ import adminTemplateRoutes from "./adminTemplateRoutes.js";
 import adminDashboardRoutes from "./adminDashboardRoutes.js";
 import adminHelpRequestRoutes from "./adminHelpRequestRoutes.js";
 import adminCommercialRoutes from "./adminCommercialRoutes.js";
+import adminSupportChatRoutes from "./adminSupportChatRoutes.js";
+import supportChatRoutes from "./supportChatRoutes.js";
 import { slackEvents, slackInteractions } from "../controllers/slackController.js";
 
 /**
@@ -111,6 +114,7 @@ router.use("/calendar", calendarRoutes);
 router.use("/bookings", bookingRoutes);
 router.use("/enquiries", enquiryRoutes);
 router.use("/transactions", transactionRoutes);
+router.use("/notifications", vendorNotificationRoutes);
 router.use("/redirect", redirectRoutes);
 // Public ground-contact view (no auth) — see groundRoutes.js.
 router.use("/ground", groundRoutes);
@@ -123,6 +127,8 @@ router.use("/admin/templates", adminTemplateRoutes);
 router.use("/admin/dashboard", adminDashboardRoutes);
 router.use("/admin/help-requests", adminHelpRequestRoutes);
 router.use("/admin/commercial", adminCommercialRoutes);
+router.use("/admin/support-chats", adminSupportChatRoutes);
+router.use("/support/chats", supportChatRoutes);
 
 // Slack's Interactivity Request URL ("Mark resolved" on help ticket posts):
 // https://<backend host>/api/slack/interactions

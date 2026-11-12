@@ -2,9 +2,12 @@ import http from "http";
 import app from "./src/app.js";
 import connectDB from "./src/config/db.js";
 import { initSocket } from "./src/config/socket.js";
+import { startNotificationScheduler } from "./src/services/notificationScheduler.js";
 import { startTierScheduler } from "./src/services/commercial/tierScheduler.js";
 import dotenv from "dotenv";
 import os from "os";
+import { startAccountPurgeWorker } from "./src/jobs/accountPurgeWorker.js";
+import { startPackagePurgeWorker } from "./src/jobs/packagePurgeWorker.js";
 
 // Load environment variables
 dotenv.config();
@@ -36,7 +39,11 @@ connectDB()
         `🚀 Server running in ${process.env.NODE_ENV || "development"} mode on port ${PORT}`
       );
       console.log(`📱 Local network: http://${localIp}:${PORT}`);
+      startAccountPurgeWorker();
+      startPackagePurgeWorker();
     });
+    // Time-based vendor reminders (response windows, setup, overdue payments).
+    startNotificationScheduler();
   })
   .catch((err) => {
     console.error("❌ Failed to connect to database:", err.message);

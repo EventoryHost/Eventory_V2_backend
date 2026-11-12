@@ -165,6 +165,16 @@ const CheckoutSessionSchema = new mongoose.Schema(
       number: { type: String, trim: true, uppercase: true, default: null },
     },
 
+    // Browser identifiers captured at session creation so the backend can send
+    // a server-side Meta Conversions API Purchase later (the payment webhook
+    // has no browser). All optional.
+    tracking: {
+      fbp: { type: String, trim: true, maxlength: 500, default: null },
+      fbc: { type: String, trim: true, maxlength: 500, default: null },
+      clientIp: { type: String, trim: true, maxlength: 100, default: null },
+      userAgent: { type: String, trim: true, maxlength: 500, default: null },
+    },
+
     // The frozen quote from computeQuoteForLines at (re)lock time — Mixed,
     // same reasoning as elsewhere in this codebase for a computed,
     // shape-varying payload (e.g. Package's festivals.details): this is a

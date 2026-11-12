@@ -12,7 +12,10 @@ import { snapshotDeliverables } from "../utils/packageDeliverables.js";
 import { packageCoverImage } from "../utils/packageCoverImage.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 import { releaseSlotIfUnused } from "../utils/releaseSlot.js";
-import { raiseBookingIssue } from "../services/bookingIssueService.js";import {
+import { raiseBookingIssue } from "../services/bookingIssueService.js";
+import { resolveVendorActions } from "../services/vendorNotificationService.js";
+import { BOOKING_RESPONSE_TYPES } from "../constants/vendorNotificationTypes.js";
+import {
   applyPricingBreakdown,
   withPricingBreakdown,
 } from "../utils/pricingBreakdown.js";
@@ -432,6 +435,7 @@ export const acceptBooking = async (req, res) => {
     booking.status = "Confirmed";
     booking.confirmedAt = booking.confirmedAt || new Date();
     await booking.save();
+    resolveVendorActions(booking.vendorId, booking.bookingId, BOOKING_RESPONSE_TYPES);
 
     await syncPackageBooked(booking.packageId, booking.eventDate);
 
@@ -465,6 +469,7 @@ export const declineBooking = async (req, res) => {
     booking.declinedAt = new Date();
     booking.declineReason = req.body?.reason?.trim() || null;
     await booking.save();
+    resolveVendorActions(booking.vendorId, booking.bookingId);
 
     return res.status(200).json({
       status: "SUCCESS",
@@ -498,6 +503,7 @@ export const cancelBooking = async (req, res) => {
       req.body?.cancelledBy === "Customer" ? "Customer" : "Vendor";
     booking.cancellationReason = req.body?.reason?.trim() || null;
     await booking.save();
+    resolveVendorActions(booking.vendorId, booking.bookingId);
 
     // Unconditional as of 2026-09-25 — this used to be gated on
     // `previousStatus === "Confirmed"`, on the assumption that only an
@@ -834,6 +840,12 @@ export const updateBooking = async (req, res) => {
     }
 
     await booking.save();
+    // The vendor answered the requests; a new proposal is with the customer.
+    resolveVendorActions(booking.vendorId, booking.bookingId, [
+      "booking.newWithRequests",
+      "booking.changesRequested",
+      "booking.customisationRequested",
+    ]);
 
     if (confirm) await syncPackageBooked(booking.packageId, booking.eventDate);
 
@@ -883,6 +895,7 @@ export const completeBooking = async (req, res) => {
 
     booking.status = "Completed";
     await booking.save();
+    resolveVendorActions(booking.vendorId, booking.bookingId);
 
     return res.status(200).json({
       status: "SUCCESS",

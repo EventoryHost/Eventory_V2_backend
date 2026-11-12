@@ -307,6 +307,16 @@ export const createCheckoutSession = async (req, res) => {
       email: req.customer.email || null,
     };
 
+    // trust proxy hops default to 0, so req.ip would be the load balancer —
+    // read the original client from x-forwarded-for first.
+    const forwarded = String(req.headers["x-forwarded-for"] || "").split(",")[0].trim();
+    const tracking = {
+      fbp: req.body.tracking?.fbp || null,
+      fbc: req.body.tracking?.fbc || null,
+      clientIp: forwarded || req.socket?.remoteAddress || null,
+      userAgent: req.headers["user-agent"] || null,
+    };
+
     const session = new CheckoutSession({
       customerId: req.customer._id,
       source,
@@ -315,6 +325,7 @@ export const createCheckoutSession = async (req, res) => {
       bookingNote,
       coupon,
       contactDetails,
+      tracking,
       status: "Active",
       expiresAt: new Date(Date.now() + SESSION_TTL_MS),
     });

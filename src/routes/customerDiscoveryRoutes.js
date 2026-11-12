@@ -14,6 +14,7 @@ import {
   getServiceableCities,
   getVendorDetail,
   getVendorReviews,
+  getVendorsTotalCount,
 } from "../controllers/customerDiscoveryController.js";
 import { publicBrowseLimiter } from "../middlewares/rateLimiters.js";
 import { recordView } from "../controllers/packageAnalyticsController.js";
@@ -403,6 +404,23 @@ router.get("/vendors", publicBrowseLimiter, validateRequest(browseVendorsQuerySc
  *       200: { description: Available filter facets and sort options }
  */
 router.get("/vendors/filters", publicBrowseLimiter, getVendorFilters);
+
+/**
+ * @swagger
+ * /api/customer/vendors/total-count:
+ *   get:
+ *     summary: Total number of vendors ever registered on Eventory
+ *     description: |
+ *       Public, read-only. UNFILTERED — includes deactivated, Unlive and
+ *       incomplete-onboarding vendors, unlike every other vendor read in
+ *       this router. Exists only for the Become a Vendor hero's
+ *       "Total Number of Vendors on Eventory" stat, which is meant to
+ *       brag about sign-ups, not how many are currently customer-browsable.
+ *     tags: [Customer Discovery]
+ *     responses:
+ *       200: { description: Total vendor count }
+ */
+router.get("/vendors/total-count", publicBrowseLimiter, getVendorsTotalCount);
 
 /**
  * @swagger

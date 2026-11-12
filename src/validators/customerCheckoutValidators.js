@@ -88,6 +88,13 @@ export const createCheckoutSessionSchema = z
     specialRequest: z.string().trim().max(500).optional(),
     noteAttachments: noteAttachmentsSchema,
     quantity: z.coerce.number().int().min(1).default(1),
+    // Meta browser identifiers for the server-side Conversions API; unknown keys are stripped.
+    tracking: z
+      .object({
+        fbp: z.string().trim().max(500).optional(),
+        fbc: z.string().trim().max(500).optional(),
+      })
+      .optional(),
   })
   .superRefine((data, ctx) => {
     if (data.source === "direct" && !data.packageId) {
