@@ -12,8 +12,9 @@ import {
   buildBaseline,
   buildEngineVendor,
   defaultBookingMode,
-  packageVendorB2B,
+  splitVendorPrice,
 } from "./commercial/commercialContextService.js";
+import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 
 /**
  * Cart pricing/due-now calculation — Phase 3 Step 14. This is the
@@ -241,8 +242,10 @@ export async function computeQuoteForLines(lines, discount = 0, { customerId = n
     // whenever packagePricing.price was already set (most packages outside
     // Decorator/Caterer), undercharging every quote with one configured.
     // Package.commercial.vendorB2BPrice when the vendor has set one (PRD
-    // §6.2), else the same effective price as before.
-    const currentPrice = packageVendorB2B(pkg);
+    // §6.2) — always pre-GST — else the same effective price as before,
+    // which follows the package's own gstInclusive setting.
+    const explicitB2B = pkg.commercial?.vendorB2BPrice != null;
+    const currentPrice = explicitB2B ? pkg.commercial.vendorB2BPrice : getEffectivePackagePrice(pkg);
     const quantity = item.quantity || 1;
     const addonsTotal = (item.selectedAddOns || []).reduce((sum, a) => sum + a.price * a.quantity, 0);
     const chargeableItemsTotal = (item.selectedItems || []).filter((s) => s.isChargeable).reduce((sum, s) => sum + (s.price || 0), 0);
@@ -251,11 +254,9 @@ export async function computeQuoteForLines(lines, discount = 0, { customerId = n
 
     const vendor = vendorById.get(String(pkg.vendorId)) || vendorById.get(String(item.vendorId));
     const vendorHasGst = Boolean(vendor?.gstNumber);
-    const { gstInclusive, gstRatePercent, gstAmount } = computeGst(
-      lineSubtotal,
-      pkg.step3_policiesAndCharges,
-      vendorHasGst
-    );
+    // A vendor-entered B2B price is pre-GST, so its GST is always added on top.
+    const gstCharges = explicitB2B ? { ...pkg.step3_policiesAndCharges, gstInclusive: false } : pkg.step3_policiesAndCharges;
+    const { gstInclusive, gstRatePercent, gstAmount } = computeGst(lineSubtotal, gstCharges, vendorHasGst);
     // gstAmount is null both when GST isn't configured AND when it's
     // inclusive (see computeGst) — either way, nothing to add on top.
     const lineTotalInclGst = gstAmount == null ? lineSubtotal : round2(lineSubtotal + gstAmount);
@@ -273,14 +274,19 @@ export async function computeQuoteForLines(lines, discount = 0, { customerId = n
     // what's actually charged.
     const milestones = computeLineMilestones(lineTotalInclGst, pkg, item.eventDetails?.date);
 
-    // Commercial Engine — Vendor B2B for the line is its pre-GST subtotal
-    // (package price × quantity + add-ons + chargeable items). Vendor GST is
-    // the amount already priced above, so gstInclusive packages add none.
+    // Commercial Engine — Vendor B2B for the line is its PRE-GST subtotal
+    // (package price × quantity + add-ons + chargeable items). When the price
+    // already includes the vendor's GST, the GST is taken out of it, so
+    // commission, fee, TCS and band are never computed on tax; the customer
+    // total (B2B + vendor GST) is still exactly lineTotalInclGst.
+    const { vendorB2B: lineB2B, vendorGst: lineVendorGst } = gstInclusive
+      ? splitVendorPrice(lineSubtotal, { step3_policiesAndCharges: gstCharges }, vendor)
+      : { vendorB2B: lineSubtotal, vendorGst: gstAmount || 0 };
     const bookingMode = defaultBookingMode(pkg);
-    const { baseline } = buildBaseline({ pkg, vendor, rules, vendorB2B: lineSubtotal });
+    const { baseline } = buildBaseline({ pkg, vendor, rules, vendorB2B: lineB2B });
     const priced = priceLine(
       {
-        vendor: buildEngineVendor(vendor, { vendorGst: gstAmount || 0 }),
+        vendor: buildEngineVendor(vendor, { vendorGst: lineVendorGst }),
         baseline,
         runtime: {
           bookingMode,

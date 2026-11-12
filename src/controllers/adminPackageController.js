@@ -280,7 +280,7 @@ export const getReviewQueueCount = async (req, res) => {
 // GET /api/admin/packages/:packageId
 export const getPackageDetails = async (req, res) => {
   try {
-    const pkgRaw = await Package.findById(req.params.packageId).lean();
+    const pkgRaw = await Package.findById(req.params.packageId).select("+commercial").lean();
     if (!pkgRaw) return res.status(404).json({ success: false, message: "Package not found" });
 
     const vendor = await Vendor.findOne({ id: pkgRaw.vendorId }).lean();
@@ -518,7 +518,9 @@ export const getPackageGroup = async (req, res) => {
   try {
     const packagesRaw = await Package.find(
       await buildGroupFilter(req.params.packageGroupId)
-    ).lean();
+    )
+      .select("+commercial")
+      .lean();
 
     const vendorIds = [...new Set(packagesRaw.map(p => p.vendorId))];
     const vendors = await Vendor.find({ id: { $in: vendorIds } }).lean();
@@ -540,15 +542,24 @@ export const getPackageGroup = async (req, res) => {
 // GET /api/admin/packages/all
 export const getAllPackages = async (req, res) => {
   try {
-    const { page = 1, limit = 10, packageStatus, vendorType, vendorId } = req.query;
+    const { page = 1, limit = 10, packageStatus, vendorType, vendorId, commercialOutcome } = req.query;
     const skip = (page - 1) * limit;
 
     const query = {};
     if (packageStatus) query.packageStatus = packageStatus;
     if (vendorType) query.vendorType = vendorType;
     if (vendorId) query.vendorId = vendorId;
+    // Commercial Engine publication outcome (APPROVED_FIXED / QUOTE_ONLY /
+    // PRICE_REVIEW_REQUIRED); "NEEDS_PRICE_REVIEW" = anything but fixed-price.
+    if (commercialOutcome === "NEEDS_PRICE_REVIEW") {
+      query["commercial.publicationOutcome"] = { $in: ["QUOTE_ONLY", "PRICE_REVIEW_REQUIRED"] };
+    } else if (commercialOutcome) {
+      query["commercial.publicationOutcome"] = commercialOutcome;
+    }
 
+    // Admin reads include the (select:false) commercial block.
     const packagesRaw = await Package.find(query)
+      .select("+commercial")
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit))

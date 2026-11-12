@@ -14,6 +14,9 @@ import { pctOf } from "./lookup.js";
  *   - commercial rate above ceiling -> capped at the ceiling (not needed economically)
  *   - ECONOMIC floor above ceiling  -> REVIEW_REQUIRED, never silently charged
  *
+ * Bands listed in rules.serviceFee.ceilingExemptBands (MICRO) have no
+ * ceiling at all — a business override of §10.6, see rules.v1.js.
+ *
  * Weak PCI (§10.7): fee = MAX(EconomicFloor, mode floor) — the customer is not
  * made to pay for a weak vendor B2B.
  *
@@ -53,7 +56,8 @@ export function serviceFee(p, rules) {
   const commercialFee = round2(pctOf(vendorB2B, commercialRate));
   const floorFee = economicFloor(p, rules);
   const modeFloorFee = round2(pctOf(vendorB2B, limits.floor));
-  const modeCeilingFee = round2(pctOf(vendorB2B, limits.ceiling));
+  const ceilingExempt = (rules.serviceFee.ceilingExemptBands ?? []).includes(p.band);
+  const modeCeilingFee = ceilingExempt ? Infinity : round2(pctOf(vendorB2B, limits.ceiling));
 
   const weakPci = pciBand === "WEAK";
   let fee;

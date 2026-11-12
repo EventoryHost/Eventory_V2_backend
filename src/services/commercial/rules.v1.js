@@ -170,7 +170,9 @@ export const RULES_V1 = {
 
   // ── §8 MCT ──────────────────────────────────────────────────────────────
   mct: {
-    MICRO: { rate: 7.0, minimum: 250 },
+    // No absolute floor for MICRO (business override of PRD §8's Rs 250,
+    // 2026-11-12): MCT is just 7% of B2B, however small the package.
+    MICRO: { rate: 7.0, minimum: 0 },
     ENTRY: { rate: 6.0, minimum: 350 },
     CORE: { rate: 5.5, minimum: 600 },
     GROWTH: { rate: 5.0, minimum: 825 },
@@ -226,12 +228,13 @@ export const RULES_V1 = {
       { min: 50000, step: 100 },
     ],
     trialBookings: 5,
-    // PRD §10 floor is MRER - VendorCommissionRevenue, read literally: during
-    // the trial that revenue is 0, so the customer fee must cover MRER alone.
-    // On small packages this can exceed the mode ceiling -> REVIEW_REQUIRED.
-    // true would count the SHADOW commission instead (Eventory funds the
-    // trial). Decided 2026-11-04: follow the PRD literally.
-    trialFloorUsesShadowCommission: false,
+    // PRD §10 floor is MRER - VendorCommissionRevenue. Read literally, the
+    // trial's 0 commission makes the customer fee cover MRER alone, which
+    // blocked every trial vendor's package under ~₹5,100. true = the floor
+    // counts the SHADOW commission, i.e. Eventory funds the trial and the
+    // customer pays the normal fee. Business override (2026-11-12) of the
+    // literal reading chosen on 2026-11-04.
+    trialFloorUsesShadowCommission: true,
   },
 
   // ── §10 Eventory Service Fee ────────────────────────────────────────────
@@ -251,6 +254,11 @@ export const RULES_V1 = {
       ZERO_PAY_BOOK: { floor: 5, ceiling: 12 },
       ENQUIRE_QUOTE: { floor: 6, ceiling: 15 },
     },
+    // Bands with no mode ceiling: the fee may rise as far as MRER needs.
+    // Business override of PRD §10.6 (2026-11-12): at MICRO prices the
+    // MCT minimum alone exceeds 10% of B2B, so with a ceiling no MICRO
+    // package could ever be booked at a fixed price.
+    ceilingExemptBands: ["MICRO"],
   },
 
   // ── §12 Booking modes ───────────────────────────────────────────────────
@@ -288,6 +296,9 @@ export const RULES_V1 = {
     "MIN_RATING_COUNT_5",
     "B2B_IS_PRE_GST",
     "BAND_LOWER_BOUND_INCLUSIVE",
+    "MICRO_NO_FEE_CEILING",
+    "MICRO_NO_MCT_MINIMUM",
+    "TRIAL_FLOOR_USES_SHADOW_COMMISSION",
   ],
 };
 
