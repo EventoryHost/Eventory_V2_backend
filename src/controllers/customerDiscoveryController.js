@@ -105,6 +105,30 @@ async function serviceFeePreview(pkg, date) {
  * Mutates a lean object in place; safe since these are throwaway response
  * objects, never re-saved.
  */
+/**
+ * Adds `variantCount` (how many Live, customer-visible packages share this
+ * package's packageGroupId — the tiers shown as "N variants" on package cards)
+ * to each package, in one query. packageGroupId is a String in the schema but
+ * a legacy raw ObjectId in real data (see utils/packageGroupFilter.js), so
+ * both forms are matched and grouped by their string value.
+ */
+async function attachVariantCounts(packages) {
+  const groupIds = [...new Set(packages.map((pkg) => (pkg.packageGroupId ? String(pkg.packageGroupId) : null)).filter(Boolean))];
+  if (groupIds.length === 0) return;
+  const matchValues = [
+    ...groupIds,
+    ...groupIds.filter((id) => mongoose.Types.ObjectId.isValid(id)).map((id) => new mongoose.Types.ObjectId(id)),
+  ];
+  const rows = await Package.aggregate([
+    { $match: { packageGroupId: { $in: matchValues }, packageStatus: "Live", ...(await visibleVendorIdClause()) } },
+    { $group: { _id: { $toString: "$packageGroupId" }, count: { $sum: 1 } } },
+  ]);
+  const counts = new Map(rows.map((row) => [row._id, row.count]));
+  packages.forEach((pkg) => {
+    pkg.variantCount = pkg.packageGroupId ? counts.get(String(pkg.packageGroupId)) ?? 1 : 1;
+  });
+}
+
 function normalizePackagePricing(pkg) {
   if (!pkg?.step3_policiesAndCharges) return pkg;
   if (!pkg.step3_policiesAndCharges.packagePricing) pkg.step3_policiesAndCharges.packagePricing = {};
@@ -342,6 +366,7 @@ export const browsePackages = async (req, res) => {
     );
 
     packages.forEach(normalizePackagePricing);
+    await attachVariantCounts(packages);
 
     return res.status(200).json({
       status: "SUCCESS",
@@ -457,6 +482,7 @@ export const getPopularPackages = async (req, res) => {
       })
     );
     packages.forEach(normalizePackagePricing);
+    await attachVariantCounts(packages);
 
     return res.status(200).json({ status: "SUCCESS", count: packages.length, usingFallback, packages });
   } catch (error) {
