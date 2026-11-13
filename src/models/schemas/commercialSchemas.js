@@ -58,6 +58,32 @@ export const PackageCommercialSchema = new mongoose.Schema(
   { _id: false }
 );
 
+/**
+ * Package.commercial keys an admin may edit as an ordinary package step
+ * (edit-step 9). Everything else on the block (publication outcome, mode
+ * eligibility, reason codes, baseline, version, reviewed-at/by) is written
+ * only by the commercial review itself.
+ */
+export const EDITABLE_PACKAGE_COMMERCIAL_KEYS = [
+  "vendorB2BPrice",
+  "vendorNormalB2CPrice",
+  "vendorFloorPrice",
+  "allowVendorSideNegotiation",
+  "vendorProposedCriticality",
+  "negotiationMode",
+  "bookingModesSupported",
+  "eventoryApprovedCriticality",
+  "b2cPriceVerified",
+  "verifiedVendorB2CPrice",
+  "marketPriceLow",
+  "marketPriceMedian",
+  "marketPriceHigh",
+  "marketBenchmarkSource",
+  "seasonBucket",
+  "packageScopeVerified",
+  "comparableScopeSignature",
+];
+
 /** Vendor.commercial — PRD §3 inputs, §5.2 behaviour counters, §5.6 tier state, §9.1 trial. */
 export const VendorCommercialSchema = new mongoose.Schema(
   {

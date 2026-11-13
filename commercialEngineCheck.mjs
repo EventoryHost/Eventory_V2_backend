@@ -10,6 +10,7 @@ import { preEventoryScore, demandTierFromScore, commercialCategory } from "./src
 import { vendorCommission } from "./src/services/commercial/commissionEngine.js";
 import { priceLine, priceAllModes, vendorSettlement } from "./src/services/commercial/pricingEngine.js";
 import { evaluatePublication } from "./src/services/commercial/publicationEngine.js";
+import { splitVendorPrice } from "./src/services/commercial/commercialContextService.js";
 
 let pass = 0;
 let fail = 0;
@@ -220,6 +221,62 @@ const weakMicro = evaluatePublication({
   pkg: { eventoryApprovedCriticality: "CRITICAL", vendorB2BPrice: 4000, b2cPriceVerified: true, verifiedVendorB2CPrice: 3800, marketPriceMedian: 5000 },
 });
 eq("weak PCI on MICRO → PRICE_REVIEW_REQUIRED", weakMicro.outcome, "PRICE_REVIEW_REQUIRED");
+
+// ── 6. GST-inclusive prices are split to pre-GST B2B ─────────────────────
+console.log("\n# GST split (splitVendorPrice)");
+const incl = { step3_policiesAndCharges: { gstInclusive: true, gstRatePercent: 18 } };
+const excl = { step3_policiesAndCharges: { gstInclusive: false, gstRatePercent: 18 } };
+const registered = { gstNumber: "07AAAAA0000A1Z5" };
+eq("inclusive + registered: B2B", splitVendorPrice(1200, incl, registered).vendorB2B, 1016.95);
+eq("inclusive + registered: GST", splitVendorPrice(1200, incl, registered).vendorGst, 183.05);
+eq("inclusive + unregistered: B2B is the full price", splitVendorPrice(1200, incl, {}).vendorB2B, 1200);
+eq("inclusive + unregistered: no GST", splitVendorPrice(1200, incl, {}).vendorGst, 0);
+eq("exclusive + registered: GST on top", splitVendorPrice(1200, excl, registered).vendorGst, 216);
+
+// ── 7. Publication catches packages no customer could book at a fixed price ──
+console.log("\n# Publication fee-ceiling check");
+const carBoot = evaluatePublication({
+  vendor: { ...rahulVendor, monetizationModel: "COMMISSION" },
+  pkg: { eventoryApprovedCriticality: "CRITICAL", vendorB2BPrice: 1200, bookingModesSupported: ["ADVANCE_PAY_BOOK"] },
+});
+// MICRO has no fee ceiling (business override), so the ₹1,200 package is bookable.
+eq("₹1,200 MICRO package → APPROVED_FIXED", carBoot.outcome, "APPROVED_FIXED");
+const microQuote = priceLine({
+  vendor: { monetizationModel: "COMMISSION" },
+  baseline: { vendorB2B: 1200, category: "CAT_2", pciBand: "NOT_AVAILABLE" },
+  runtime: { bookingMode: MODE.ADV, daysToEvent: 10 },
+});
+eq("₹1,200 MICRO checkout APPROVED", microQuote.status, "APPROVED");
+eq("₹1,200 MICRO fee covers MRER (no ceiling)", microQuote.serviceFee.fee >= microQuote.serviceFee.economicFloor, true);
+
+// A non-MICRO package still has its ceiling enforced at publication.
+const entryTooThin = evaluatePublication({
+  vendor: { ...rahulVendor, monetizationModel: "COMMISSION" },
+  pkg: { eventoryApprovedCriticality: "CRITICAL", vendorB2BPrice: 5000, bookingModesSupported: ["ADVANCE_PAY_BOOK"] },
+}, { ...R, serviceFee: { ...R.serviceFee, modeLimits: { ...R.serviceFee.modeLimits, ADVANCE_PAY_BOOK: { floor: 2, ceiling: 3 } } } });
+eq("ENTRY package over a (tightened) ceiling → PRICE_REVIEW_REQUIRED", entryTooThin.outcome, "PRICE_REVIEW_REQUIRED");
+eq("ENTRY reason FEE_CEILING_BREACH", entryTooThin.reasonCodes.includes("FEE_CEILING_BREACH"), true);
+
+// Trial floor counts the shadow commission: a trial vendor prices like a commission one.
+const trialSmall = evaluatePublication({
+  vendor: { ...rahulVendor, monetizationModel: "TRIAL" },
+  pkg: { eventoryApprovedCriticality: "CRITICAL", vendorB2BPrice: 4000, bookingModesSupported: ["ADVANCE_PAY_BOOK"] },
+});
+eq("₹4,000 trial vendor APPROVED_FIXED, no trial warning", [trialSmall.outcome, trialSmall.warnings.some((w) => w.startsWith("TRIAL_"))], ["APPROVED_FIXED", false]);
+const trialCheckout = priceLine({
+  vendor: { monetizationModel: "TRIAL", successfulBookingsCount: 0 },
+  baseline: { vendorB2B: 4000, category: "CAT_2", pciBand: "NOT_AVAILABLE" },
+  runtime: { bookingMode: MODE.ADV, daysToEvent: 10 },
+});
+eq("₹4,000 trial checkout APPROVED", trialCheckout.status, "APPROVED");
+eq("₹4,000 trial charges 0 commission", trialCheckout.commission.actual, 0);
+
+const quoteRescue = evaluatePublication({
+  vendor: { ...rahulVendor, monetizationModel: "COMMISSION" },
+  pkg: { eventoryApprovedCriticality: "CRITICAL", vendorB2BPrice: 12000, bookingModesSupported: ["ZERO_PAY_BOOK", "ENQUIRE_QUOTE"] },
+});
+eq("₹12,000 Zero Pay + Quote → APPROVED_FIXED", quoteRescue.outcome, "APPROVED_FIXED");
+eq("Rahul publication unchanged", pub.outcome, "APPROVED_FIXED");
 
 console.log(`\n${pass} passed, ${fail} failed`);
 if (failures.length) console.log(failures.join("\n"));
