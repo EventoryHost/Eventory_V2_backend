@@ -91,9 +91,10 @@ export function buildCustomerMessage(t) {
   return lines.join("\n").slice(0, 1800);
 }
 
+/** With no number on file, WhatsApp opens its contact picker with the message ready. */
 export function buildCustomerWhatsAppLink(t) {
   const number = toWhatsAppNumber(t.customerPhone);
-  return number ? `https://wa.me/${number}?text=${encodeURIComponent(buildCustomerMessage(t))}` : null;
+  return `https://wa.me/${number ?? ""}?text=${encodeURIComponent(buildCustomerMessage(t))}`;
 }
 
 // Slack mrkdwn treats &, < and > as control characters.
@@ -121,6 +122,7 @@ export function buildSlackPayload(t, { resolvable = false, threaded = false, wit
   const note = clean(t.note);
   const ticket = clean(t.ticket);
   const link = buildCustomerWhatsAppLink(t);
+  const hasNumber = Boolean(toWhatsAppNumber(t.customerPhone));
   const who = [clean(t.customerEmail), clean(t.customerCode)].filter(Boolean).map(esc).join(" · ");
   const raised = t.createdAt ? Math.floor(new Date(t.createdAt).getTime() / 1000) : null;
   // Header blocks cap plain text at 150 chars.
@@ -141,10 +143,9 @@ export function buildSlackPayload(t, { resolvable = false, threaded = false, wit
     ...(t.status ? [`${STATUS_PREFIX}${esc(t.status)}`] : []),
   ];
   const firstName = name?.split(/\s+/)[0] ?? "the customer";
+  // Always offered, whatever reply option the customer chose.
   const buttons = [
-    ...(link
-      ? [{ type: "button", style: "primary", text: { type: "plain_text", text: `💬 Message ${firstName} on WhatsApp`, emoji: true }, url: link }]
-      : []),
+    { type: "button", style: "primary", text: { type: "plain_text", text: `💬 Message ${firstName} on WhatsApp`, emoji: true }, url: link },
     ...(resolvable && ticket
       ? [
           {
@@ -169,8 +170,10 @@ export function buildSlackPayload(t, { resolvable = false, threaded = false, wit
       ...(t.urgent ? [{ type: "section", text: { type: "mrkdwn", text: "*Duty manager, please pick this up now.*" } }] : []),
       // Slack refuses a section over 3000 characters (a long transcript).
       { type: "section", text: { type: "mrkdwn", text: lines.join("\n").slice(0, 3000) } },
-      ...(link ? [] : [{ type: "context", elements: [{ type: "mrkdwn", text: "No mobile number on file, so there's no WhatsApp link." }] }]),
-      ...(buttons.length ? [{ type: "actions", elements: buttons }] : []),
+      ...(hasNumber
+        ? []
+        : [{ type: "context", elements: [{ type: "mrkdwn", text: "No mobile number on file: WhatsApp opens with the message ready, so pick the customer's chat." }] }]),
+      { type: "actions", elements: buttons },
       ...(threaded ? [{ type: "context", elements: [{ type: "mrkdwn", text: THREAD_HINT }] }] : []),
     ],
   };
