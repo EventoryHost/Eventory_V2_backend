@@ -12,12 +12,13 @@ import {
   serializeChat,
   serializeMessage,
 } from "../services/supportChatService.js";
+import { profileFieldName } from "../services/supportFlows/businessProfileHelpFlows.js";
 import { OPTION_IDS, OUTCOMES, selectOption, startFlow } from "../services/supportFlows/supportFlowEngine.js";
 import { resolveVendorRefId } from "../utils/resolveVendor.js";
 
 /**
  * Vendor side of the Help & Support chat (vendor app → Help on a package step,
- * the publish screen or a booking).
+ * the publish screen, a booking or a Business profile screen).
  * Every route runs behind requireVendorIdentity, so req.authVendorId is the
  * calling vendor and a chat is only ever looked up together with it.
  */
@@ -46,9 +47,51 @@ const bookingBelongsTo = async (bookingId, vendorId) => {
   return owner === vendorId;
 };
 
-const freshFlow = (chat, now) => {
-  const { lines, options } = startFlow(chat);
+const freshFlow = (chat, now, { returning = false } = {}) => {
+  const { lines, options } = startFlow(chat, { returning });
   return { transcript: lines.map((line) => ({ ...line, at: now })), options };
+};
+
+const chatPayload = async (chat) => ({ chat: serializeChat(chat), messages: await listMessages(chat.chatId) });
+
+/**
+ * A vendor keeps one Business profile chat. Help on the screen it is already
+ * on carries on; Help on another screen, or after it was closed, adds
+ * "Chat restarted for <screen>" and starts the bot again under the history.
+ */
+const openBusinessProfileChat = async (res, vendorId, context) => {
+  const topic = "business_profile";
+  const found = await SupportChat.findOne({ vendorId, topic }).sort({ createdAt: -1 });
+  const now = new Date();
+
+  if (!found) {
+    const fields = { topic, context };
+    const chat = await SupportChat.create({ chatId: newChatId(), vendorId, ...fields, ...freshFlow(fields, now) });
+    return res.status(201).json({ success: true, data: { chat: serializeChat(chat), messages: [] } });
+  }
+
+  const sameScreen = found.context?.profileField === context.profileField;
+  const restarts = found.status === "resolved" || (found.status === "automated" && !sameScreen);
+  if (!restarts) return res.json({ success: true, data: await chatPayload(found) });
+
+  const greetedAt = new Date(now.getTime() + 1);
+  const { transcript, options } = freshFlow({ topic, context }, greetedAt, { returning: true });
+  const chat = await SupportChat.findOneAndUpdate(
+    { _id: found._id, status: found.status, transcript: { $size: found.transcript.length } },
+    {
+      $set: { status: "automated", context, options, resolvedAt: null, resolvedBy: null },
+      $push: { transcript: { $each: transcript } },
+    },
+    { returnDocument: "after" }
+  );
+  if (!chat) return fail(res, 409, "This chat changed. Open Help again.");
+  await addMessage(chat.chatId, {
+    sender: "system",
+    event: "restarted",
+    text: `Chat restarted for ${profileFieldName(context.profileField)}`,
+    createdAt: now,
+  });
+  return res.json({ success: true, data: await chatPayload(chat) });
 };
 
 /**
@@ -61,6 +104,7 @@ export const openSupportChat = async (req, res) => {
   try {
     const vendorId = req.authVendorId;
     const { topic, context } = req.body;
+    if (topic === "business_profile") return await openBusinessProfileChat(res, vendorId, context);
     const step = topic === "package_setup" ? req.body.step : null;
     const packageId = req.body.packageId ?? null;
     const bookingId = topic === "booking" ? req.body.bookingId : null;
@@ -114,7 +158,7 @@ const OUTCOME_UPDATES = {
 };
 
 const OUTCOME_EVENTS = {
-  [OUTCOMES.resolved]: () => ({ event: "resolved", text: "Marked as resolved" }),
+  [OUTCOMES.resolved]: (_, note) => ({ event: "resolved", text: note }),
   [OUTCOMES.callRequested]: () => ({ event: "call_requested", text: "Support will call you" }),
   [OUTCOMES.ticket]: (ticketNumber) => ({ event: "ticket_opened", text: `Ticket #${ticketNumber} opened` }),
 };
@@ -149,12 +193,11 @@ export const selectSupportOption = async (req, res) => {
     );
     if (!updated) return fail(res, 409, "This chat changed. Open Help again.");
 
-    const event = OUTCOME_EVENTS[step.outcome]?.(ticketNumber);
+    const event = OUTCOME_EVENTS[step.outcome]?.(ticketNumber, step.note);
     if (event) await addMessage(updated.chatId, { sender: "system", ...event });
     if (step.outcome === OUTCOMES.ticket) emitToQueue(req, "chat:waiting", serializeChat(updated));
 
-    const messages = updated.status === "automated" ? [] : await listMessages(updated.chatId);
-    return res.json({ success: true, data: { chat: serializeChat(updated), messages } });
+    return res.json({ success: true, data: await chatPayload(updated) });
   } catch (error) {
     console.error("selectSupportOption error:", error);
     return fail(res, 500, "Could not send your reply");

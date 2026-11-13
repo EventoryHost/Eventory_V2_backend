@@ -2,10 +2,11 @@ export const answer = (id, label, text) => ({ id, label, answer: text, children:
 
 export const branch = (id, label, prompt, children) => ({ id, label, prompt, children });
 
-export const helpFlow = ({ fallbackSummary, topics, offersEndChat = false }) => ({
+export const helpFlow = ({ fallbackSummary, topics, endChat = null, tutorial = null }) => ({
   fallbackSummary,
   topics,
-  offersEndChat,
+  endChat,
+  tutorial,
 });
 
 export const findTopic = (topics, topicId) => {
