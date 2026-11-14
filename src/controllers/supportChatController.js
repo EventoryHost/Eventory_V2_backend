@@ -13,12 +13,14 @@ import {
   serializeMessage,
 } from "../services/supportChatService.js";
 import { profileFieldName } from "../services/supportFlows/businessProfileHelpFlows.js";
+import { documentFieldName } from "../services/supportFlows/documentHelpFlows.js";
 import { OPTION_IDS, OUTCOMES, selectOption, startFlow } from "../services/supportFlows/supportFlowEngine.js";
 import { resolveVendorRefId } from "../utils/resolveVendor.js";
 
 /**
  * Vendor side of the Help & Support chat (vendor app → Help on a package step,
- * the publish screen, a booking or a Business profile screen).
+ * the publish screen, a booking, a Business profile screen or a personal
+ * document screen).
  * Every route runs behind requireVendorIdentity, so req.authVendorId is the
  * calling vendor and a chat is only ever looked up together with it.
  */
@@ -54,13 +56,19 @@ const freshFlow = (chat, now, { returning = false } = {}) => {
 
 const chatPayload = async (chat) => ({ chat: serializeChat(chat), messages: await listMessages(chat.chatId) });
 
+const SCREEN_TOPICS = {
+  business_profile: { field: "profileField", nameOf: profileFieldName },
+  personal_documents: { field: "documentField", nameOf: documentFieldName },
+};
+
 /**
- * A vendor keeps one Business profile chat. Help on the screen it is already
- * on carries on; Help on another screen, or after it was closed, adds
- * "Chat restarted for <screen>" and starts the bot again under the history.
+ * A vendor keeps one chat per screen topic (Business profile, personal
+ * documents). Help on the screen it is already on carries on; Help on another
+ * screen, or after it was closed, adds "Chat restarted for <screen>" and
+ * starts the bot again under the history.
  */
-const openBusinessProfileChat = async (res, vendorId, context) => {
-  const topic = "business_profile";
+const openScreenChat = async (res, vendorId, topic, context) => {
+  const { field, nameOf } = SCREEN_TOPICS[topic];
   const found = await SupportChat.findOne({ vendorId, topic }).sort({ createdAt: -1 });
   const now = new Date();
 
@@ -70,7 +78,7 @@ const openBusinessProfileChat = async (res, vendorId, context) => {
     return res.status(201).json({ success: true, data: { chat: serializeChat(chat), messages: [] } });
   }
 
-  const sameScreen = found.context?.profileField === context.profileField;
+  const sameScreen = found.context?.[field] === context[field];
   const restarts = found.status === "resolved" || (found.status === "automated" && !sameScreen);
   if (!restarts) return res.json({ success: true, data: await chatPayload(found) });
 
@@ -88,7 +96,7 @@ const openBusinessProfileChat = async (res, vendorId, context) => {
   await addMessage(chat.chatId, {
     sender: "system",
     event: "restarted",
-    text: `Chat restarted for ${profileFieldName(context.profileField)}`,
+    text: `Chat restarted for ${nameOf(context[field])}`,
     createdAt: now,
   });
   return res.json({ success: true, data: await chatPayload(chat) });
@@ -104,7 +112,7 @@ export const openSupportChat = async (req, res) => {
   try {
     const vendorId = req.authVendorId;
     const { topic, context } = req.body;
-    if (topic === "business_profile") return await openBusinessProfileChat(res, vendorId, context);
+    if (SCREEN_TOPICS[topic]) return await openScreenChat(res, vendorId, topic, context);
     const step = topic === "package_setup" ? req.body.step : null;
     const packageId = req.body.packageId ?? null;
     const bookingId = topic === "booking" ? req.body.bookingId : null;

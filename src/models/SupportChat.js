@@ -3,9 +3,10 @@ import mongoose from "mongoose";
 /**
  * A vendor's Help & Support chat with the Event Manager team, opened from a
  * Package Setup step (topic package_setup), the publish screen
- * (topic publish_package), a booking (topic booking) or a Business profile
- * setup screen (topic business_profile) in the vendor app. A vendor has one
- * business_profile chat; Help on another profile screen restarts it there.
+ * (topic publish_package), a booking (topic booking), a Business profile
+ * setup screen (topic business_profile) or a personal document screen
+ * (topic personal_documents) in the vendor app. A vendor has one chat for each
+ * of the last two; Help on another screen of the same kind restarts it there.
  *
  * Lifecycle (status):
  *   automated       — the server is running the quick-reply flow
@@ -20,7 +21,7 @@ import mongoose from "mongoose";
  * what the app showed when Help was opened (step name, booking facts…).
  */
 export const SUPPORT_CHAT_STATUSES = ["automated", "call_requested", "waiting_for_em", "with_em", "resolved"];
-export const SUPPORT_CHAT_TOPICS = ["package_setup", "publish_package", "booking", "business_profile"];
+export const SUPPORT_CHAT_TOPICS = ["package_setup", "publish_package", "booking", "business_profile", "personal_documents"];
 
 const TranscriptLineSchema = new mongoose.Schema(
   {

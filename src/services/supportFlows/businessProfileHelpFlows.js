@@ -1,12 +1,6 @@
-import { answer, helpFlow } from "./helpTopics.js";
+import { answer, END_CHAT, helpFlow } from "./helpTopics.js";
 
 const TUTORIAL = { id: "business-profile", title: "Setting up your business profile" };
-
-const END_CHAT = {
-  label: "End chat",
-  reply: "Thanks for reaching out. This chat is now closed. Tap Help any time if you need us again.",
-  note: "Chat ended",
-};
 
 const CAPACITY_ANSWER = "It helps us recommend bookings that match your capacity.";
 

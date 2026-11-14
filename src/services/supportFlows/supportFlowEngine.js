@@ -1,5 +1,6 @@
 import { bookingHelpFlowFor } from "./bookingHelpFlows.js";
 import { businessProfileHelpFlowFor } from "./businessProfileHelpFlows.js";
+import { documentHelpFlowFor } from "./documentHelpFlows.js";
 import { findTopic } from "./helpTopics.js";
 import { packageHelpFlowFor } from "./packageHelpFlows.js";
 import { publishHelpFlowFor } from "./publishHelpFlows.js";
@@ -38,6 +39,8 @@ const flowFor = (chat) => {
       return bookingHelpFlowFor(context.booking ?? {});
     case "business_profile":
       return businessProfileHelpFlowFor(context.profileField);
+    case "personal_documents":
+      return documentHelpFlowFor(context.documentField);
     default:
       return packageHelpFlowFor({ step: chat.step ?? 0, vendorType: context.vendorType ?? null });
   }
@@ -52,6 +55,8 @@ const introOf = (chat, flow, { returning = false } = {}) => {
         return "Hi!";
       case "business_profile":
         return `${returning ? "Welcome back!" : "Hi!"} You're setting up your business profile,`;
+      case "personal_documents":
+        return `${returning ? "Welcome back!" : "Hi!"} You're verifying your personal documents,`;
       case "publish_package":
         return `Hi! You're about to publish ${name ? `“${name}”` : "your package"} (${context.variantName} variant).`;
       default:
