@@ -1,4 +1,6 @@
 import { bookingHelpFlowFor } from "./bookingHelpFlows.js";
+import { businessProfileHelpFlowFor } from "./businessProfileHelpFlows.js";
+import { documentHelpFlowFor } from "./documentHelpFlows.js";
 import { findTopic } from "./helpTopics.js";
 import { packageHelpFlowFor } from "./packageHelpFlows.js";
 import { publishHelpFlowFor } from "./publishHelpFlows.js";
@@ -21,7 +23,7 @@ export const OUTCOMES = {
 const WHAT_DO_YOU_NEED = "What do you need help with?";
 const DID_THAT_HELP = "Did that help?";
 const SOMETHING_ELSE_LABEL = "Something else";
-const END_CHAT = { id: OPTION_IDS.endChat, label: "End Chat" };
+const RESOLVED_NOTE = "Marked as resolved";
 const FEEDBACK_OPTIONS = [
   { id: OPTION_IDS.resolved, label: "Yes, that helps" },
   { id: OPTION_IDS.callMe, label: "Not quite, call me" },
@@ -35,18 +37,26 @@ const flowFor = (chat) => {
       return publishHelpFlowFor({ vendorType: context.vendorType ?? null });
     case "booking":
       return bookingHelpFlowFor(context.booking ?? {});
+    case "business_profile":
+      return businessProfileHelpFlowFor(context.profileField);
+    case "personal_documents":
+      return documentHelpFlowFor(context.documentField);
     default:
       return packageHelpFlowFor({ step: chat.step ?? 0, vendorType: context.vendorType ?? null });
   }
 };
 
-const introOf = (chat, flow) => {
+const introOf = (chat, flow, { returning = false } = {}) => {
   const context = chat.context ?? {};
   const name = (context.packageName ?? "").trim();
   const opening = (() => {
     switch (chat.topic) {
       case "booking":
         return "Hi!";
+      case "business_profile":
+        return `${returning ? "Welcome back!" : "Hi!"} You're setting up your business profile,`;
+      case "personal_documents":
+        return `${returning ? "Welcome back!" : "Hi!"} You're verifying your personal documents,`;
       case "publish_package":
         return `Hi! You're about to publish ${name ? `“${name}”` : "your package"} (${context.variantName} variant).`;
       default:
@@ -58,18 +68,21 @@ const introOf = (chat, flow) => {
 
 const optionOf = (topic) => ({ id: topic.id, label: topic.label });
 
+const endChatOptions = (flow) => (flow.endChat ? [{ id: OPTION_IDS.endChat, label: flow.endChat.label }] : []);
+
 const rootOptions = (flow) => [
   ...flow.topics.map(optionOf),
   { id: OPTION_IDS.ticket, label: SOMETHING_ELSE_LABEL },
-  ...(flow.offersEndChat ? [END_CHAT] : []),
+  ...endChatOptions(flow),
 ];
 
 const bot = (...texts) => texts.map((text) => ({ from: "bot", text }));
 const vendor = (text) => ({ from: "vendor", text });
+const tutorialLine = (tutorial) => ({ from: "bot", text: tutorial.title, tutorialId: tutorial.id });
 
-export const startFlow = (chat) => {
+export const startFlow = (chat, { returning = false } = {}) => {
   const flow = flowFor(chat);
-  return { lines: bot(introOf(chat, flow), WHAT_DO_YOU_NEED), options: rootOptions(flow) };
+  return { lines: bot(introOf(chat, flow, { returning }), WHAT_DO_YOU_NEED), options: rootOptions(flow) };
 };
 
 export const selectOption = (chat, optionId, { ticketNumber } = {}) => {
@@ -82,13 +95,12 @@ export const selectOption = (chat, optionId, { ticketNumber } = {}) => {
       return {
         outcome: OUTCOMES.resolved,
         options: [],
+        note: RESOLVED_NOTE,
         lines: [
           chose,
           ...bot("Great, glad that helped. You can reopen this chat any time from Help & Support."),
         ],
       };
-    case OPTION_IDS.endChat:
-      return { outcome: OUTCOMES.resolved, options: [], lines: [chose] };
     case OPTION_IDS.callMe:
       return {
         outcome: OUTCOMES.callRequested,
@@ -109,6 +121,10 @@ export const selectOption = (chat, optionId, { ticketNumber } = {}) => {
   }
 
   const flow = flowFor(chat);
+  if (optionId === OPTION_IDS.endChat) {
+    const { reply, note = RESOLVED_NOTE } = flow.endChat ?? {};
+    return { outcome: OUTCOMES.resolved, options: [], note, lines: [chose, ...(reply ? bot(reply) : [])] };
+  }
   if (optionId === OPTION_IDS.somethingElse) {
     return {
       outcome: OUTCOMES.continue,
@@ -122,13 +138,18 @@ export const selectOption = (chat, optionId, { ticketNumber } = {}) => {
   if (topic.children.length > 0) {
     return {
       outcome: OUTCOMES.continue,
-      options: [...topic.children.map(optionOf), ...(flow.offersEndChat ? [END_CHAT] : [])],
+      options: [...topic.children.map(optionOf), ...endChatOptions(flow)],
       lines: [chose, ...bot(topic.prompt)],
     };
   }
   return {
     outcome: OUTCOMES.continue,
     options: FEEDBACK_OPTIONS,
-    lines: [chose, ...bot(topic.answer, DID_THAT_HELP)],
+    lines: [
+      chose,
+      ...bot(topic.answer),
+      ...(flow.tutorial ? [tutorialLine(flow.tutorial)] : []),
+      ...bot(DID_THAT_HELP),
+    ],
   };
 };

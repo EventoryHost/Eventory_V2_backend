@@ -6,20 +6,22 @@ This document explains the whole support chat system in the backend: what it doe
 
 ## 1. What the system is
 
-A vendor using the vendor app can tap **Help** in three places:
+A vendor using the vendor app can tap **Help** in four places:
 
 | Where in the app | Chat `topic` | What the bot talks about |
 |---|---|---|
 | A Package Setup step (steps 1–4) | `package_setup` | Questions about that step (naming, event types, duration, setups…) |
 | The publish screen (step 6) | `publish_package` | What happens after "Send For Verification", tracking, changes |
 | Booking Details | `booking` | Questions for that booking's stage (new request, confirmed, event day, cancelled…) |
+| A Business profile setup screen (business name, point of contact, email, team size, bookings per year, experience, vendor type, events covered, service area, profile picture, brand description) | `business_profile` | Questions about that field. A vendor has **one** business profile chat; Help on another screen restarts it there (section 10.5) |
+| A personal document screen (Aadhaar number, PAN card, GSTIN, GST business details, bank details) | `personal_documents` | Questions about that document. Same rules as business profile: **one** chat per vendor that restarts on another screen (section 10.5) |
 
 Every chat has two parts:
 
 1. **Automated part (the bot).** The vendor taps quick-reply buttons. The **server** decides the bot's answer and the next buttons. Everything is saved.
 2. **Human part.** If the bot doesn't solve it, the vendor taps **"Something else"**. That opens a ticket (`TKT-1001`), and an Event Manager (EM) joins from the **admin panel** and chats with the vendor in free text, including photos.
 
-The vendor can also tap **"Not quite, call me"** (an EM calls them), or **"Yes, that helps"** / **"End Chat"** (the chat closes).
+The vendor can also tap **"Not quite, call me"** (an EM calls them), or **"Yes, that helps"** / **"End Chat"** (booking) / **"End chat"** (business profile) to close the chat.
 
 This is **not** the customer help desk. It does not use Slack. It is separate from the anonymous customer chatbot (`customerChatController.js`, `chat:` rooms).
 
@@ -72,6 +74,8 @@ This is **not** the customer help desk. It does not use Slack. It is separate fr
 | `src/services/supportFlows/packageHelpFlows.js` | Bot scripts for Package Setup steps 1–4 (step 2 setups are Decorator-only) |
 | `src/services/supportFlows/publishHelpFlows.js` | Bot scripts for the publish screen (Decorator vs other vendor types) |
 | `src/services/supportFlows/bookingHelpFlows.js` | Bot scripts for bookings, one set per booking stage, filled in with the booking's facts |
+| `src/services/supportFlows/businessProfileHelpFlows.js` | Bot scripts for the 11 Business profile screens, plus their "Recommended tutorial" card |
+| `src/services/supportFlows/documentHelpFlows.js` | Bot scripts for the 4 personal document screens (`aadhaar`, `pan`, `gstin`, `bankDetails`), plus their "Recommended tutorial" card |
 | `src/controllers/supportChatController.js` | Vendor routes: open, select, read messages, send message |
 | `src/controllers/adminSupportChatController.js` | EM routes: list, read one, join, reply, resolve |
 | `src/routes/supportChatRoutes.js` | Mounts vendor routes, forces a vendor token |
@@ -147,6 +151,7 @@ const TranscriptLineSchema = new mongoose.Schema(
     from: { type: String, enum: ["bot", "vendor"], required: true },
     text: { type: String, required: true },
     at: { type: Date, required: true },
+    tutorialId: { type: String, default: undefined }, // set on a "Recommended tutorial" card line
   },
   { _id: false }
 );
@@ -191,12 +196,12 @@ const SupportChatSchema = new mongoose.Schema(
 |---|---|
 | `chatId` | Public id, e.g. `SC20261111143012123-a1b2c3`: `SC` + IST date-time to the millisecond + a random suffix (`newChatId()`) |
 | `vendorId` | Owner, taken from the vendor's login token — never from the request body |
-| `topic` / `packageId` / `step` / `bookingId` | Where Help was opened. Together they find "the vendor's open chat for this place" |
+| `topic` / `packageId` / `step` / `bookingId` | Where Help was opened. Together they find "the vendor's open chat for this place". For `business_profile` and `personal_documents` only `vendorId` + `topic` are used: one chat per vendor for each |
 | `status` | See section 4 |
 | `ticketNumber` | `TKT-1001`… only after "Something else" |
 | `emId` / `emName` | The EM who joined |
-| `context` | What the app showed on screen when Help was opened (package name, step name, variant, booking facts). The bot's intro and booking answers are built from it |
-| `transcript` | The automated conversation, line by line, saved as it happens |
+| `context` | What the app showed on screen when Help was opened (package name, step name, variant, booking facts, `profileField` for business profile, or `documentField` for personal documents). The bot's intro and booking answers are built from it |
+| `transcript` | The automated conversation, line by line, saved as it happens. A line with `tutorialId` is a "Recommended tutorial" card; its `text` is the tutorial title |
 | `options` | The quick replies the vendor can tap **right now**. Empty once the bot is done |
 | `handedOverAt`, `callRequestedAt`, `resolvedAt`, `resolvedBy` | When / by whom the status changed |
 
@@ -265,7 +270,7 @@ SupportChatSchema.index({ ticketNumber: 1 }, { unique: true, sparse: true });   
 
 ```js
 export const SUPPORT_MESSAGE_SENDERS = ["vendor", "em", "system"];
-export const SUPPORT_SYSTEM_EVENTS = ["ticket_opened", "call_requested", "em_joined", "resolved"];
+export const SUPPORT_SYSTEM_EVENTS = ["ticket_opened", "call_requested", "em_joined", "resolved", "restarted"];
 
 const SupportMessageSchema = new mongoose.Schema(
   {
@@ -291,11 +296,12 @@ What goes here:
 | Ticket opened | `system` | `ticket_opened` | `Ticket #TKT-1001 opened` |
 | Call requested | `system` | `call_requested` | `Support will call you` |
 | EM joined | `system` | `em_joined` | `Riya joined the chat` |
-| Closed | `system` | `resolved` | `Marked as resolved` |
+| Closed | `system` | `resolved` | `Marked as resolved` ("End chat" on business profile: `Chat ended`) |
+| Business profile or documents chat restarted | `system` | `restarted` | `Chat restarted for Service area`, `Chat restarted for PAN card` |
 | Vendor message | `vendor` | `null` | text and/or up to 4 `imageUrls` |
 | EM message | `em` | `null` | text and/or up to 4 `imageUrls` |
 
-So: **the bot conversation lives in `support_chats.transcript`**, and **system lines + the human conversation live in `support_messages`**. The app shows the transcript first, then the messages in time order.
+So: **the bot conversation lives in `support_chats.transcript`**, and **system lines + the human conversation live in `support_messages`**. The app merges the two by time, so a restarted business profile chat reads: old session → "Marked as resolved" → "Chat restarted for …" → new greeting.
 
 Photos are not stored in MongoDB. The app uploads them to S3 through the upload service (folder `support-chat`) and sends only the `https://` URLs.
 
@@ -323,12 +329,14 @@ Scripts are plain data built with three helpers (`helpTopics.js`):
 ```js
 export const answer = (id, label, text) => ({ id, label, answer: text, children: [] });
 export const branch = (id, label, prompt, children) => ({ id, label, prompt, children });
-export const helpFlow = ({ fallbackSummary, topics, offersEndChat = false }) => ({ fallbackSummary, topics, offersEndChat });
+export const helpFlow = ({ fallbackSummary, topics, endChat = null, tutorial = null }) => ({ fallbackSummary, topics, endChat, tutorial });
 ```
 
 - **`answer`** — a button that, when tapped, gives a final answer, then "Did that help?".
 - **`branch`** — a button that asks a follow-up question and shows more buttons (its `children`).
-- **`helpFlow`** — one whole script: an intro sentence (`fallbackSummary`), the first buttons (`topics`), and whether "End Chat" is offered (only booking chats).
+- **`helpFlow`** — one whole script: an intro sentence (`fallbackSummary`), the first buttons (`topics`), and two optional extras:
+  - `endChat: { label, reply?, note? }` — offer an end-chat button. `label` is the button text, `reply` an optional bot line after it, `note` the system line saved when it closes (default `Marked as resolved`). Booking uses `{ label: "End Chat" }`. Business profile and personal documents use the shared `END_CHAT` from `helpTopics.js`: `{ label: "End chat", reply: "Thanks for reaching out. This chat is now closed. Tap Help any time if you need us again.", note: "Chat ended" }`.
+  - `tutorial: { id, title }` — after every answer, add a "Recommended tutorial" card line (`{ from: "bot", text: title, tutorialId: id }`) before "Did that help?". Business profile uses `{ id: "business-profile", title: "Setting up your business profile" }`, personal documents `{ id: "personal-document", title: "Verifying your personal documents" }`; the id matches the app's video tutorial catalogue.
 
 Example from `packageHelpFlows.js` (shortened):
 
@@ -355,6 +363,8 @@ Which script is used:
 | `package_setup` | `packageHelpFlowFor({ step, vendorType })` | `chat.step`; step 2 is different for `Decorator` |
 | `publish_package` | `publishHelpFlowFor({ vendorType })` | Decorator vs everyone else |
 | `booking` | `bookingHelpFlowFor(chat.context.booking)` | `booking.stage` (10 stages); text is filled with the booking's facts; some topics only appear when they apply (e.g. "What is a Free booking?" only for free bookings, "I cancelled by mistake" only when the vendor cancelled) |
+| `business_profile` | `businessProfileHelpFlowFor(chat.context.profileField)` | `profileField`, one of `businessName`, `pointOfContact`, `email`, `teamSize`, `bookingsPerYear`, `experience`, `vendorType`, `eventsCovered`, `serviceArea`, `brandDescription`, `profilePicture` |
+| `personal_documents` | `documentHelpFlowFor(chat.context.documentField)` | `documentField`, one of `aadhaar`, `pan`, `gstin`, `bankDetails` |
 
 ### 6.2 The engine (`supportFlowEngine.js`)
 
@@ -366,7 +376,7 @@ export const OPTION_IDS = {
   callMe: "end.callMe",           // "Not quite, call me"
   somethingElse: "end.somethingElse", // "Help with something else" → back to the first buttons
   ticket: "end.ticket",           // "Something else" → ticket
-  endChat: "end.endChat",         // "End Chat" (booking only)
+  endChat: "end.endChat",         // "End Chat" / "End chat" (scripts with endChat)
 };
 
 export const OUTCOMES = { continue: "continue", resolved: "resolved", callRequested: "call_requested", ticket: "ticket" };
@@ -386,30 +396,38 @@ The intro depends on the topic:
 ```js
 switch (chat.topic) {
   case "booking":         return "Hi!";   // + the booking's stage intro (fallbackSummary)
+  case "business_profile": return `${returning ? "Welcome back!" : "Hi!"} You're setting up your business profile,`;
+                          // + "on Service area: the areas you operate in." (fallbackSummary)
+  case "personal_documents": return `${returning ? "Welcome back!" : "Hi!"} You're verifying your personal documents,`;
+                          // + "on PAN card: your PAN card number." (fallbackSummary)
   case "publish_package": return `Hi! You're about to publish ${name ? `“${name}”` : "your package"} (${context.variantName} variant).`;
   default:                return `Hi! You're on Step ${chat.step} of ${context.totalSteps}, ${context.stepName}${name ? `, for “${name}”` : ""}.`;
 }
 ```
 
-The first buttons are the script's topics, then **"Something else"**, then **"End Chat"** if the script offers it:
+`startFlow(chat, { returning: true })` is used when a business profile chat restarts, to say "Welcome back!" instead of "Hi!".
+
+The first buttons are the script's topics, then **"Something else"**, then the end-chat button if the script has `endChat`:
 
 ```js
+const endChatOptions = (flow) => (flow.endChat ? [{ id: OPTION_IDS.endChat, label: flow.endChat.label }] : []);
+
 const rootOptions = (flow) => [
   ...flow.topics.map(optionOf),
   { id: OPTION_IDS.ticket, label: SOMETHING_ELSE_LABEL },
-  ...(flow.offersEndChat ? [END_CHAT] : []),
+  ...endChatOptions(flow),
 ];
 ```
 
-**`selectOption(chat, optionId, { ticketNumber })`** — called on every tap. It only accepts an option that is in `chat.options` right now, and only while `status === "automated"`; otherwise it returns `null`. It returns `{ outcome, lines, options }`:
+**`selectOption(chat, optionId, { ticketNumber })`** — called on every tap. It only accepts an option that is in `chat.options` right now, and only while `status === "automated"`; otherwise it returns `null`. It returns `{ outcome, lines, options }`, plus `note` (the system line text) when the chat closes:
 
 | Tapped | `outcome` | Lines added to the transcript | Next `options` |
 |---|---|---|---|
 | A `branch` topic | `continue` | vendor label, bot follow-up question | the branch's children (+ End Chat) |
-| An `answer` topic | `continue` | vendor label, bot answer, "Did that help?" | Yes, that helps · Not quite, call me · Help with something else |
+| An `answer` topic | `continue` | vendor label, bot answer, the tutorial card line (if the script has `tutorial`), "Did that help?" | Yes, that helps · Not quite, call me · Help with something else |
 | `end.somethingElse` | `continue` | vendor label, "Sure. Here's everything I can help with here.", "What else do you need help with?" | the first buttons again |
 | `end.resolved` | `resolved` | vendor label, "Great, glad that helped. You can reopen this chat any time from Help & Support." | none |
-| `end.endChat` | `resolved` | vendor label | none |
+| `end.endChat` | `resolved` | vendor label, then `endChat.reply` if set | none (`note` = `endChat.note`) |
 | `end.callMe` | `call_requested` | vendor label, "No problem. A support specialist will call you in the next 10 minutes." | none |
 | `end.ticket` | `ticket` | vendor label, "I've opened ticket #TKT-1001 for you. A support specialist will reply in this chat within 2 hours." | none |
 
@@ -460,12 +478,14 @@ So a vendor can never see or change another vendor's chat (they get `404`).
 
 ```js
 {
-  topic: "package_setup" | "publish_package" | "booking",   // default package_setup
+  topic: "package_setup" | "publish_package" | "booking" | "business_profile" | "personal_documents",   // default package_setup
   packageId?: string,
   step?: 1..20,                 // required for package_setup
   bookingId?: string,           // required for booking
   context: {
     vendorType?, packageName = "", totalSteps?, stepName?, variantName?,
+    profileField?,              // required for business_profile, e.g. "serviceArea"
+    documentField?,             // required for personal_documents, e.g. "pan"
     booking?: { bookingRef, stage, customerName, eventName, eventDate,
                 isFreeBooking, cancelledByCustomer, timeLeftToRespond?, expiresAt?,
                 venue?, setupDue?, eventStart?, eventEnd?, amountDue?, onGroundContact?, slot? }
@@ -473,7 +493,7 @@ So a vendor can never see or change another vendor's chat (they get `404`).
 }
 ```
 
-Rules enforced by the schema: `package_setup` needs `step`; `booking` needs `bookingId` **and** `context.booking`. Every text field is trimmed and limited to 200 characters. `stage` must be one of the 10 booking stages.
+Rules enforced by the schema: `package_setup` needs `step`; `booking` needs `bookingId` **and** `context.booking`; `business_profile` needs `context.profileField`; `personal_documents` needs `context.documentField`. Every text field is trimmed and limited to 200 characters. `stage` must be one of the 10 booking stages.
 
 **What the controller does:**
 
@@ -570,7 +590,7 @@ const OUTCOME_UPDATES = {
 };
 
 const OUTCOME_EVENTS = {
-  resolved:       () => ({ event: "resolved", text: "Marked as resolved" }),
+  resolved:       (_, note) => ({ event: "resolved", text: note }),   // "Marked as resolved" or "Chat ended"
   call_requested: () => ({ event: "call_requested", text: "Support will call you" }),
   ticket:         (ticketNumber) => ({ event: "ticket_opened", text: `Ticket #${ticketNumber} opened` }),
 };
@@ -578,7 +598,7 @@ const OUTCOME_EVENTS = {
 
 **Double-tap safety:** the update only matches if the transcript still has the length the controller read (`transcript: { $size: … }`). If the vendor taps twice quickly, the second request finds the transcript already longer and gets `409`. Nothing is saved twice.
 
-**Response:** the updated chat (with the new transcript lines and next options). `messages` is filled once the chat has left the bot stage (so the app gets "Ticket #… opened" etc.).
+**Response:** the updated chat (with the new transcript lines and next options) and all its `messages` (so the app gets "Ticket #… opened", and a restarted chat keeps its old system lines).
 
 ### 7.3 `GET /api/support/chats/:chatId/messages`
 
@@ -801,6 +821,43 @@ sequenceDiagram
 | `call_requested`, `waiting_for_em`, `with_em` | The same chat unchanged, plus all its messages; the app reconnects to the socket |
 | `resolved` | A **new** chat |
 
+This table is for `package_setup`, `publish_package` and `booking`. Business profile and personal documents work differently (next section).
+
+### 10.5 Business profile and personal documents: one chat that restarts
+
+A vendor has **one** `business_profile` chat and **one** `personal_documents` chat. `openScreenChat` in the controller looks it up by `vendorId` + `topic` only, newest first, whatever its status. `SCREEN_TOPICS` says which `context` field names the screen (`profileField` or `documentField`) and how to name it in the restart line:
+
+| Business profile chat when Help is tapped | What happens |
+|---|---|
+| None yet | A new chat: "Hi! You're setting up your business profile, on Business name: …" |
+| `automated`, Help tapped on the **same** screen | The chat as it is: the vendor carries on where they were |
+| `automated`, Help tapped on **another** screen | Restart (below) |
+| `resolved` (vendor or EM closed it) | Restart (below) |
+| `call_requested`, `waiting_for_em`, `with_em` | The chat as it is, with its messages; the app reconnects to the socket |
+
+**Restart** keeps the history and adds to it:
+
+1. One guarded update (`status` and transcript length must be what was read, so two opens at once can't both restart): `status` back to `automated`, `resolvedAt`/`resolvedBy` cleared, the new `context` and `options` set, and "Welcome back! You're setting up your business profile, on Service area: …" + "What do you need help with?" pushed to the transcript.
+2. Then a system message `restarted`: "Chat restarted for Service area". It is saved with `createdAt` = the moment of the restart and the greeting lines are stamped 1 ms later, so the app always shows the divider above the greeting.
+
+```js
+const sameScreen = found.context?.[field] === context[field];
+const restarts = found.status === "resolved" || (found.status === "automated" && !sameScreen);
+```
+
+What the vendor sees after closing on Business name and tapping Help on Service area the next day:
+
+```
+Yesterday
+  Eventory Support: Great, glad that helped. You can reopen this chat any time from Help & Support.
+  ── Marked as resolved ──
+Today
+  ── Chat restarted for Service area ──
+  Eventory Support: Welcome back! You're setting up your business profile, on Service area: the areas you operate in.
+                    What do you need help with?
+  [How do I choose my area?] [I serve the whole city] [I can't find my locality] [Can I add more areas?] [Something else] [End chat]
+```
+
 ---
 
 ## 11. What the app does with the responses
@@ -808,7 +865,10 @@ sequenceDiagram
 The app no longer has any bot logic. In `lib/features/support_chat/`:
 
 - `data/repositories/remote_support_chat_repository.dart` — calls `open` (sending `context`), `select`, `messages`, uploads photos, and listens on the socket.
-- `data/support_thread_builder.dart` — turns the server's `chat` + `messages` into what the screen shows: consecutive bot lines become one bubble group, system messages become dividers, `options` become the buttons, `status` decides the footer.
+- `data/support_thread_builder.dart` — turns the server's `chat` + `messages` into what the screen shows: transcript lines and messages are merged by time, consecutive bot lines become one bubble group, a `tutorialId` line becomes a "Recommended tutorial" card inside that group, system messages become dividers, `options` become the buttons, and the chat's `status` (not old system lines) decides the footer.
+- Tapping the tutorial card opens the app's video player for that tutorial id.
+- Business profile: each setup screen passes `onHelp` to `ProgressAppBar2`, which shows the Help pill and opens the chat with `context.profileField`. The two carousel-photo screens have no script in the design, so they have no Help.
+- Personal documents: the Aadhaar (number and selfie), PAN, GSTIN, GST business details and bank details screens pass `onHelp` to `ProgressAppBar2` and open the chat with `context.documentField`. The GST business details screen uses `gstin`. Find IFSC and the DigiLocker web view have no Help.
 - `presentation/cubit/support_chat_cubit.dart` — on a tap it shows the vendor's choice straight away and shows typing dots while waiting for `select`. If the request fails, it puts the previous buttons back.
 - `presentation/widgets/support_conversation.dart` — plays the reply in: vendor bubble, typing dots, bot answer, then the buttons.
 - Booking facts (stage, times, amount due…) are worked out in the app (`booking_and_inquiry/presentation/models/booking_support_context.dart`) and sent in `context.booking`.
@@ -817,7 +877,7 @@ The app no longer has any bot logic. In `lib/features/support_chat/`:
 
 ## 12. How to change the bot
 
-**Change wording:** edit the text in `packageHelpFlows.js`, `publishHelpFlows.js` or `bookingHelpFlows.js` and deploy the backend. No app release is needed.
+**Change wording:** edit the text in `packageHelpFlows.js`, `publishHelpFlows.js`, `bookingHelpFlows.js` , `businessProfileHelpFlows.js` or `documentHelpFlows.js` and deploy the backend. No app release is needed.
 
 **Add a question to a step:**
 
@@ -879,6 +939,10 @@ Error responses all look like `{ "success": false, "message": "…" }`:
 
 There is no test runner in this repo. The system was checked with a script that starts an in-memory MongoDB (`mongodb-memory-server`) and calls the controllers directly. It covers: opening a chat, branches and answers, "Help with something else", reopening (restart vs keep), another vendor being refused, ticket opening with the queue event, no quick replies after handover, call request, a booking chat with End Chat, someone else's booking being refused, and a double tap only counting once.
 
+A second script covers business profile: `profileField` is required and must be known; the opening text and buttons match the design; an answer adds the tutorial line before "Did that help?"; Help on the same screen carries on; after "Yes, that helps", Help on Service area restarts the same chat with "Welcome back!", clears `resolvedAt`, and puts "Chat restarted for Service area" between the old session and the greeting; an automated chat restarts on another screen too; "End chat" adds the closing line and "Chat ended"; an open ticket is returned as is; another vendor gets their own chat; booking "End Chat" still saves "Marked as resolved".
+
+A third script covers personal documents: `documentField` is required and must be known; the Aadhaar opening text and buttons match the design; an answer adds the "Verifying your personal documents" tutorial line; "Help with something else" lists the topics again; after "Yes, that helps", Help on PAN restarts the same chat with "Welcome back!" and "Chat restarted for PAN card"; GSTIN and bank details restart it too; "End chat" saves "Chat ended"; business profile keeps its own chat and its "End chat" still works.
+
 The bot scripts were also checked against the previous Dart versions: 151 inputs (every package step × vendor type, every publish vendor type, every booking stage with filled and missing facts) produced identical output.
 
 ---
@@ -888,5 +952,6 @@ The bot scripts were also checked against the previous Dart versions: 151 inputs
 - Every tap needs the network. With no connection the app shows an error and keeps the buttons.
 - Booking facts are formatted in the app and trusted as display text (they only appear in that vendor's own chat and to EMs).
 - If saving the system message fails after the status changed, the request returns `500` but the status change stays. The chat is still usable; only that divider line is missing.
-- "Help tapped again → Reopened / Welcome back!" from the design is not built.
+- "Welcome back!" restarts exist only for business profile. Package, publish and booking chats still start a new chat after they are resolved.
+- The business profile answers repeat some fixed facts from the app (bookings range "0 – 24", experience "0 – 2 years", the vendor type list, "Entire Gurgaon (all 21)", brand description 200–400 characters). If those change in the app, change the script too.
 - The admin panel must show `imageUrls` and the `booking` info; that's admin panel work.

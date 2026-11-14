@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { SUPPORT_CHAT_TOPICS } from "../models/SupportChat.js";
+import { PROFILE_FIELDS } from "../services/supportFlows/businessProfileHelpFlows.js";
+import { DOCUMENT_FIELDS } from "../services/supportFlows/documentHelpFlows.js";
 
 const label = z.string().trim().max(200);
 
@@ -42,10 +44,12 @@ const chatContext = z
     stepName: label.nullish(),
     variantName: label.nullish(),
     booking: bookingFacts.nullish(),
+    profileField: z.enum(PROFILE_FIELDS).nullish(),
+    documentField: z.enum(DOCUMENT_FIELDS).nullish(),
   })
   .default({});
 
-/** Vendor opens Help on a Package Setup step, the publish screen or a booking. */
+/** Vendor opens Help on a Package Setup step, the publish screen, a booking, a Business profile screen or a personal document screen. */
 export const openSupportChatSchema = z
   .object({
     topic: z.enum(SUPPORT_CHAT_TOPICS).default("package_setup"),
@@ -61,6 +65,14 @@ export const openSupportChatSchema = z
   .refine((body) => body.topic !== "booking" || (body.bookingId != null && body.context.booking != null), {
     message: "bookingId and the booking details are required for booking help",
     path: ["bookingId"],
+  })
+  .refine((body) => body.topic !== "business_profile" || body.context.profileField != null, {
+    message: "context.profileField is required for business profile help",
+    path: ["context", "profileField"],
+  })
+  .refine((body) => body.topic !== "personal_documents" || body.context.documentField != null, {
+    message: "context.documentField is required for personal document help",
+    path: ["context", "documentField"],
   });
 
 /** The vendor tapped one of the quick replies the server offered. */
