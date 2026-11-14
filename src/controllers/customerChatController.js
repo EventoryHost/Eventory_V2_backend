@@ -341,6 +341,9 @@ export const createHelpRequest = async (req, res) => {
     const identity = await resolveChatIdentity(req, req.body);
     const b = req.body;
     const owner = toEnquiryFilter(identity);
+    // Logged in from the brief ("Log in to send"): the guest chat it was
+    // raised in moves to the account first, so the ticket stays on it.
+    if (identity.customer && b.anon_id) await claimGuestHelpData(String(b.anon_id).trim(), identity.customer);
 
     // A ticket belongs to the chat it was raised in, one per chat: sending
     // the brief again (a double tap, a retry) returns the same ticket.
