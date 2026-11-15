@@ -6,7 +6,7 @@ import Booking from "../models/Booking.js";
 import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
 import { utcDayRange } from "../utils/dateRange.js";
 import { computeAvailability, computeSlotsForDate } from "../utils/packageAvailability.js";
-import { checkServiceability, describeVendorAreas, extractPincode, listServiceableCities, lookupPincode } from "../utils/serviceability.js";
+import { checkServiceability, describeVendorAreas, extractPincode, listServiceableCities, lookupPincode, searchLocations } from "../utils/serviceability.js";
 import { serviceAreaRegexClauses } from "../utils/serviceAreas.js";
 import { findServiceArea, isKnownServiceArea } from "../data/serviceLocalities.js";
 import { round2 } from "../utils/money.js";
@@ -1302,6 +1302,17 @@ export const getPackageFilters = async (req, res) => {
  * PDP's location-serviceability check reads (see utils/serviceability.js).
  * Feeds the navbar location modal's district picker.
  */
+/**
+ * @desc Typeahead for the PDP's event-location box: localities and pincodes
+ * in the serviceable Delhi NCR dataset that match what the customer has typed,
+ * so they can choose one (which carries its pincode) instead of needing to
+ * know the pincode themselves.
+ */
+export const suggestLocations = async (req, res) => {
+  const q = String(req.query.q || "").slice(0, 60);
+  res.status(200).json({ success: true, data: searchLocations(q, 8) });
+};
+
 export const getServiceableCities = async (req, res) => {
   res.status(200).json({ success: true, data: listServiceableCities() });
 };
