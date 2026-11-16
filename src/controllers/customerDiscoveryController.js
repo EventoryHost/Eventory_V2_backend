@@ -562,12 +562,22 @@ export const getPackageDetail = async (req, res) => {
     // category, PCI or B2B economics leave the server.
     pricingPreview.convenienceFee = await serviceFeePreview(pkg, date);
 
+    // Real "Events done" for the PDP's vendor card: this vendor's bookings that
+    // actually reached Completed. Bookings reference the vendor by its public
+    // "VEN..." id (resolveVendorRefId) but older ones may hold the Mongo _id,
+    // so both forms are matched.
+    const vendorRefs = [pkg.vendorId?.id, pkg.vendorId?._id && String(pkg.vendorId._id)].filter(Boolean);
+    const eventsCompleted = vendorRefs.length
+      ? await Booking.countDocuments({ vendorId: { $in: vendorRefs }, status: "Completed" })
+      : 0;
+
     return res.status(200).json({
       status: "SUCCESS",
       package: pkg,
       availability,
       pricingPreview,
       reviews,
+      vendorStats: { eventsCompleted },
     });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to fetch package detail", error: error.message });
