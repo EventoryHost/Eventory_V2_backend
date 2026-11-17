@@ -477,7 +477,7 @@ export function bookingHelpFlowFor(facts) {
   const topicsFor = Object.hasOwn(TOPICS_BY_STAGE, facts.stage) ? TOPICS_BY_STAGE[facts.stage] : null;
   return helpFlow({
     fallbackSummary: introFor(f),
-    offersEndChat: true,
+    endChat: { label: "End Chat" },
     topics: topicsFor ? topicsFor(f) : [],
   });
 }
