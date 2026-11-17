@@ -31,7 +31,7 @@ const getSlaThreshold = () => new Date(Date.now() - SLA_HOURS * 60 * 60 * 1000);
 // customer-facing read (see publicFields.js for that whitelist).
 const ADMIN_VENDOR_FIELDS = "_id id businessName city phone vendorType isVerified";
 const ADMIN_PACKAGE_FIELDS = "_id step1_eventAndCrew.packageName packageStatus variantType vendorType";
-const ADMIN_CUSTOMER_FIELDS = "_id id name phone email";
+const ADMIN_CUSTOMER_FIELDS = "_id id name phone email addresses";
 
 // Strict 24-hex check. mongoose's own isValid() also accepts ANY 12-character
 // string, which would send a short public id into an _id query.
@@ -171,6 +171,7 @@ const buildBookingDetail = async (booking) => {
           name: customerAccount.name ?? null,
           phone: customerAccount.phone ?? null,
           email: customerAccount.email ?? null,
+          addresses: customerAccount.addresses ?? [],
         }
       : null,
     payments,
