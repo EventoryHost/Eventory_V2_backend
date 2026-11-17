@@ -93,6 +93,61 @@ export function listServiceableCities() {
   return [...districts].sort();
 }
 
+// Search index for the PDP location box: one row per (pincode, area name),
+// built once from the same dataset the serviceability check uses.
+// Post-office suffixes in the dataset ("Indira Park B.O", "Dwarka Sec-6 S.O") mean
+// nothing to a customer, so they are dropped from what is shown and matched.
+const cleanAreaName = (area) => String(area).replace(/\s+(?:B\.?\s?O|S\.?\s?O|H\.?\s?O|G\.?\s?P\.?\s?O)\.?$/i, "").trim();
+
+const LOCATION_INDEX = Object.entries(PINCODES).flatMap(([pincode, info]) =>
+  [...new Set(info.areas.map(cleanAreaName))].filter(Boolean).map((area) => ({
+    pincode,
+    area,
+    areaNorm: norm(area),
+    city: cityOf(info),
+    district: districtDisplayLabel(info),
+  }))
+);
+
+/**
+ * Locality / pincode suggestions for what the customer has typed so far, so
+ * they can pick "Karol Bagh, Central Delhi, 110005" without knowing the
+ * pincode. Matches area names (prefix matches first, then words that start
+ * with the text, then anywhere), or pincodes starting with typed digits.
+ * Returns at most `limit` rows, never more than one per (area, pincode).
+ */
+export function searchLocations(query, limit = 8) {
+  const raw = String(query || "").trim();
+  if (raw.length < 2) return [];
+
+  if (/^\d+$/.test(raw)) {
+    return LOCATION_INDEX.filter((row, index, all) => row.pincode.startsWith(raw) && all.findIndex((other) => other.pincode === row.pincode) === index)
+      .slice(0, limit)
+      .map((row) => ({ label: `${row.pincode}, ${row.district}`, area: row.area, pincode: row.pincode, city: row.city, district: row.district }));
+  }
+
+  const q = norm(raw);
+  if (!q) return [];
+  const scored = [];
+  for (const row of LOCATION_INDEX) {
+    let score = null;
+    if (row.areaNorm === q) score = 0;
+    else if (row.areaNorm.startsWith(q)) score = 1;
+    else if (row.areaNorm.split(" ").some((word) => word.startsWith(q))) score = 2;
+    else if (row.areaNorm.includes(q)) score = 3;
+    else if (norm(`${row.area} ${row.district}`).includes(q)) score = 4;
+    if (score !== null) scored.push({ row, score });
+  }
+  scored.sort((a, b) => a.score - b.score || a.row.area.localeCompare(b.row.area));
+  return scored.slice(0, limit).map(({ row }) => ({
+    label: `${row.area}, ${row.district}, ${row.pincode}`,
+    area: row.area,
+    pincode: row.pincode,
+    city: row.city,
+    district: row.district,
+  }));
+}
+
 export function lookupPincode(pincode) {
   const info = PINCODES[String(pincode || "").trim()];
   if (!info) return null;

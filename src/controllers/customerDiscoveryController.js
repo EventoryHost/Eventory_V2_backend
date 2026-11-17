@@ -6,7 +6,7 @@ import Booking from "../models/Booking.js";
 import { PUBLIC_VENDOR_FIELDS } from "../utils/publicFields.js";
 import { utcDayRange } from "../utils/dateRange.js";
 import { computeAvailability, computeSlotsForDate } from "../utils/packageAvailability.js";
-import { checkServiceability, describeVendorAreas, extractPincode, listServiceableCities, lookupPincode } from "../utils/serviceability.js";
+import { checkServiceability, describeVendorAreas, extractPincode, listServiceableCities, lookupPincode, searchLocations } from "../utils/serviceability.js";
 import { serviceAreaRegexClauses } from "../utils/serviceAreas.js";
 import { findServiceArea, isKnownServiceArea } from "../data/serviceLocalities.js";
 import { round2 } from "../utils/money.js";
@@ -562,12 +562,22 @@ export const getPackageDetail = async (req, res) => {
     // category, PCI or B2B economics leave the server.
     pricingPreview.convenienceFee = await serviceFeePreview(pkg, date);
 
+    // Real "Events done" for the PDP's vendor card: this vendor's bookings that
+    // actually reached Completed. Bookings reference the vendor by its public
+    // "VEN..." id (resolveVendorRefId) but older ones may hold the Mongo _id,
+    // so both forms are matched.
+    const vendorRefs = [pkg.vendorId?.id, pkg.vendorId?._id && String(pkg.vendorId._id)].filter(Boolean);
+    const eventsCompleted = vendorRefs.length
+      ? await Booking.countDocuments({ vendorId: { $in: vendorRefs }, status: "Completed" })
+      : 0;
+
     return res.status(200).json({
       status: "SUCCESS",
       package: pkg,
       availability,
       pricingPreview,
       reviews,
+      vendorStats: { eventsCompleted },
     });
   } catch (error) {
     return res.status(500).json({ status: "ERROR", message: "Failed to fetch package detail", error: error.message });
@@ -1302,6 +1312,17 @@ export const getPackageFilters = async (req, res) => {
  * PDP's location-serviceability check reads (see utils/serviceability.js).
  * Feeds the navbar location modal's district picker.
  */
+/**
+ * @desc Typeahead for the PDP's event-location box: localities and pincodes
+ * in the serviceable Delhi NCR dataset that match what the customer has typed,
+ * so they can choose one (which carries its pincode) instead of needing to
+ * know the pincode themselves.
+ */
+export const suggestLocations = async (req, res) => {
+  const q = String(req.query.q || "").slice(0, 60);
+  res.status(200).json({ success: true, data: searchLocations(q, 8) });
+};
+
 export const getServiceableCities = async (req, res) => {
   res.status(200).json({ success: true, data: listServiceableCities() });
 };

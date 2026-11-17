@@ -141,7 +141,7 @@ export const updateContactDetailsSchema = z
 // same TIME_OPTIONS half-hour-step values the frontend's picker already
 // generates. Not required to both be present together (letting one field
 // save on its own change, like updateContactDetailsSchema above), but when
-// both are present end must be after start — a real, checkable business
+// both are present they must differ (an earlier end = overnight event) — a real, checkable business
 // rule, unlike start/end being independently optional.
 const HHMM_REGEX = /^([01]\d|2[0-3]):[0-5]\d$/;
 export const updateEventTimingSchema = z
@@ -152,8 +152,10 @@ export const updateEventTimingSchema = z
   .refine((data) => data.startTime !== undefined || data.endTime !== undefined, {
     message: "Provide at least one of startTime or endTime",
   })
-  .refine((data) => !(data.startTime && data.endTime) || data.endTime > data.startTime, {
-    message: "endTime must be after startTime",
+  // End earlier than start means an overnight event that finishes the next day;
+  // only identical times are rejected.
+  .refine((data) => !(data.startTime && data.endTime) || data.endTime !== data.startTime, {
+    message: "End time can't be the same as the start time",
     path: ["endTime"],
   });
 

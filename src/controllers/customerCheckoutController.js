@@ -589,8 +589,10 @@ export const updateEventTiming = async (req, res) => {
     const { startTime, endTime } = req.body;
     const nextStart = startTime !== undefined ? startTime : session.eventTiming?.startTime;
     const nextEnd = endTime !== undefined ? endTime : session.eventTiming?.endTime;
-    if (nextStart && nextEnd && nextEnd <= nextStart) {
-      return res.status(400).json({ status: "FAILED", message: "endTime must be after startTime" });
+    // An end time earlier than the start is a valid overnight event (e.g. 9:00 PM
+    // to 12:30 AM the next day); only an identical start and end is an error.
+    if (nextStart && nextEnd && nextEnd === nextStart) {
+      return res.status(400).json({ status: "FAILED", message: "End time can't be the same as the start time" });
     }
 
     if (startTime !== undefined) session.eventTiming.startTime = startTime;
