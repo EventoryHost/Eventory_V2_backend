@@ -1,5 +1,7 @@
 import Customer from "../models/Customer.js";
 import { generateISTId } from "../utils/idGenerator.js";
+import { syncConsentFromPreferences } from "../services/whatsappConsentService.js";
+import customerWhatsApp from "../services/customerWhatsAppEvents.js";
 
 /**
  * Fields a customer (or an internal caller acting on their behalf) is
@@ -99,17 +101,20 @@ export const getCustomerById = async (req, res, next) => {
 export const updateCustomer = async (req, res, next) => {
   try {
     const cleanBody = rejectBase64Fields(pickAllowedFields(req.body, SELF_UPDATABLE_FIELDS));
-    const customer = await Customer.findOneAndUpdate(
+    const updated = await Customer.findOneAndUpdate(
       { id: req.params.id },
       cleanBody,
       { new: true, runValidators: true }
     );
-    if (!customer) {
+    if (!updated) {
       return res.status(404).json({
         success: false,
         message: "Customer not found",
       });
     }
+    // Turning the WhatsApp toggle on/off here is consent given/withdrawn.
+    const { customer, changedToOptIn } = await syncConsentFromPreferences(updated, cleanBody.preferences);
+    if (changedToOptIn) customerWhatsApp.welcome(customer);
     res.status(200).json({
       success: true,
       data: customer,

@@ -1,6 +1,7 @@
 import Customer from "../models/Customer.js";
 import { generateISTId } from "../utils/idGenerator.js";
 import { normalizePhone } from "../utils/phone.js";
+import customerWhatsApp from "../services/customerWhatsAppEvents.js";
 import {
   generateAccessToken,
   issueRefreshToken,
@@ -72,6 +73,8 @@ export const signup = async (req, res, next) => {
       lastLogin: new Date(),
     });
     await customer.save();
+    // A no-op until the customer opts in to WhatsApp (see the consent route).
+    customerWhatsApp.welcome(customer);
 
     await issueSession(customer, req, res, 201, "Account created successfully");
   } catch (error) {

@@ -9,6 +9,7 @@ import customerWishlistRoutes from "./customerWishlistRoutes.js";
 import customerCompareRoutes from "./customerCompareRoutes.js";
 import customerCartRoutes from "./customerCartRoutes.js";
 import customerCheckoutRoutes from "./customerCheckoutRoutes.js";
+import customerRecoveryRoutes from "./customerRecoveryRoutes.js";
 import customerPaymentRoutes from "./customerPaymentRoutes.js";
 import customerBookingRoutes from "./customerBookingRoutes.js";
 import customerViewedRoutes from "./customerViewedRoutes.js";
@@ -26,6 +27,8 @@ import transactionRoutes from "./transactionRoutes.js";
 import redirectRoutes from "./redirectRoutes.js";
 import groundRoutes from "./groundRoutes.js";
 import vendorNotificationRoutes from "./vendorNotificationRoutes.js";
+import customerWhatsAppRoutes from "./customerWhatsAppRoutes.js";
+import { handleInteraktWebhook } from "../controllers/interaktWebhookController.js";
 
 // Admin Routes
 import adminVendorRoutes from "./adminVendorRoutes.js";
@@ -100,12 +103,14 @@ router.use("/customer/wishlist", customerWishlistRoutes);
 router.use("/customer/compare", customerCompareRoutes);
 router.use("/customer/cart", customerCartRoutes);
 router.use("/customer/checkout", customerCheckoutRoutes);
+router.use("/customer/recovery", customerRecoveryRoutes);
 router.use("/customer/payments", customerPaymentRoutes);
 router.use("/customer/viewed", customerViewedRoutes);
 router.use("/customer/payment-methods", customerPaymentMethodRoutes);
 router.use("/customer/bookings", customerBookingRoutes);
 router.use("/customer/chat", customerChatRoutes);
 router.use("/customer/become-vendor", customerBecomeVendorRoutes);
+router.use("/customer/whatsapp-consent", customerWhatsAppRoutes);
 router.use("/auth", authRoutes);
 router.use("/verification", verificationRoutes);
 router.use("/packages", packageRoutes);
@@ -137,6 +142,9 @@ router.post("/slack/interactions", slackInteractions);
 // replies in a ticket's thread reach the customer's help chat.
 // https://<backend host>/api/slack/events
 router.post("/slack/events", slackEvents);
+// Interakt's message-status webhook (Developer Settings → Webhooks), signed
+// with INTERAKT_WEBHOOK_SECRET: https://<backend host>/api/webhooks/interakt
+router.post("/webhooks/interakt", handleInteraktWebhook);
 
 export default router;
 

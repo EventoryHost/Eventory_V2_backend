@@ -93,6 +93,22 @@ const CustomerSchema = new mongoose.Schema(
       isDarkMode: { type: Boolean, default: false },
     },
 
+    // ---- WhatsApp consent ----
+    // The record behind preferences.notification.whatsapp: when and where
+    // the customer said yes (or no). Kept outside `preferences` because a
+    // profile PATCH replaces that object wholesale, and this must never be
+    // wiped by a client. Written only by services/whatsappConsentService.js,
+    // which mirrors it onto preferences.notification.whatsapp. WhatsApp
+    // messages need status "opted_in" — having a phone number is not consent.
+    whatsappConsent: {
+      status: { type: String, enum: ["opted_in", "opted_out", null], default: null },
+      optedInAt: { type: Date, default: null },
+      optedOutAt: { type: Date, default: null },
+      source: { type: String, default: null },
+      // The number the consent was given for; a new number needs new consent.
+      phone: { type: String, default: null },
+    },
+
     // ---- Segmentation / dashboard personalization ----
     customerSegment: {
       type: String,

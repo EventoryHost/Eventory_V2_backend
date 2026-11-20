@@ -8,6 +8,7 @@ import {
 import Customer from "../models/Customer.js";
 import { generateISTId } from "../utils/idGenerator.js";
 import { issueSession } from "./customerAuthController.js";
+import customerWhatsApp from "../services/customerWhatsAppEvents.js";
 
 /**
  * Phone/OTP. Rewritten 2026-08-17 per the frontend handoff: phone+OTP is
@@ -196,6 +197,7 @@ export const verifyPhoneOtp = async (req, res, next) => {
       authProviders: [],
       lastLogin: new Date(),
     });
+    customerWhatsApp.welcome(customer);
 
     return issueSession(customer, req, res, 201, "Account created successfully");
   } catch (error) {

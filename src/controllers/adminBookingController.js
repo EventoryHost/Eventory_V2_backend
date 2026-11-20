@@ -20,6 +20,7 @@ import {
 } from "./bookingController.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
 import { contextFromDeal, notifyVendor } from "../services/vendorNotificationService.js";
+import customerWhatsApp from "../services/customerWhatsAppEvents.js";
 
 const SLA_HOURS = 4;
 const getSlaThreshold = () => new Date(Date.now() - SLA_HOURS * 60 * 60 * 1000);
@@ -340,6 +341,7 @@ export const forceAccept = async (req, res) => {
     );
     if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
     notifyVendor("booking.confirmedByEventory", contextFromDeal(booking));
+    customerWhatsApp.bookingStatusChanged(booking);
     res.status(200).json({ success: true, data: booking });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -583,6 +585,10 @@ export const updateRefundStatus = async (req, res) => {
     if (!booking.refund.startedAt) booking.refund.startedAt = now;
     if (status === "completed") booking.refund.completedAt = now;
     await booking.save();
+    // Refunds are paid by hand: "started" is the team beginning it,
+    // "completed" the team confirming the money went out.
+    if (status === "started") customerWhatsApp.refundInitiated(booking);
+    if (status === "completed") customerWhatsApp.refundCompleted(booking);
     if (status === "completed") {
       notifyVendor("payments.refundIssued", {
         ...contextFromDeal(booking),

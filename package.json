@@ -8,7 +8,8 @@
     "dev": "nodemon server.js",
     "sync-env:dev": "gh secret set V2_DEV_ENV < .env",
     "sync-env:prod": "gh secret set V2_PROD_ENV < .env.prod",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:whatsapp": "node --test \"test/whatsapp/*.test.mjs\""
   },
   "keywords": [],
   "author": "",

@@ -18,4 +18,33 @@ export function normalizePhone(raw) {
   return `+91${last10}`;
 }
 
+const E164 = /^\+[1-9]\d{6,14}$/;
+// Indian mobile numbers: 10 digits starting 6-9.
+const INDIAN_MOBILE = /^[6-9]\d{9}$/;
+
+/**
+ * Splits a stored E.164 number ("+919876543210") into the country code and
+ * national number Interakt's message API takes separately. Only the country
+ * codes in [countryCodes] are accepted (longest match first), and +91
+ * numbers must be real Indian mobiles. Returns null for anything else —
+ * never guesses at a malformed number.
+ */
+export function splitE164(phone, countryCodes = ["+91"]) {
+  if (typeof phone !== "string") return null;
+  const value = phone.trim();
+  if (!E164.test(value)) return null;
+  const code = [...countryCodes]
+    .filter((c) => /^\+[1-9]\d{0,3}$/.test(c))
+    .sort((a, b) => b.length - a.length)
+    .find((c) => value.startsWith(c));
+  if (!code) return null;
+  const national = value.slice(code.length);
+  if (code === "+91" ? !INDIAN_MOBILE.test(national) : !/^\d{4,14}$/.test(national)) return null;
+  return { countryCode: code, phoneNumber: national, e164: value };
+}
+
+/** "+91******3210" — for logs, which must never carry a full number. */
+export const maskPhone = (phone) =>
+  typeof phone === "string" && phone.length > 4 ? `${phone.slice(0, 3)}******${phone.slice(-4)}` : "***";
+
 export default normalizePhone;

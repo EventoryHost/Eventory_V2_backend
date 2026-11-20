@@ -1,5 +1,6 @@
 import Customer from "../models/Customer.js";
 import { generateISTId } from "../utils/idGenerator.js";
+import customerWhatsApp from "../services/customerWhatsAppEvents.js";
 import { generateAccessToken, issueRefreshToken, accessTokenCookieOptions, refreshTokenCookieOptions } from "../utils/tokenService.js";
 
 /**
@@ -51,6 +52,7 @@ export async function findOrCreateSocialCustomer({ email, name, photo, providerI
     lastLogin: new Date(),
   });
   await customer.save();
+  customerWhatsApp.welcome(customer);
   return customer;
 }
 

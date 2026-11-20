@@ -14,6 +14,7 @@ import { getEffectivePackagePrice } from "../utils/packagePrice.js";
 import { releaseSlotIfUnused } from "../utils/releaseSlot.js";
 import { raiseBookingIssue } from "../services/bookingIssueService.js";
 import { resolveVendorActions } from "../services/vendorNotificationService.js";
+import customerWhatsApp from "../services/customerWhatsAppEvents.js";
 import { BOOKING_RESPONSE_TYPES } from "../constants/vendorNotificationTypes.js";
 import {
   applyPricingBreakdown,
@@ -436,6 +437,7 @@ export const acceptBooking = async (req, res) => {
     booking.confirmedAt = booking.confirmedAt || new Date();
     await booking.save();
     resolveVendorActions(booking.vendorId, booking.bookingId, BOOKING_RESPONSE_TYPES);
+    customerWhatsApp.bookingStatusChanged(booking);
 
     await syncPackageBooked(booking.packageId, booking.eventDate);
 
@@ -470,6 +472,7 @@ export const declineBooking = async (req, res) => {
     booking.declineReason = req.body?.reason?.trim() || null;
     await booking.save();
     resolveVendorActions(booking.vendorId, booking.bookingId);
+    customerWhatsApp.bookingStatusChanged(booking);
 
     return res.status(200).json({
       status: "SUCCESS",
@@ -504,6 +507,7 @@ export const cancelBooking = async (req, res) => {
     booking.cancellationReason = req.body?.reason?.trim() || null;
     await booking.save();
     resolveVendorActions(booking.vendorId, booking.bookingId);
+    customerWhatsApp.bookingCancelled(booking);
 
     // Unconditional as of 2026-09-25 — this used to be gated on
     // `previousStatus === "Confirmed"`, on the assumption that only an
@@ -846,6 +850,10 @@ export const updateBooking = async (req, res) => {
       "booking.changesRequested",
       "booking.customisationRequested",
     ]);
+    // Confirming says so; otherwise a changed proposal asks the customer to
+    // review it.
+    if (confirm) customerWhatsApp.bookingStatusChanged(booking);
+    else if (proposalChanged) customerWhatsApp.bookingModificationRequested(booking);
 
     if (confirm) await syncPackageBooked(booking.packageId, booking.eventDate);
 
@@ -1063,6 +1071,7 @@ export const updatePaymentMilestones = async (req, res) => {
     booking.proposalVersion = (booking.proposalVersion || 0) + 1;
     booking.proposalSentAt = new Date();
     await booking.save();
+    customerWhatsApp.bookingModificationRequested(booking);
 
     return res.status(200).json({
       status: "SUCCESS",

@@ -7,6 +7,7 @@ import {
   resolveVendorActions,
   timeLabel,
 } from "./vendorNotificationService.js";
+import { customerWhatsAppJobs } from "./customerWhatsAppScheduler.js";
 
 /**
  * Time-based vendor reminders: nothing happens at the moment they are due,
@@ -188,7 +189,9 @@ async function requestsPending(now) {
   return sent;
 }
 
-const JOBS = { responseClosing, paymentsOverdue, setupReminders, requestsPending };
+// Customer WhatsApp jobs ride the same loop (customerWhatsAppScheduler.js);
+// each is a no-op while WHATSAPP_NOTIFICATIONS_ENABLED is off.
+const JOBS = { responseClosing, paymentsOverdue, setupReminders, requestsPending, ...customerWhatsAppJobs };
 
 let running = false;
 

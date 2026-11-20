@@ -13,6 +13,7 @@ import {
   notifyVendor,
   resolveVendorActions,
 } from "../services/vendorNotificationService.js";
+import customerWhatsApp from "../services/customerWhatsAppEvents.js";
 import { snapshotDeliverables } from "../utils/packageDeliverables.js";
 import { packageCoverImage } from "../utils/packageCoverImage.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
@@ -560,6 +561,7 @@ export const sendProposal = async (req, res) => {
     await enquiry.save();
     // The vendor has answered: the enquiry leaves "actions required".
     resolveVendorActions(enquiry.vendorId, enquiry.enquiryId);
+    customerWhatsApp.vendorResponse(enquiry);
 
     return res.status(200).json({
       status: "SUCCESS",

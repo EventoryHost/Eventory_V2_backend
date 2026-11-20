@@ -7,6 +7,7 @@ import Booking from "../models/Booking.js";
 import { computeContactValidation, computeLinesValidation } from "../services/checkoutValidationService.js";
 import { createBookingsFromCheckoutSession } from "../services/bookingCreationService.js";
 import { applyMilestonePaymentToBooking } from "../services/milestonePaymentService.js";
+import customerWhatsApp from "../services/customerWhatsAppEvents.js";
 import { normalizePhone } from "../utils/phone.js";
 import { generatePaymentId } from "../utils/generateId.js";
 import { bookingLookupQuery } from "./customerBookingController.js";
@@ -464,10 +465,14 @@ export const handleCashfreeWebhook = async (req, res) => {
           await createBookingsFromCheckoutSession(session, payment);
         }
       }
+      // Cashfree confirmed it (PGFetchOrder above). Keyed by payment, so the
+      // status poll confirming the same payment adds nothing.
+      customerWhatsApp.paymentSucceeded(payment);
     } else if (["EXPIRED", "TERMINATED", "TERMINATION_REQUESTED"].includes(orderStatus) || type === "PAYMENT_FAILED_WEBHOOK") {
       payment.status = "FAILED";
       payment.failureReason = `Cashfree order status: ${orderStatus || "unknown"}`;
       await payment.save();
+      customerWhatsApp.paymentFailed(payment);
     } else {
       // Still pending/active on Cashfree's side (e.g. USER_DROPPED without
       // a final failure yet) — leave PENDING, just record the event.
@@ -523,10 +528,12 @@ export const getPaymentStatus = async (req, res) => {
               await createBookingsFromCheckoutSession(session, payment);
             }
           }
+          customerWhatsApp.paymentSucceeded(payment);
         } else if (["EXPIRED", "TERMINATED", "TERMINATION_REQUESTED"].includes(orderStatus)) {
           payment.status = "FAILED";
           payment.failureReason = `Cashfree order status: ${orderStatus}`;
           await payment.save();
+          customerWhatsApp.paymentFailed(payment);
         }
       } catch (cfError) {
         // Don't fail the whole status check just because the live re-check

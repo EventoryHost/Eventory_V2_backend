@@ -5,6 +5,7 @@ import { round2 } from "../utils/money.js";
 import { applyPricingBreakdown } from "../utils/pricingBreakdown.js";
 import { recordVendorMilestoneDue } from "./vendorPayoutService.js";
 import { contextFromDeal, notifyVendor } from "./vendorNotificationService.js";
+import customerWhatsApp from "./customerWhatsAppEvents.js";
 
 /**
  * Turns a paid CheckoutSession into real Booking documents — Phase 4 Step
@@ -304,6 +305,7 @@ export async function createBookingsFromCheckoutSession(session, payment, option
 
     notifyNewBooking(booking);
     notifyIfDoubleBooked(booking);
+    customerWhatsApp.bookingRequested(booking);
 
     createdBookingIds.push(booking._id);
 

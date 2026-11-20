@@ -19,6 +19,7 @@ import { round2 } from "../utils/money.js";
 import { raiseBookingIssue } from "../services/bookingIssueService.js";
 import { cancellationTerms } from "../utils/cancellationTerms.js";
 import { notifyBookingCancelled } from "../services/chatSlackNotifier.js";
+import customerWhatsApp from "../services/customerWhatsAppEvents.js";
 import {
   contextFromDeal,
   notifyVendor,
@@ -443,6 +444,7 @@ export const cancelBooking = async (req, res) => {
     resolveVendorActions(booking.vendorId, booking.bookingId).then(() =>
       notifyVendor("booking.cancelledByCustomer", contextFromDeal(booking))
     );
+    customerWhatsApp.bookingCancelled(booking);
     console.info(
       `[cancelBooking] Booking ${booking.bookingId} (vendor ${booking.vendorId}) cancelled by customer ${req.customer._id}. ` +
         `Refund estimate: ${refundEstimate.amount}.`
@@ -679,6 +681,8 @@ export const acceptProposal = async (req, res) => {
     ]).then(() =>
       notifyVendor("booking.proposalAccepted", { ...contextFromDeal(booking), reconfirmed: reconfirming })
     );
+    // A confirmed booking's revised terms are now agreed by both sides.
+    if (reconfirming) customerWhatsApp.bookingModificationConfirmed(booking);
 
     return res.status(200).json({
       status: "SUCCESS",
