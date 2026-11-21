@@ -124,6 +124,18 @@ export const helpRequestStatusSchema = z.object({
   senderName: optionalText(60),
 });
 
+/**
+ * The admin panel assigns a ticket to an Event Manager (V1 em_id + name).
+ * An empty emId removes the assignment.
+ */
+export const helpRequestAssignSchema = z
+  .object({
+    emId: z.string().trim().max(64).default(""),
+    emName: z.string().trim().max(60).default(""),
+    assignedBy: optionalText(100),
+  })
+  .refine((b) => !b.emId || b.emName.length > 0, { message: "emName is required with emId", path: ["emName"] });
+
 /** Event Manager reply, posted from the team's side. */
 export const helpRequestReplySchema = z.object({
   /** The Event Manager's id on the team's side, if it has one. */

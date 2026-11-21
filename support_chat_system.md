@@ -200,6 +200,7 @@ const SupportChatSchema = new mongoose.Schema(
 | `status` | See section 4 |
 | `ticketNumber` | `TKT-1001`… only after "Something else" |
 | `emId` / `emName` | The EM who joined |
+| `assignedEmId` / `assignedEmName` / `assignedAt` / `assignedBy` | The EM the admin panel assigned the ticket to (section 8). Admin responses only; the vendor's `chat` payload doesn't include them |
 | `context` | What the app showed on screen when Help was opened (package name, step name, variant, booking facts, `profileField` for business profile, or `documentField` for personal documents). The bot's intro and booking answers are built from it |
 | `transcript` | The automated conversation, line by line, saved as it happens. A line with `tutorialId` is a "Recommended tutorial" card; its `text` is the tutorial title |
 | `options` | The quick replies the vendor can tap **right now**. Empty once the bot is done |
@@ -622,15 +623,19 @@ router.get("/:chatId", getSupportChat);
 router.post("/:chatId/join", validateRequest(emJoinSchema), joinSupportChat);
 router.post("/:chatId/messages", validateRequest(emMessageSchema), sendEmSupportMessage);
 router.post("/:chatId/resolve", validateRequest(emResolveSchema), resolveSupportChatByEm);
+router.put("/:chatId/assign-em", validateRequest(emAssignSchema), assignSupportChat);
 ```
+
+**Only handed-over chats are reachable** (`HANDED_OVER_FILTER` in `supportChatService.js`): status `call_requested`, `waiting_for_em` or `with_em`, or `resolved` with `handedOverAt`/`callRequestedAt` set. A chat the bot alone handled returns `404` on every route here, is never listed (`?status=automated` is a `400`), and the EM socket can't join its room. Its conversation stays with the vendor until they ask for a person.
 
 | Route | Body / query | What it does |
 |---|---|---|
-| `GET /` | `?status=&topic=&ticket=&emId=&page=1&limit=20` | Chats, newest activity first. Each row adds `vendor` (business name, contact name, phone), `package` (name, type) and `booking` (number, status, event, date, customer). The transcript is left out of the list to keep it small |
+| `GET /` | `?status=&topic=&ticket=&emId=&assignedEmId=&page=1&limit=20` (`assignedEmId=unassigned` for none) | Chats, newest activity first. Each row adds `vendor` (business name, contact name, phone), `package` (name, type) and `booking` (number, status, event, date, customer). The transcript is left out of the list to keep it small |
 | `GET /:chatId` | — | One chat with vendor, package, booking, the full transcript and all messages |
 | `POST /:chatId/join` | `{ emId?, emName }` | Only from `waiting_for_em` → `with_em`. Saves "Riya joined the chat", emits `message:new` and `chat:em_joined`. The same EM joining again gets `200`; a different EM gets `409 "Riya has already joined this chat"` |
 | `POST /:chatId/messages` | `{ emId?, emName, text?, imageUrls? }` | Only in `with_em`. Saves an `em` message and emits `message:new` |
 | `POST /:chatId/resolve` | `{ emId?, emName? }` | Any open status → `resolved` (also used after making a requested call). Saves "Marked as resolved", emits `message:new` and `chat:resolved`. Resolving twice is harmless |
+| `PUT /:chatId/assign-em` | `{ emId, emName, assignedBy? }` | Assigns the ticket to an Event Manager (V1 `event_managers.em_id` + name, from the admin panel's EM list); an empty `emId` clears it. Saved as `assignedEmId`, `assignedEmName`, `assignedAt`, `assignedBy`, separate from `emId`/`emName` (who joined). The vendor isn't told. Joining an unassigned chat assigns it to the EM who joined |
 
 Join is a conditional update, so two EMs clicking Join together can't both join:
 

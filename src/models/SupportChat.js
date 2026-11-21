@@ -53,8 +53,19 @@ const SupportChatSchema = new mongoose.Schema(
     status: { type: String, enum: SUPPORT_CHAT_STATUSES, default: "automated" },
     ticketNumber: { type: String, default: undefined },
 
+    // The EM who joined the chat (join endpoint). Shown to the vendor.
     emId: { type: String, default: null },
     emName: { type: String, default: null },
+
+    // The EM the admin panel assigned the ticket to (assign-em endpoint),
+    // only once the vendor asked for a person (call_requested /
+    // waiting_for_em). Separate from emId/emName above, which say who
+    // actually joined. assignedEmId is the V1 event_managers em_id; the
+    // name is kept as it was then, so a removed EM still reads correctly.
+    assignedEmId: { type: String, default: null },
+    assignedEmName: { type: String, default: null },
+    assignedAt: { type: Date, default: null },
+    assignedBy: { type: String, default: null },
 
     context: { type: mongoose.Schema.Types.Mixed, default: {} },
     transcript: { type: [TranscriptLineSchema], default: [] },
@@ -74,5 +85,6 @@ const SupportChatSchema = new mongoose.Schema(
 SupportChatSchema.index({ vendorId: 1, topic: 1, packageId: 1, step: 1, bookingId: 1, status: 1 });
 SupportChatSchema.index({ status: 1, updatedAt: -1 });
 SupportChatSchema.index({ ticketNumber: 1 }, { unique: true, sparse: true });
+SupportChatSchema.index({ assignedEmId: 1, updatedAt: -1 });
 
 export default mongoose.model("SupportChat", SupportChatSchema);

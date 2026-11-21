@@ -112,11 +112,28 @@ export const emResolveSchema = z.object({
   emName: z.string().trim().max(60).optional(),
 });
 
+/**
+ * Admin panel assigns a handed-over chat to an Event Manager (V1 em_id +
+ * name, as EmAssignDropdown sends them). An empty emId removes the
+ * assignment, like the booking / vendor / package assign-em routes.
+ */
+export const emAssignSchema = z
+  .object({
+    emId: z.string().trim().max(64).default(""),
+    emName: z.string().trim().max(60).default(""),
+    // Who made the change in the admin panel, for the record.
+    assignedBy: z.string().trim().max(100).optional(),
+  })
+  .refine((b) => !b.emId || b.emName.length > 0, { message: "emName is required with emId", path: ["emName"] });
+
+// No "automated": a chat only the bot handled is not the Event Manager side's.
 export const adminSupportChatListSchema = z.object({
-  status: z.enum(["automated", "call_requested", "waiting_for_em", "with_em", "resolved"]).optional(),
+  status: z.enum(["call_requested", "waiting_for_em", "with_em", "resolved"]).optional(),
   topic: z.enum(SUPPORT_CHAT_TOPICS).optional(),
   ticket: z.string().trim().max(20).optional(),
   emId: z.string().trim().max(64).optional(),
+  // An em_id, or "unassigned".
+  assignedEmId: z.string().trim().max(64).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });

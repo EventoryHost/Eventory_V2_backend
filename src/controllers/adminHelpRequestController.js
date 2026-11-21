@@ -7,6 +7,7 @@ import {
   recordTicketMessage,
   serializeHelpRequest,
 } from "../services/helpRequestService.js";
+import { notifyHelpAssigned } from "../services/chatSlackNotifier.js";
 
 /**
  * Event Manager side of the help panel hand-off. The brief arrives on
@@ -28,6 +29,12 @@ async function adminView(e) {
     lastMessageAt: e.lastMessageAt,
     lastMessageFrom: e.lastMessageFrom,
     messageCount: e.messageCount,
+    assignedEmId: e.assignedEmId ?? null,
+    assignedEmName: e.assignedEmName ?? null,
+    assignedAt: e.assignedAt ?? null,
+    assignedBy: e.assignedBy ?? null,
+    bookingRefs: e.bookingRefs ?? [],
+    topic: e.topic ?? null,
     brief: {
       occasion: e.eventType,
       guests: e.guestCount,
@@ -51,7 +58,8 @@ const ticketFilter = (ref) => ({ source: "help_panel", $or: [{ enquiryId: ref },
 
 /**
  * @desc Help panel tickets, newest first. ?open=true → no reply yet;
- * ?customerId= / ?anonId= → one person's tickets; ?status=open|replied|closed.
+ * ?customerId= / ?anonId= → one person's tickets; ?status=open|replied|closed;
+ * ?assignedEmId=<em_id>|unassigned → by assigned Event Manager.
  * @route GET /api/admin/help-requests
  */
 export const listHelpRequests = async (req, res) => {
@@ -61,6 +69,14 @@ export const listHelpRequests = async (req, res) => {
     if (req.query.customerId) filter.customerId = String(req.query.customerId);
     if (req.query.anonId) filter.anonId = String(req.query.anonId);
     if (req.query.status) filter.ticketStatus = String(req.query.status);
+    if (req.query.assignedEmId) {
+      const em = String(req.query.assignedEmId);
+      // Old booking tickets carry only a name: they count as assigned.
+      Object.assign(
+        filter,
+        em === "unassigned" ? { assignedEmId: null, assignedEmName: null } : { assignedEmId: em }
+      );
+    }
     const limit = Math.min(Number(req.query.limit) || 50, 200);
     const enquiries = await ChatEnquiry.find(filter).sort({ createdAt: -1 }).limit(limit);
     const requests = await Promise.all(enquiries.map(adminView));
@@ -186,5 +202,34 @@ export const listAreaWaitlist = async (req, res) => {
   } catch (error) {
     console.error("listAreaWaitlist error:", error);
     return res.status(500).json({ success: false, message: "Could not load the waitlist" });
+  }
+};
+
+/**
+ * @desc Assign a ticket to an Event Manager, or clear it (empty emId).
+ * Saved on the ticket (so it survives a reload) and noted in the ticket's
+ * Slack thread for the team. The name is kept as it was, in case the EM
+ * later leaves the list.
+ * @route PUT /api/admin/help-requests/:enquiryId/assign-em (enquiry id or "TKT-…")
+ */
+export const assignHelpRequest = async (req, res) => {
+  try {
+    const { emId, emName, assignedBy } = req.body;
+    const enquiry = await ChatEnquiry.findOneAndUpdate(
+      ticketFilter(req.params.enquiryId),
+      {
+        $set: emId
+          ? { assignedEmId: emId, assignedEmName: emName, assignedAt: new Date(), assignedBy: assignedBy ?? null }
+          : { assignedEmId: null, assignedEmName: null, assignedAt: null, assignedBy: assignedBy ?? null },
+      },
+      { returnDocument: "after" }
+    );
+    if (!enquiry) return res.status(404).json({ success: false, message: "Request not found" });
+    // Slack is only a notification: it never fails the assignment.
+    notifyHelpAssigned(enquiry).catch((err) => console.error("[assignHelpRequest] Slack notify failed:", err.message));
+    return res.json({ success: true, request: await adminView(enquiry) });
+  } catch (error) {
+    console.error("assignHelpRequest error:", error);
+    return res.status(500).json({ success: false, message: "Could not assign the request" });
   }
 };

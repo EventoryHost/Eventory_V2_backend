@@ -6,6 +6,7 @@ import Vendor from "../models/Vendor.js";
 import {
   addMessage,
   emitToChat,
+  HANDED_OVER_FILTER,
   listMessages,
   serializeChat,
   serializeMessage,
@@ -15,15 +16,28 @@ import {
  * Event Manager side of the vendor Help & Support chat, used by the admin
  * panel. Same access model as the other /api/admin routers; the EM says who
  * they are with emId / emName in each request, like the help-request replies.
+ *
+ * Only chats the vendor handed to a person ("Something else" or "Not quite,
+ * call me") are reachable here: a chat the bot alone handled is 404, so its
+ * conversation stays with the vendor.
  */
 
 const fail = (res, status, message) => res.status(status).json({ success: false, message });
 
 const findChat = async (req, res) => {
-  const chat = await SupportChat.findOne({ chatId: req.params.chatId });
+  const chat = await SupportChat.findOne({ chatId: req.params.chatId, ...HANDED_OVER_FILTER });
   if (!chat) fail(res, 404, "Chat not found");
   return chat;
 };
+
+/** The vendor's view of the chat plus who it's assigned to (admin only). */
+const adminChat = (c) => ({
+  ...serializeChat(c),
+  assignedEmId: c.assignedEmId ?? null,
+  assignedEmName: c.assignedEmName ?? null,
+  assignedAt: c.assignedAt ?? null,
+  assignedBy: c.assignedBy ?? null,
+});
 
 const vendorsById = async (vendorIds) => {
   const vendors = await Vendor.find({ id: { $in: [...new Set(vendorIds)] } })
@@ -73,18 +87,20 @@ const bookingsById = async (bookingIds) => {
 };
 
 /**
- * @desc Chats for the admin panel, newest activity first. Filter by status
- * (e.g. waiting_for_em, call_requested), ticket number or EM.
+ * @desc Handed-over chats for the admin panel, newest activity first.
+ * Filter by status (e.g. waiting_for_em, call_requested), ticket number,
+ * the EM who joined (emId) or the assigned EM (assignedEmId, or "unassigned").
  * @route GET /api/admin/support-chats
  */
 export const listSupportChats = async (req, res) => {
   try {
-    const { status, topic, ticket, emId, page, limit } = req.query;
-    const filter = {};
+    const { status, topic, ticket, emId, assignedEmId, page, limit } = req.query;
+    const filter = { ...HANDED_OVER_FILTER };
     if (status) filter.status = status;
     if (topic) filter.topic = topic;
     if (ticket) filter.ticketNumber = ticket.toUpperCase();
     if (emId) filter.emId = emId;
+    if (assignedEmId) filter.assignedEmId = assignedEmId === "unassigned" ? null : assignedEmId;
 
     const [chats, total] = await Promise.all([
       SupportChat.find(filter)
@@ -105,7 +121,7 @@ export const listSupportChats = async (req, res) => {
       success: true,
       data: {
         chats: chats.map((c) => ({
-          ...serializeChat(c),
+          ...adminChat(c),
           vendor: vendors.get(c.vendorId) ?? null,
           package: packages.get(c.packageId) ?? null,
           booking: bookings.get(c.bookingId) ?? null,
@@ -139,7 +155,7 @@ export const getSupportChat = async (req, res) => {
     return res.json({
       success: true,
       data: {
-        chat: serializeChat(chat),
+        chat: adminChat(chat),
         vendor: vendors.get(chat.vendorId) ?? null,
         package: packages.get(chat.packageId) ?? null,
         booking: bookings.get(chat.bookingId) ?? null,
@@ -171,7 +187,7 @@ export const joinSupportChat = async (req, res) => {
     if (!updated) {
       const current = await SupportChat.findById(chat._id);
       const sameEm = current?.status === "with_em" && (emId ? current.emId === emId : current.emName === emName);
-      if (sameEm) return res.json({ success: true, data: { chat: serializeChat(current) } });
+      if (sameEm) return res.json({ success: true, data: { chat: adminChat(current) } });
       if (current?.status === "with_em") return fail(res, 409, `${current.emName} has already joined this chat`);
       return fail(res, 409, "This chat is not waiting for an Event Manager");
     }
@@ -187,7 +203,16 @@ export const joinSupportChat = async (req, res) => {
     );
     emitToChat(req, updated.chatId, "message:new", joined);
     emitToChat(req, updated.chatId, "chat:em_joined", { chatId: updated.chatId, emId, emName });
-    return res.json({ success: true, data: { chat: serializeChat(updated), message: joined } });
+
+    // Nobody assigned yet: the EM who joined now owns the ticket.
+    const owned = emId
+      ? await SupportChat.findOneAndUpdate(
+          { _id: updated._id, assignedEmId: null },
+          { $set: { assignedEmId: emId, assignedEmName: emName, assignedAt: new Date(), assignedBy: emName } },
+          { returnDocument: "after" }
+        )
+      : null;
+    return res.json({ success: true, data: { chat: adminChat(owned ?? updated), message: joined } });
   } catch (error) {
     console.error("joinSupportChat error:", error);
     return fail(res, 500, "Could not join the chat");
@@ -229,7 +254,7 @@ export const resolveSupportChatByEm = async (req, res) => {
   try {
     const chat = await findChat(req, res);
     if (!chat) return;
-    if (chat.status === "resolved") return res.json({ success: true, data: { chat: serializeChat(chat) } });
+    if (chat.status === "resolved") return res.json({ success: true, data: { chat: adminChat(chat) } });
 
     const updated = await SupportChat.findOneAndUpdate(
       { _id: chat._id, status: { $ne: "resolved" } },
@@ -242,16 +267,44 @@ export const resolveSupportChatByEm = async (req, res) => {
       },
       { returnDocument: "after" }
     );
-    if (!updated) return res.json({ success: true, data: { chat: serializeChat(await SupportChat.findById(chat._id)) } });
+    if (!updated) return res.json({ success: true, data: { chat: adminChat(await SupportChat.findById(chat._id)) } });
 
     const resolved = serializeMessage(
       await addMessage(updated.chatId, { sender: "system", event: "resolved", text: "Marked as resolved" })
     );
     emitToChat(req, updated.chatId, "message:new", resolved);
     emitToChat(req, updated.chatId, "chat:resolved", { chatId: updated.chatId });
-    return res.json({ success: true, data: { chat: serializeChat(updated) } });
+    return res.json({ success: true, data: { chat: adminChat(updated) } });
   } catch (error) {
     console.error("resolveSupportChatByEm error:", error);
     return fail(res, 500, "Could not close the chat");
+  }
+};
+
+/**
+ * @desc Assign a handed-over chat to an Event Manager, or clear it (empty
+ * emId). The vendor isn't told: who replies shows on their messages, and
+ * the EM who joins says so in the chat. Saved on the chat, so it survives a
+ * reload; the name is kept as it was, in case the EM later leaves the list.
+ * @route PUT /api/admin/support-chats/:chatId/assign-em
+ */
+export const assignSupportChat = async (req, res) => {
+  try {
+    const chat = await findChat(req, res);
+    if (!chat) return;
+    const { emId, emName, assignedBy } = req.body;
+    const updated = await SupportChat.findOneAndUpdate(
+      { _id: chat._id },
+      {
+        $set: emId
+          ? { assignedEmId: emId, assignedEmName: emName, assignedAt: new Date(), assignedBy: assignedBy ?? null }
+          : { assignedEmId: null, assignedEmName: null, assignedAt: null, assignedBy: assignedBy ?? null },
+      },
+      { returnDocument: "after" }
+    );
+    return res.json({ success: true, data: { chat: adminChat(updated) } });
+  } catch (error) {
+    console.error("assignSupportChat error:", error);
+    return fail(res, 500, "Could not assign the chat");
   }
 };
