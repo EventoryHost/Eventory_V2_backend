@@ -209,6 +209,17 @@ export const VENDOR_NOTIFICATION_TYPES = {
     title: () => "New booking assigned to you",
     body: (ctx) => `${pkg(ctx)}. The Eventory team moved this booking to you.`,
   },
+  // The Eventory team changed a booking on the vendor's behalf or the
+  // customer's (date / venue / time, a customisation response, a
+  // cancellation). `changeSummary` says what moved.
+  "booking.updatedByEventory": {
+    category: "booking",
+    target: booking,
+    showsPackageImage: true,
+    title: () => "Eventory updated your booking",
+    body: (ctx) => sentence(`${pkgOn(ctx)}.`, ctx.changeSummary || "Open it to see what changed."),
+    push: true,
+  },
 
   // ── Event day ────────────────────────────────────────────────────────────
   "eventDay.dayRequest": {

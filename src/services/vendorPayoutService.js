@@ -1,4 +1,8 @@
+import axios from "axios";
 import Transaction from "../models/Transaction.js";
+import Vendor from "../models/Vendor.js";
+import generateUniqueId from "../utils/generateId.js";
+import { buildPayoutsHeaders, getPayoutsBaseUrl } from "../utils/cashfreePayoutsHelper.js";
 import { round2 } from "../utils/money.js";
 import { bookingCommercialSnapshot } from "./commercial/commercialService.js";
 
@@ -105,6 +109,228 @@ export async function recordVendorMilestoneDue({ booking, milestoneTitle, grossA
     amount: split.vendorReceivable,
     status: "PaymentDue",
   });
+}
+
+/** A payout Cashfree refused, or one that can't be attempted — carries the HTTP status to answer with. */
+export class PayoutError extends Error {
+  constructor(status, message, details = null) {
+    super(message);
+    this.name = "PayoutError";
+    this.status = status;
+    this.details = details;
+  }
+}
+
+const str = (value) => (typeof value === "string" ? value.trim() : "");
+
+/**
+ * Sends `amount` to the vendor's bank account through Cashfree Payouts:
+ * picks the bank account (`bankAccountId`, else the first one on file),
+ * finds or registers the Cashfree beneficiary, then fires the transfer.
+ *
+ * Moves real money. Writes no Transaction — the caller records the transfer
+ * (a manual payout creates one; an approved due record is settled in place).
+ * Throws PayoutError for anything the admin should see.
+ *
+ * Shared by POST /api/admin/vendors/:id/payout and the payout queue
+ * (POST /api/admin/payouts/:transactionId/approve).
+ */
+export async function disburseToVendor(vendor, amount, { bankAccountId, transferMode = "neft", remarks } = {}) {
+  let bank = null;
+  if (bankAccountId && Array.isArray(vendor.bankDetails)) {
+    bank = vendor.bankDetails.find(
+      (b) => (b._id && b._id.toString() === String(bankAccountId)) || b.beneficiaryId === String(bankAccountId)
+    );
+  }
+  if (!bank && Array.isArray(vendor.bankDetails) && vendor.bankDetails.length > 0) {
+    if (!bankAccountId) {
+      bank = vendor.bankDetails[0];
+    }
+  }
+
+  if (!bank || !bank.accountNumber || !bank.ifscCode) {
+    throw new PayoutError(400, "No valid bank account details (account number and IFSC) found for payout");
+  }
+
+  let beneficiaryId = bank.beneficiaryId;
+
+  const pBase = getPayoutsBaseUrl();
+  const pHeaders = buildPayoutsHeaders();
+
+  // Check if beneficiary already exists in Cashfree
+  let exists = false;
+
+  // 1. First attempt: check by beneficiary_id if present
+  if (beneficiaryId) {
+    try {
+      const beneResp = await axios.get(`${pBase}/beneficiary`, {
+        headers: pHeaders,
+        params: { beneficiary_id: beneficiaryId },
+      });
+      if (beneResp?.status === 200) {
+        exists = true;
+      }
+    } catch (e) {
+      if (e?.response?.status !== 404) {
+        console.error(
+          `[VendorPayout] Cashfree beneficiary lookup by ID failed for ${beneficiaryId}:`,
+          e?.response?.data || e.message
+        );
+      }
+    }
+  }
+
+  // 2. Second attempt: check by bank_account_number and bank_ifsc
+  if (!exists) {
+    try {
+      const bankLookupResp = await axios.get(`${pBase}/beneficiary`, {
+        headers: pHeaders,
+        params: {
+          bank_account_number: bank.accountNumber,
+          bank_ifsc: bank.ifscCode,
+        },
+      });
+      const matchedId =
+        bankLookupResp?.data?.beneficiary_id ||
+        bankLookupResp?.data?.data?.beneficiary_id;
+
+      if (matchedId) {
+        beneficiaryId = matchedId;
+        bank.beneficiaryId = beneficiaryId;
+        await Vendor.updateOne(
+          { _id: vendor._id, "bankDetails._id": bank._id },
+          { $set: { "bankDetails.$.beneficiaryId": beneficiaryId } }
+        );
+        exists = true;
+      }
+    } catch (e) {
+      if (e?.response?.status !== 404) {
+        console.error(
+          `[VendorPayout] Cashfree beneficiary lookup by bank details failed:`,
+          e?.response?.data || e.message
+        );
+      }
+    }
+  }
+
+  // 3. Create beneficiary if not found in Cashfree
+  if (!exists) {
+    if (!beneficiaryId) {
+      beneficiaryId = generateUniqueId("BENE");
+      bank.beneficiaryId = beneficiaryId;
+      await Vendor.updateOne(
+        { _id: vendor._id, "bankDetails._id": bank._id },
+        { $set: { "bankDetails.$.beneficiaryId": beneficiaryId } }
+      );
+    }
+
+    try {
+      const benePhone = (vendor.pocPhone || vendor.phone || "9999999999")
+        .replace(/\D/g, "")
+        .slice(-10)
+        .padStart(10, "9");
+      const beneEmail = vendor.email || "noreply@eventory.in";
+      const beneName = bank.beneficiaryName || vendor.businessName || vendor.pocName || "Vendor";
+
+      await axios.post(
+        `${pBase}/beneficiary`,
+        {
+          beneficiary_id: beneficiaryId,
+          beneficiary_name: beneName,
+          beneficiary_instrument_details: {
+            bank_account_number: bank.accountNumber,
+            bank_ifsc: bank.ifscCode,
+          },
+          beneficiary_contact_details: {
+            beneficiary_email: beneEmail,
+            beneficiary_phone: benePhone,
+            beneficiary_country_code: "+91",
+          },
+        },
+        { headers: pHeaders }
+      );
+      exists = true;
+    } catch (beneErr) {
+      console.error(
+        `[VendorPayout] Failed to create beneficiary ${beneficiaryId}:`,
+        beneErr?.response?.data || beneErr.message
+      );
+
+      // Fallback: if already exists, fetch the existing beneficiary_id from Cashfree
+      const isConflict =
+        beneErr?.response?.status === 409 ||
+        JSON.stringify(beneErr?.response?.data || "").toLowerCase().includes("already exists") ||
+        (beneErr?.message || "").toLowerCase().includes("already exists");
+
+      if (isConflict) {
+        try {
+          const fallbackLookup = await axios.get(`${pBase}/beneficiary`, {
+            headers: pHeaders,
+            params: {
+              bank_account_number: bank.accountNumber,
+              bank_ifsc: bank.ifscCode,
+            },
+          });
+          const fallbackId =
+            fallbackLookup?.data?.beneficiary_id ||
+            fallbackLookup?.data?.data?.beneficiary_id;
+
+          if (fallbackId) {
+            beneficiaryId = fallbackId;
+            bank.beneficiaryId = beneficiaryId;
+            await Vendor.updateOne(
+              { _id: vendor._id, "bankDetails._id": bank._id },
+              { $set: { "bankDetails.$.beneficiaryId": beneficiaryId } }
+            );
+            exists = true;
+          }
+        } catch (lookupErr) {
+          console.error(
+            "[VendorPayout] Fallback beneficiary lookup failed:",
+            lookupErr?.response?.data || lookupErr.message
+          );
+        }
+      }
+
+      if (!exists) {
+        const errData = beneErr?.response?.data;
+        const errMsg = errData?.message || beneErr.message || "Failed to create Cashfree beneficiary";
+        throw new PayoutError(502, `Cashfree Beneficiary Error: ${errMsg}`, errData);
+      }
+    }
+  }
+
+  // Generate unique transfer ID
+  const transferId = generateUniqueId("TRN");
+  const transferRemarks = str(remarks).slice(0, 70) || "Vendor Payout";
+
+  // Call Cashfree Payouts Transfers API
+  let tData;
+  try {
+    const tResp = await axios.post(
+      `${pBase}/transfers`,
+      {
+        transfer_id: transferId,
+        transfer_amount: amount,
+        beneficiary_details: { beneficiary_id: beneficiaryId },
+        transfer_mode: transferMode,
+        transfer_remarks: transferRemarks,
+      },
+      { headers: pHeaders }
+    );
+    tData = tResp?.data || {};
+  } catch (tErr) {
+    console.error(
+      `[VendorPayout] Transfer failed for vendor ${vendor.id}:`,
+      tErr?.response?.data || tErr.message
+    );
+    const errData = tErr?.response?.data;
+    const errMsg = errData?.message || tErr.message || "Failed to initiate transfer";
+    throw new PayoutError(502, `Cashfree Transfer Error: ${errMsg}`, errData);
+  }
+
+
+  return { transferId, tData, transferMode };
 }
 
 export default recordVendorMilestoneDue;
