@@ -19,6 +19,24 @@ import {
   setVendorVisibility,
   initiateVendorPayout,
 } from "../controllers/adminVendorController.js";
+import {
+  searchGoogleBusinesses,
+  getGoogleBusinessPlace,
+  resolveGoogleBusinessLink,
+  getVendorGoogleBusiness,
+  unlinkVendorGoogleBusiness,
+  adminListPendingGoogleBusiness,
+  adminLinkGoogleBusiness,
+  adminApproveGoogleBusiness,
+  adminRejectGoogleBusiness,
+} from "../controllers/googleBusinessController.js";
+import { validateRequest } from "../middlewares/validateRequest.js";
+import {
+  googleBusinessSearchQuerySchema,
+  googleBusinessPlaceQuerySchema,
+  googleBusinessLinkSchema,
+  googleBusinessResolveLinkSchema,
+} from "../validators/googleBusinessValidators.js";
 
 const router = express.Router();
 
@@ -41,5 +59,29 @@ router.get("/:id/verification-history", getVerificationHistory);
 router.put("/:id/assign-em", assignEmToVendor);
 router.put("/:id/visibility", setVendorVisibility);
 router.post("/:id/payout", initiateVendorPayout);
+
+router.get("/google-business/pending", adminListPendingGoogleBusiness);
+router.get(
+  "/google-business/search",
+  validateRequest(googleBusinessSearchQuerySchema, "query"),
+  searchGoogleBusinesses
+);
+router.get(
+  "/google-business/places/:placeId",
+  validateRequest(googleBusinessPlaceQuerySchema, "query"),
+  getGoogleBusinessPlace
+);
+router.post(
+  "/google-business/resolve-link",
+  validateRequest(googleBusinessResolveLinkSchema),
+  resolveGoogleBusinessLink
+);
+router
+  .route("/:id/google-business")
+  .get(getVendorGoogleBusiness)
+  .put(validateRequest(googleBusinessLinkSchema), adminLinkGoogleBusiness)
+  .delete(unlinkVendorGoogleBusiness);
+router.put("/:id/google-business/approve", adminApproveGoogleBusiness);
+router.put("/:id/google-business/reject", adminRejectGoogleBusiness);
 
 export default router;

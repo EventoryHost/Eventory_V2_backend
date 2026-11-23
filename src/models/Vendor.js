@@ -13,6 +13,7 @@ import { computeCompletion } from "../utils/profileCompletion.js";
 import { isServiceAreaItem } from "../utils/serviceAreas.js";
 import { deriveStatus } from "../utils/vendorVerificationStatus.js";
 import { VendorCommercialSchema } from "./schemas/commercialSchemas.js";
+import { GoogleBusinessSchema } from "./schemas/googleBusinessSchema.js";
 
 const VendorSchema = new mongoose.Schema({
   id: {
@@ -221,6 +222,7 @@ const VendorSchema = new mongoose.Schema({
     type: Number,
     default: 0,
   },
+  googleBusiness: { type: GoogleBusinessSchema, default: null },
   assignedEmId: {
     type: String,
     default: null,
