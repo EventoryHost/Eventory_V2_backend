@@ -1,5 +1,5 @@
 import mongoose from "mongoose";
-import Booking, { TERMINAL_STATUSES } from "../models/Booking.js";
+import Booking, { PRE_ACCEPTANCE_STATUSES, TERMINAL_STATUSES } from "../models/Booking.js";
 import Vendor from "../models/Vendor.js"; // For reassignment validation
 import Package from "../models/Package.js";
 import Customer from "../models/Customer.js";
@@ -35,7 +35,7 @@ const ADMIN_CUSTOMER_FIELDS = "_id id name phone email addresses";
 
 // Strict 24-hex check. mongoose's own isValid() also accepts ANY 12-character
 // string, which would send a short public id into an _id query.
-const isObjectIdString = (value) =>
+export const isObjectIdString = (value) =>
   typeof value === "string" && /^[0-9a-fA-F]{24}$/.test(value);
 
 /**
@@ -43,13 +43,13 @@ const isObjectIdString = (value) =>
  * the MongoDB _id. null for anything else, so a malformed id is a 404 rather
  * than a CastError 500.
  */
-const bookingLookup = (bookingIdParam) => {
+export const bookingLookup = (bookingIdParam) => {
   if (bookingIdParam.startsWith("EVT")) return { bookingId: bookingIdParam };
   if (isObjectIdString(bookingIdParam)) return { _id: bookingIdParam };
   return null;
 };
 
-const bookingNotFound = (res) =>
+export const bookingNotFound = (res) =>
   res.status(404).json({ success: false, message: "Booking not found" });
 
 // Express's query parser turns a repeated key into an array — only a plain
@@ -108,7 +108,7 @@ const toPackageSummary = (pkg) =>
     : null;
 
 /** Adds `vendor` (summary or null) to each lean booking; vendorId stays raw. */
-const attachVendors = async (bookings) => {
+export const attachVendors = async (bookings) => {
   const vendorsByRef = await resolveVendorsByRef(bookings.map((b) => b.vendorId));
   return bookings.map((booking) => ({
     ...booking,
@@ -122,7 +122,7 @@ const attachVendors = async (bookings) => {
  * both GET and PUT /:bookingId so the edit screen can simply replace its
  * state with the PUT response.
  */
-const buildBookingDetail = async (booking) => {
+export const buildBookingDetail = async (booking) => {
   const detail = withPricingBreakdown(booking);
 
   // Payment.bookingId / Invoice.bookingId hold String(booking._id) (see
@@ -179,44 +179,41 @@ const buildBookingDetail = async (booking) => {
   };
 };
 
+// Bookings still waiting on the vendor's answer — the statuses before
+// acceptance ("Pending" stopped being a status in the 2026-08-27 enum rewrite,
+// so these queues matched nothing).
+const awaitingVendor = () => ({ status: { $in: PRE_ACCEPTANCE_STATUSES } });
+
+const pageParams = (query) => {
+  const page = Math.max(1, parseInt(query.page, 10) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(query.limit, 10) || 10));
+  return { page, limit, skip: (page - 1) * limit };
+};
+
 // GET /api/admin/bookings/exception-queue
+// Bookings the vendor hasn't answered within the SLA, oldest first.
 export const getExceptionQueue = async (req, res) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = pageParams(req.query);
+    const query = { ...awaitingVendor(), createdAt: { $lt: getSlaThreshold() } };
 
-    const threshold = getSlaThreshold();
+    const [bookings, total] = await Promise.all([
+      Booking.find(query).sort({ createdAt: 1 }).skip(skip).limit(limit).lean(),
+      Booking.countDocuments(query),
+    ]);
 
-    const query = {
-      status: "Pending",
-      createdAt: { $lt: threshold },
-    };
-
-    const bookings = await Booking.find(query)
-      .populate("vendorId", "businessName city phone isVerified vendorType")
-      .sort({ createdAt: 1 })
-      .skip(skip)
-      .limit(parseInt(limit));
-
-    // Calculate SLA breach minutes for each
-    const now = new Date();
-    const withSlaData = bookings.map(b => {
-      const bObj = b.toObject();
-      const breachedMs = now - (new Date(bObj.createdAt).getTime() + (SLA_HOURS * 60 * 60 * 1000));
-      bObj.slaBreachedMinutes = Math.floor(breachedMs / 60000);
-      return bObj;
-    });
-
-    const total = await Booking.countDocuments(query);
+    const now = Date.now();
+    const data = (await attachVendors(bookings)).map((b) => ({
+      ...b,
+      slaBreachedMinutes: Math.floor(
+        (now - (new Date(b.createdAt).getTime() + SLA_HOURS * 60 * 60 * 1000)) / 60000
+      ),
+    }));
 
     res.status(200).json({
       success: true,
-      data: withSlaData,
-      pagination: {
-        total,
-        page: parseInt(page),
-        pages: Math.ceil(total / limit),
-      },
+      data,
+      pagination: { total, page, pages: Math.ceil(total / limit) },
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -227,7 +224,7 @@ export const getExceptionQueue = async (req, res) => {
 export const getExceptionQueueCount = async (req, res) => {
   try {
     const count = await Booking.countDocuments({
-      status: "Pending",
+      ...awaitingVendor(),
       createdAt: { $lt: getSlaThreshold() },
     });
     res.status(200).json({ success: true, count });
@@ -239,38 +236,29 @@ export const getExceptionQueueCount = async (req, res) => {
 // GET /api/admin/bookings/pending
 export const getAllPending = async (req, res) => {
   try {
-    const { page = 1, limit = 10 } = req.query;
-    const skip = (page - 1) * limit;
+    const { page, limit, skip } = pageParams(req.query);
+    const query = awaitingVendor();
 
-    const bookings = await Booking.find({ status: "Pending" })
-      .populate("vendorId", "businessName city phone isVerified vendorType")
-      .sort({ createdAt: 1 })
-      .skip(skip)
-      .limit(parseInt(limit));
+    const [bookings, total] = await Promise.all([
+      Booking.find(query).sort({ createdAt: 1 }).skip(skip).limit(limit).lean(),
+      Booking.countDocuments(query),
+    ]);
 
-    const total = await Booking.countDocuments({ status: "Pending" });
-    
-    // Add SLA timer info
-    const now = new Date();
-    const withSlaData = bookings.map(b => {
-      const bObj = b.toObject();
-      const slaDeadline = new Date(bObj.createdAt).getTime() + (SLA_HOURS * 60 * 60 * 1000);
-      const diffMs = now.getTime() - slaDeadline;
-      
-      bObj.isSlaBreached = diffMs > 0;
-      bObj.slaDiffMinutes = Math.floor(Math.abs(diffMs) / 60000); // Minutes until breach (or since breach)
-      
-      return bObj;
+    const now = Date.now();
+    const data = (await attachVendors(bookings)).map((b) => {
+      const diffMs = now - (new Date(b.createdAt).getTime() + SLA_HOURS * 60 * 60 * 1000);
+      return {
+        ...b,
+        isSlaBreached: diffMs > 0,
+        // Minutes until breach (or since breach)
+        slaDiffMinutes: Math.floor(Math.abs(diffMs) / 60000),
+      };
     });
 
     res.status(200).json({
       success: true,
-      data: withSlaData,
-      pagination: {
-        total,
-        page: parseInt(page),
-        pages: Math.ceil(total / limit),
-      },
+      data,
+      pagination: { total, page, pages: Math.ceil(total / limit) },
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
@@ -293,60 +281,6 @@ export const getBookingDetails = async (req, res) => {
   }
 };
 
-// PUT /api/admin/bookings/:bookingId/reassign
-export const reassignBooking = async (req, res) => {
-  try {
-    const { newVendorId, reason } = req.body;
-    
-    // Validate new vendor exists
-    const vendorQuery = mongoose.Types.ObjectId.isValid(newVendorId)
-      ? { $or: [{ _id: newVendorId }, { id: newVendorId }] }
-      : { id: newVendorId };
-    const newVendor = await Vendor.findOne(vendorQuery);
-    if (!newVendor) {
-      return res.status(404).json({ success: false, message: "New vendor not found" });
-    }
-
-    const booking = await Booking.findByIdAndUpdate(
-      req.params.bookingId,
-      { 
-        // Public id: what the vendor's lists (and inbox) query by.
-        vendorId: newVendor.id || newVendorId,
-        // Reset status if it was declined/cancelled etc? 
-        // For now just change vendor, keep status pending if it was pending
-      },
-      { new: true }
-    );
-    
-    if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
-
-    notifyVendor("booking.reassigned", contextFromDeal(booking));
-    
-    res.status(200).json({ success: true, data: booking, reason });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
-// PUT /api/admin/bookings/:bookingId/force-accept
-export const forceAccept = async (req, res) => {
-  try {
-    // "Confirmed" — "Accepted" is not a booking status since the 2026-08-27
-    // enum rewrite, and findByIdAndUpdate skips validation, so the old value
-    // was written as-is and the booking vanished from every list.
-    const booking = await Booking.findByIdAndUpdate(
-      req.params.bookingId,
-      { status: "Confirmed", confirmedAt: new Date() },
-      { new: true }
-    );
-    if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
-    notifyVendor("booking.confirmedByEventory", contextFromDeal(booking));
-    res.status(200).json({ success: true, data: booking });
-  } catch (error) {
-    res.status(500).json({ success: false, message: error.message });
-  }
-};
-
 // GET /api/admin/bookings/stats
 export const getStats = async (req, res) => {
   try {
@@ -363,10 +297,10 @@ export const getStats = async (req, res) => {
       totalAccepted,
       totalCount
     ] = await Promise.all([
-      Booking.countDocuments({ status: "Pending" }),
-      Booking.countDocuments({ status: "Pending", createdAt: { $lt: threshold } }),
+      Booking.countDocuments(awaitingVendor()),
+      Booking.countDocuments({ ...awaitingVendor(), createdAt: { $lt: threshold } }),
       Booking.countDocuments({ eventDate: { $gte: todayStart, $lte: todayEnd } }),
-      Booking.countDocuments({ status: "Accepted" }),
+      Booking.countDocuments({ status: { $in: ["Confirmed", "Completed"] } }),
       Booking.countDocuments({})
     ]);
 
@@ -519,9 +453,9 @@ export const getTodaysBookings = async (req, res) => {
 
     const bookings = await Booking.find({
       eventDate: { $gte: todayStart, $lte: todayEnd }
-    }).populate("vendorId", "businessName city");
+    }).lean();
 
-    res.status(200).json({ success: true, data: bookings });
+    res.status(200).json({ success: true, data: await attachVendors(bookings) });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
   }
@@ -663,7 +597,7 @@ const replaceSubdocs = (current, incoming, finalize) =>
 
 const sameTime = (a, b) => new Date(a).getTime() === new Date(b).getTime();
 
-const saveValidationFailed = (res, error) =>
+export const saveValidationFailed = (res, error) =>
   res.status(400).json({
     success: false,
     message: "Validation failed",
@@ -679,7 +613,7 @@ const saveValidationFailed = (res, error) =>
  * use. Runs after the booking is saved. Returns a message per step that
  * failed (empty when all went through).
  */
-const syncPackageCalendar = async (before, booking) => {
+export const syncPackageCalendar = async (before, booking) => {
   const wasConfirmed = before.status === "Confirmed";
   const isConfirmed = booking.status === "Confirmed";
   const slotMoved =
