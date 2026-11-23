@@ -437,4 +437,27 @@ export const adminDayRequestUpdateSchema = z
 
 export const adminIssueUpdateSchema = z.object({ status: z.enum(["Open", "Resolved"]) });
 
+// ─── Vendor payouts recorded by the team (adminPayoutController.js) ───
+// Payouts are made offline; these are the payment details stored on the
+// Transaction (amount, transferMode, transferId = UTR / reference, receivedDate).
+export const PAYOUT_MODES = ["neft", "imps", "rtgs", "upi", "cash", "cheque", "other"];
+
+const payoutPaymentFields = {
+  amount: z.number().positive("amount must be more than 0"),
+  transferMode: z.enum(PAYOUT_MODES),
+  transferId: z.string().trim().min(1, "Enter the UTR / payment reference").max(100),
+  paidAt: isoDate.optional(),
+  force: z.boolean().optional(),
+};
+
+/** POST /api/admin/payouts/:transactionId/record — settle a due record. */
+export const adminRecordPayoutSchema = z.object(payoutPaymentFields);
+
+/** POST /api/admin/payouts — a payout for a booking with no due record. */
+export const adminCreatePayoutSchema = z.object({
+  bookingId: z.string().trim().min(1).max(100),
+  milestoneTitle: z.string().trim().max(200).optional(),
+  ...payoutPaymentFields,
+});
+
 export default { adminUpdateBookingSchema };

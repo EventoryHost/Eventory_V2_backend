@@ -4,17 +4,18 @@ import Vendor from "../models/Vendor.js";
 import Booking from "../models/Booking.js";
 import { round2 } from "../utils/money.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
-import { PayoutError, disburseToVendor } from "../services/vendorPayoutService.js";
 import { notifyVendor } from "../services/vendorNotificationService.js";
 
 /**
- * The vendor payout queue. Every customer payment that clears leaves a
+ * The vendor payout register. Every customer payment that clears leaves a
  * Transaction { status: "PaymentDue" } recording what the vendor is owed
- * (services/vendorPayoutService.js recordVendorMilestoneDue). Nothing is paid
- * automatically: the team reviews each due record here, approves it, and the
- * transfer goes out through Cashfree Payouts. The record is then settled in
- * place (Received + transfer ids), so the vendor's earnings and the booking
- * both show the payout.
+ * (services/vendorPayoutService.js recordVendorMilestoneDue).
+ *
+ * No money moves from here. Payouts are made offline (bank transfer, UPI,
+ * cash…) and the team records each one against its booking: settling a due
+ * record, or adding an entry for a payout that had none. The record then
+ * reads Received with the payment details, so the vendor's earnings and the
+ * booking both show it.
  */
 
 const STATUSES = ["PaymentDue", "Pending", "Received"];
@@ -27,11 +28,6 @@ const transactionLookup = (ref) =>
   mongoose.isValidObjectId(ref) && /^[0-9a-fA-F]{24}$/.test(ref)
     ? { $or: [{ transactionId: ref }, { _id: ref }] }
     : { transactionId: ref };
-
-const findVendor = (ref) =>
-  Vendor.findOne(
-    /^[0-9a-fA-F]{24}$/.test(String(ref)) ? { $or: [{ id: ref }, { _id: ref }] } : { id: ref }
-  );
 
 /**
  * @route GET /api/admin/payouts
@@ -162,127 +158,106 @@ export const listPayouts = async (req, res) => {
   }
 };
 
+// The payment details a recorded payout carries (Transaction schema fields).
+const paymentFields = ({ amount, transferMode, transferId, paidAt }) => {
+  const reference = String(transferId).trim();
+  return {
+    status: "Received",
+    amount: round2(Number(amount)),
+    transferMode: String(transferMode).toLowerCase(),
+    transferId: reference,
+    settledByTransferId: reference,
+    // Not a Cashfree transfer — marks an offline payout recorded by the team.
+    cfTransferStatus: "MANUAL",
+    receivedDate: paidAt ? new Date(paidAt) : new Date(),
+  };
+};
+
+const checkBookingActive = async (bookingId, force) => {
+  if (!bookingId || force === true) return null;
+  const booking = await Booking.findOne({ bookingId }).select("status").lean();
+  if (booking && BLOCKED_BOOKING_STATUSES.includes(booking.status)) {
+    return `The booking is ${booking.status}. Check refunds first, or record with override.`;
+  }
+  return null;
+};
+
 /**
- * @route POST /api/admin/payouts/:transactionId/approve
- * @body  { amount?, transferMode?, remarks?, bankAccountId?, force? }
+ * @route POST /api/admin/payouts/:transactionId/record
+ * @body  { amount, transferMode, transferId, paidAt?, force? }
  *
- * Approves one due record and pays it. `amount` overrides the suggested net
- * figure the record carries. The record is claimed (PaymentDue → Pending)
- * before any money moves, so two clicks — or two admins — can't pay it twice;
- * a failed transfer puts it back to PaymentDue.
+ * Records that the vendor has been paid (offline) for a due record. Only a
+ * PaymentDue record can be settled, so the same payout can't be recorded twice.
  */
-export const approvePayout = async (req, res) => {
-  const ref = String(req.params.transactionId || "");
-  let claimed = null;
+export const recordPayout = async (req, res) => {
   try {
-    const { amount, transferMode, remarks, bankAccountId, force } = req.body || {};
-    const tx = await Transaction.findOne(transactionLookup(ref));
+    const ref = String(req.params.transactionId || "");
+    const tx = await Transaction.findOne(transactionLookup(ref)).lean();
     if (!tx) return res.status(404).json({ success: false, message: "Payout record not found" });
     if (tx.status !== "PaymentDue") {
-      return res.status(409).json({ success: false, message: `This payout is already ${tx.status === "Received" ? "paid" : "being processed"}.` });
+      return res.status(409).json({ success: false, message: "This payout is already recorded." });
     }
+    const blocked = await checkBookingActive(tx.bookingId, req.body.force);
+    if (blocked) return res.status(409).json({ success: false, code: "BOOKING_NOT_ACTIVE", message: blocked });
 
-    const payAmount = amount != null ? round2(Number(amount)) : round2(tx.amount);
-    if (!Number.isFinite(payAmount) || payAmount <= 0) {
-      return res.status(400).json({ success: false, message: "Valid positive amount is required" });
-    }
-
-    if (tx.bookingId && force !== true) {
-      const booking = await Booking.findOne({ bookingId: tx.bookingId }).select("status").lean();
-      if (booking && BLOCKED_BOOKING_STATUSES.includes(booking.status)) {
-        return res.status(409).json({
-          success: false,
-          code: "BOOKING_NOT_ACTIVE",
-          message: `The booking is ${booking.status}. Check refunds before paying the vendor, or approve with override.`,
-        });
-      }
-    }
-
-    const vendor = await findVendor(tx.vendorId);
-    if (!vendor) return res.status(404).json({ success: false, message: "Vendor not found" });
-
-    claimed = await Transaction.findOneAndUpdate(
+    const settled = await Transaction.findOneAndUpdate(
       { _id: tx._id, status: "PaymentDue" },
-      { $set: { status: "Pending" } },
-      { new: true }
-    );
-    if (!claimed) {
-      return res.status(409).json({ success: false, message: "This payout is already being processed." });
-    }
-
-    const mode = String(transferMode || "neft").toLowerCase();
-    let transfer;
-    try {
-      transfer = await disburseToVendor(vendor, payAmount, {
-        bankAccountId,
-        transferMode: mode,
-        remarks: remarks || `${tx.bookingId || "Payout"} ${tx.milestoneTitle || ""}`.trim(),
-      });
-    } catch (payoutError) {
-      await Transaction.updateOne({ _id: tx._id, status: "Pending" }, { $set: { status: "PaymentDue" } });
-      claimed = null;
-      if (payoutError instanceof PayoutError) {
-        return res.status(payoutError.status).json({
-          success: false,
-          message: payoutError.message,
-          ...(payoutError.details ? { details: payoutError.details } : {}),
-        });
-      }
-      throw payoutError;
-    }
-
-    const settled = await Transaction.findByIdAndUpdate(
-      tx._id,
-      {
-        $set: {
-          status: "Received",
-          receivedDate: new Date(),
-          amount: payAmount,
-          transferId: transfer.transferId,
-          settledByTransferId: transfer.transferId,
-          cfTransferStatus: transfer.tData?.status || "SUCCESS",
-          transferMode: transfer.transferMode,
-        },
-      },
-      { new: true }
+      { $set: paymentFields(req.body) },
+      { new: true, runValidators: true }
     ).lean();
-    claimed = null;
+    if (!settled) return res.status(409).json({ success: false, message: "This payout is already recorded." });
 
     notifyVendor("payments.payoutProcessed", {
-      vendorId: vendor.id,
+      vendorId: tx.vendorId,
       bookingId: tx.bookingId,
-      amount: payAmount,
-      dedupeKey: `payments.payout:${transfer.transferId}`,
+      amount: settled.amount,
+      dedupeKey: `payments.payout:${settled.transactionId}`,
     });
-
-    return res.status(200).json({ success: true, data: settled, transfer: transfer.tData });
+    return res.status(200).json({ success: true, data: settled });
   } catch (error) {
-    // The transfer may or may not have gone out — leave a claimed record as
-    // Pending for the team to check in Cashfree rather than reopening it.
-    console.error(`[adminPayout] approve ${ref} failed:`, error);
-    return res.status(500).json({
-      success: false,
-      message: claimed
-        ? `${error.message}. The record is left as Pending — check the transfer in Cashfree before retrying.`
-        : error.message,
-    });
+    return res.status(500).json({ success: false, message: error.message });
   }
 };
 
 /**
- * @route PUT /api/admin/payouts/:transactionId/reopen
- * Puts a record stuck in Pending (a transfer whose outcome was unclear) back
- * into the queue once the team has checked Cashfree.
+ * @route POST /api/admin/payouts
+ * @body  { bookingId, milestoneTitle?, amount, transferMode, transferId, paidAt?, force? }
+ *
+ * Adds a payout the team made for a booking that has no due record for it
+ * (e.g. money the customer paid the vendor's way offline). The vendor and the
+ * customer/event details are taken from the booking.
  */
-export const reopenPayout = async (req, res) => {
+export const createPayout = async (req, res) => {
   try {
-    const tx = await Transaction.findOneAndUpdate(
-      { ...transactionLookup(String(req.params.transactionId || "")), status: "Pending" },
-      { $set: { status: "PaymentDue" } },
-      { new: true }
-    ).lean();
-    if (!tx) return res.status(409).json({ success: false, message: "Only a Pending payout can be reopened." });
-    return res.status(200).json({ success: true, data: tx });
+    const { bookingId, milestoneTitle } = req.body;
+    const booking = await Booking.findOne(
+      /^[0-9a-fA-F]{24}$/.test(bookingId) ? { $or: [{ bookingId }, { _id: bookingId }] } : { bookingId }
+    )
+      .select("bookingId vendorId customer.name eventDate status")
+      .lean();
+    if (!booking) return res.status(404).json({ success: false, message: "Booking not found" });
+    const blocked = await checkBookingActive(booking.bookingId, req.body.force);
+    if (blocked) return res.status(409).json({ success: false, code: "BOOKING_NOT_ACTIVE", message: blocked });
+
+    const fields = paymentFields(req.body);
+    const created = await Transaction.create({
+      vendorId: booking.vendorId,
+      bookingId: booking.bookingId,
+      customerName: booking.customer?.name || null,
+      eventDate: booking.eventDate || null,
+      milestoneTitle: String(milestoneTitle || "").trim() || "Manual Payout",
+      grossAmount: fields.amount,
+      vendorGrossAmount: fields.amount,
+      ...fields,
+    });
+
+    notifyVendor("payments.payoutProcessed", {
+      vendorId: booking.vendorId,
+      bookingId: booking.bookingId,
+      amount: fields.amount,
+      dedupeKey: `payments.payout:${created.transactionId}`,
+    });
+    return res.status(201).json({ success: true, data: created.toObject() });
   } catch (error) {
     return res.status(500).json({ success: false, message: error.message });
   }
