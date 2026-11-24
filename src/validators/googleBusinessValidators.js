@@ -17,7 +17,3 @@ export const googleBusinessLinkSchema = z.object({
 export const googleBusinessResolveLinkSchema = z.object({
   url: z.string().trim().min(1, "url is required").max(2000),
 });
-
-export const googleReviewsQuerySchema = z.object({
-  include: z.enum(["reviews"]).optional(),
-});

@@ -14,8 +14,6 @@ const SUMMARY_FIELDS = [
   "userRatingCount",
   "googleMapsUri",
 ];
-const RATING_FIELDS = ["id", "rating", "userRatingCount", "googleMapsUri"];
-const REVIEW_FIELDS = [...RATING_FIELDS, "reviews"];
 
 const SHARE_LINK_HOSTS = new Set([
   "maps.app.goo.gl",
@@ -115,29 +113,17 @@ export const getPlaceSummary = async (placeId, sessionToken) => {
   };
 };
 
-const toReview = (review) => ({
-  authorName: review.authorAttribution?.displayName ?? "",
-  authorUri: review.authorAttribution?.uri ?? null,
-  authorPhotoUri: review.authorAttribution?.photoUri ?? null,
-  rating: review.rating ?? null,
-  text: review.text?.text ?? review.originalText?.text ?? "",
-  relativePublishTime: review.relativePublishTimeDescription ?? "",
-  publishTime: review.publishTime ?? null,
-  googleMapsUri: review.googleMapsUri ?? null,
-});
-
-export const getPlaceRatings = async (placeId, { includeReviews = false } = {}) => {
-  const place = await call(
-    { method: "get", url: placeUrl(placeId) },
-    includeReviews ? REVIEW_FIELDS : RATING_FIELDS
-  );
-  return {
-    rating: place.rating ?? null,
-    userRatingCount: place.userRatingCount ?? 0,
-    googleMapsUri: place.googleMapsUri ?? null,
-    ...(includeReviews ? { reviews: (place.reviews ?? []).map(toReview) } : {}),
-  };
+export const placeEmbedUrl = (placeId) => {
+  const key = process.env.GOOGLE_MAPS_EMBED_API_KEY;
+  if (!key || !isPlaceId(placeId)) return null;
+  const params = new URLSearchParams({ key, q: `place_id:${placeId}` });
+  return `https://www.google.com/maps/embed/v1/place?${params}`;
 };
+
+export const placeMapsUrl = (placeId) =>
+  isPlaceId(placeId)
+    ? `https://www.google.com/maps/search/?${new URLSearchParams({ api: "1", query: "Google", query_place_id: placeId })}`
+    : null;
 
 const parseShareUrl = (raw) => {
   let url;
@@ -230,7 +216,8 @@ export const resolveShareLink = async (raw) => {
 export default {
   searchBusinesses,
   getPlaceSummary,
-  getPlaceRatings,
+  placeEmbedUrl,
+  placeMapsUrl,
   resolveShareLink,
   assertPlaceId,
   GooglePlacesError,

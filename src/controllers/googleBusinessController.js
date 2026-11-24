@@ -4,7 +4,8 @@ import { VISIBLE_VENDOR_FILTER } from "../utils/customerVisibility.js";
 import {
   searchBusinesses,
   getPlaceSummary,
-  getPlaceRatings,
+  placeEmbedUrl,
+  placeMapsUrl,
   resolveShareLink,
   GooglePlacesError,
 } from "../services/googlePlacesService.js";
@@ -16,8 +17,6 @@ import {
   unlink,
   listPendingLinks,
 } from "../services/googleBusinessService.js";
-
-const GOOGLE_ATTRIBUTION = "Google Maps";
 
 const handle = (run) => async (req, res, next) => {
   try {
@@ -75,17 +74,16 @@ export const getPublicGoogleReviews = async (req, res) => {
     if (vendor.googleBusiness?.status !== "linked") {
       return res.status(200).json({ status: "SUCCESS", googleReviews: null });
     }
-    const ratings = await getPlaceRatings(vendor.googleBusiness.placeId, {
-      includeReviews: req.query.include === "reviews",
-    });
+    const { placeId } = vendor.googleBusiness;
     return res.status(200).json({
       status: "SUCCESS",
-      googleReviews: { ...ratings, attribution: GOOGLE_ATTRIBUTION },
+      googleReviews: {
+        placeId,
+        embedUrl: placeEmbedUrl(placeId),
+        googleMapsUrl: placeMapsUrl(placeId),
+      },
     });
   } catch (error) {
-    if (error instanceof GooglePlacesError) {
-      return res.status(error.status).json({ status: "FAILED", message: error.message });
-    }
     return res.status(500).json({ status: "ERROR", message: "Failed to fetch Google reviews" });
   }
 };
