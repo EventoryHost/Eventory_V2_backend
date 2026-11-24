@@ -21,9 +21,48 @@ import {
   cancelVendorDeletion,
 } from "../controllers/vendorController.js";
 import { getVendorCommercialTerms } from "../controllers/vendorCommercialController.js";
+import {
+  searchGoogleBusinesses,
+  getGoogleBusinessPlace,
+  resolveGoogleBusinessLink,
+  getVendorGoogleBusiness,
+  linkVendorGoogleBusiness,
+  unlinkVendorGoogleBusiness,
+} from "../controllers/googleBusinessController.js";
+import { validateRequest } from "../middlewares/validateRequest.js";
+import {
+  googleBusinessSearchQuerySchema,
+  googleBusinessPlaceQuerySchema,
+  googleBusinessLinkSchema,
+  googleBusinessResolveLinkSchema,
+} from "../validators/googleBusinessValidators.js";
 
 // Commission range, trial progress and per-package commission range (Commercial Engine).
 router.get("/:id/commercial-terms", ownsVendor, getVendorCommercialTerms);
+
+router.get(
+  "/:id/google-business/search",
+  ownsVendor,
+  validateRequest(googleBusinessSearchQuerySchema, "query"),
+  searchGoogleBusinesses
+);
+router.get(
+  "/:id/google-business/places/:placeId",
+  ownsVendor,
+  validateRequest(googleBusinessPlaceQuerySchema, "query"),
+  getGoogleBusinessPlace
+);
+router.post(
+  "/:id/google-business/resolve-link",
+  ownsVendor,
+  validateRequest(googleBusinessResolveLinkSchema),
+  resolveGoogleBusinessLink
+);
+router
+  .route("/:id/google-business")
+  .get(ownsVendor, getVendorGoogleBusiness)
+  .put(ownsVendor, validateRequest(googleBusinessLinkSchema), linkVendorGoogleBusiness)
+  .delete(ownsVendor, unlinkVendorGoogleBusiness);
 
 /**
  * @swagger

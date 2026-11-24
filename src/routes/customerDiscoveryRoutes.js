@@ -19,6 +19,7 @@ import {
 } from "../controllers/customerDiscoveryController.js";
 import { publicBrowseLimiter } from "../middlewares/rateLimiters.js";
 import { recordView } from "../controllers/packageAnalyticsController.js";
+import { getPublicGoogleReviews } from "../controllers/googleBusinessController.js";
 import { validateRequest } from "../middlewares/validateRequest.js";
 import {
   browsePackagesQuerySchema,
@@ -505,6 +506,12 @@ router.get(
   publicBrowseLimiter,
   validateRequest(reviewsQuerySchema, "query"),
   getVendorReviews
+);
+
+router.get(
+  "/vendors/:vendorId/google-reviews",
+  publicBrowseLimiter,
+  getPublicGoogleReviews
 );
 
 export default router;
