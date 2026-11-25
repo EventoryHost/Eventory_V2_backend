@@ -449,6 +449,19 @@ export const VENDOR_NOTIFICATION_TYPES = {
     body: (ctx) =>
       sentence(ctx.issueText ? `${ctx.issueText}.` : null, "Your Event Manager has been notified."),
   },
+  // An Event Manager wrote in the vendor's Help & Support chat (admin panel).
+  // Tap opens that chat. One unread row per chat: more replies while it's
+  // unread don't add rows (services/supportReplyNotifier.js).
+  "support.emReplied": {
+    push: {
+      title: (ctx) => `${ctx.emName || "Your Event Manager"} replied to your request`,
+      body: () => "Tap to open the chat.",
+    },
+    category: "support",
+    target: (ctx) => ({ kind: "support", id: ctx.chatId ?? null }),
+    title: (ctx) => `${ctx.emName || "Your Event Manager"} replied to your request`,
+    body: (ctx) => ctx.replyPreview || "Open the chat to read their reply.",
+  },
   "support.safetyReported": {
     category: "support",
     needsAction: true,

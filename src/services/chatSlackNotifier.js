@@ -1,7 +1,15 @@
 import axios from "axios";
 import ChatEnquiry from "../models/ChatEnquiry.js";
 import Booking from "../models/Booking.js";
-import { buildSlackPayload, resolvedBlocks } from "./helpTicketSlack.js";
+import { adminTicketUrl, buildSlackPayload, resolvedBlocks } from "./helpTicketSlack.js";
+
+/** The help ticket in the admin panel inbox (null when ADMIN_PANEL_URL is unset). */
+const adminUrlFor = (enquiry) => adminTicketUrl("customer", enquiry.enquiryId);
+/** " · <url|Open in admin panel>" for a ticket update, or nothing. */
+const adminLink = (enquiry) => {
+  const url = adminUrlFor(enquiry);
+  return url ? ` · <${url}|Open in admin panel>` : "";
+};
 
 /**
  * Anonymous Chat / lead-gen chatbot — Slack notification. Deliberately the
@@ -245,6 +253,7 @@ async function parentPayloadFor(enquiry, { note = null, details = [], legacy = f
     createdAt: enquiry.createdAt ?? new Date(),
     status: enquiry.ticketStatus === "closed" ? "✅ Resolved" : "🟡 Open",
     note,
+    adminUrl: adminUrlFor(enquiry),
   };
   const opts = { resolvable: Boolean(process.env.SLACK_SIGNING_SECRET), threaded: slackBotConfigured() };
   const legacyLine = legacy ? ["↩️ Raised before Slack threads: its earlier updates are separate posts above."] : [];
@@ -343,13 +352,13 @@ const istTime = (date) =>
 export async function notifyHelpRequestLate(enquiry) {
   // In the thread, and shown in the channel too: the team lead must see it.
   if ((await awaitThread(enquiry)) || (await startLegacyThread(enquiry))) {
-    await postToTicket(enquiry, `⚠️ *${enquiry.ticket || enquiry.enquiryId} waiting 30+ min with no reply* — team lead, please pick this up.`, {
+    await postToTicket(enquiry, `⚠️ *${enquiry.ticket || enquiry.enquiryId} waiting 30+ min with no reply* — team lead, please pick this up.${adminLink(enquiry)}`, {
       broadcast: true,
     });
     return;
   }
   await post(
-    `⚠️ *Help panel request ${enquiry.ticket || ""} waiting 30+ min* (enquiry ${enquiry.enquiryId}) — team lead, please pick this up.\n` +
+    `⚠️ *Help panel request ${enquiry.ticket || ""} waiting 30+ min* (enquiry ${enquiry.enquiryId}) — team lead, please pick this up.${adminLink(enquiry)}\n` +
       `${formatEnquiryBlock(enquiry)}`
   );
 }
@@ -357,7 +366,7 @@ export async function notifyHelpRequestLate(enquiry) {
 /** @desc Customer asked for a call back from the help panel thread. */
 export async function notifyHelpCallBack(enquiry) {
   await postToTicket(enquiry,
-    `📞 *Call back requested ${enquiry.callBack.ticket || ""}* (request ${enquiry.ticket || enquiry.enquiryId})\n` +
+    `📞 *Call back requested ${enquiry.callBack.ticket || ""}* (request ${enquiry.ticket || enquiry.enquiryId})${adminLink(enquiry)}\n` +
       `*Phone:* ${enquiry.callBack.phone}\n` +
       `*When:* ${enquiry.callBack.window || "As soon as possible"} · call by ${istTime(enquiry.callBack.callBy)}\n` +
       (enquiry.callBack.note ? `*About:* ${enquiry.callBack.note}\n` : "") +
@@ -440,8 +449,8 @@ export async function notifyHelpAssigned(enquiry) {
   await postToTicket(
     enquiry,
     enquiry.assignedEmName
-      ? `👤 *${ref} assigned to ${enquiry.assignedEmName}*${enquiry.assignedBy ? ` by ${enquiry.assignedBy}` : ""} in the admin panel.`
-      : `👤 *${ref} is unassigned*${enquiry.assignedBy ? ` (${enquiry.assignedBy})` : ""}: any Event Manager can pick it up.`
+      ? `👤 *${ref} assigned to ${enquiry.assignedEmName}*${enquiry.assignedBy ? ` by ${enquiry.assignedBy}` : ""} in the admin panel.${adminLink(enquiry)}`
+      : `👤 *${ref} is unassigned*${enquiry.assignedBy ? ` (${enquiry.assignedBy})` : ""}: any Event Manager can pick it up.${adminLink(enquiry)}`
   );
 }
 

@@ -1,4 +1,5 @@
 import { Server } from "socket.io";
+import { markSupportRepliesRead } from "../services/supportReplyNotifier.js";
 import { vendorIdFromToken } from "../middlewares/vendorAuth.js";
 import SupportChat from "../models/SupportChat.js";
 import { chatRoom, HANDED_OVER_FILTER, QUEUE_ROOM } from "../services/supportChatService.js";
@@ -95,6 +96,12 @@ function registerSupportChat(socket) {
         return reply(ack, { ok: false, error: "Chat not found" });
       }
       socket.join(chatRoom(id));
+      if (!isEm) {
+        // Marks the vendor's sockets, so an EM reply while they're in the
+        // chat doesn't also notify them; their "replied" rows are now read.
+        socket.data.supportVendorId = vendorId;
+        markSupportRepliesRead(vendorId, id);
+      }
       return reply(ack, { ok: true });
     } catch (error) {
       console.error("support:join error:", error.message);

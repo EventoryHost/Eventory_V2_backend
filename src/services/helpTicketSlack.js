@@ -10,6 +10,20 @@
 
 export const RESOLVE_ACTION_ID = "help_ticket_resolve";
 
+/**
+ * The ticket in the admin panel's Help & Support inbox, so an Event Manager
+ * can open it straight from Slack. ADMIN_PANEL_URL is the admin panel's
+ * address for this environment (dev / prod), e.g. https://admin.example.com;
+ * unset = no link. `source`: "customer" (help panel ticket, by enquiryId) or
+ * "vendor" (vendor app chat, by chatId) — the inbox's own ticket keys.
+ */
+export function adminTicketUrl(source, id) {
+  const base = (process.env.ADMIN_PANEL_URL || "").trim().replace(/\/+$/, "");
+  if (!base || !id) return null;
+  const q = new URLSearchParams({ tab: "v2_help_support", ticket: `${source}:${id}` });
+  return `${base}/?${q}`;
+}
+
 /** Fields the panel may send, as strings, capped. */
 export const TICKET_FIELDS = {
   ticket: 40,
@@ -122,6 +136,7 @@ export function buildSlackPayload(t, { resolvable = false, threaded = false, wit
   const note = clean(t.note);
   const ticket = clean(t.ticket);
   const link = buildCustomerWhatsAppLink(t);
+  const adminUrl = clean(t.adminUrl);
   const hasNumber = Boolean(toWhatsAppNumber(t.customerPhone));
   const who = [clean(t.customerEmail), clean(t.customerCode)].filter(Boolean).map(esc).join(" · ");
   const raised = t.createdAt ? Math.floor(new Date(t.createdAt).getTime() / 1000) : null;
@@ -162,6 +177,8 @@ export function buildSlackPayload(t, { resolvable = false, threaded = false, wit
           },
         ]
       : []),
+    // Straight to the ticket in the admin panel (history, EM assignment).
+    ...(adminUrl ? [{ type: "button", text: { type: "plain_text", text: "🗂️ Open in admin panel", emoji: true }, url: adminUrl }] : []),
   ];
   return {
     text: title,

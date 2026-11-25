@@ -916,21 +916,26 @@ export const listHelpConversations = async (req, res) => {
     const tickets = enquiryIds.length
       ? await ChatEnquiry.find(
           { enquiryId: { $in: enquiryIds }, source: "help_panel" },
-          { enquiryId: 1, ticketStatus: 1, lastMessageAt: 1, lastMessageFrom: 1, customerSeenAt: 1 }
+          { enquiryId: 1, ticketStatus: 1, lastMessageAt: 1, lastMessageFrom: 1, customerSeenAt: 1, assignedEmName: 1 }
         ).lean()
       : [];
     const byId = new Map(tickets.map((t) => [t.enquiryId, t]));
     const conversations = rows.map((r) => {
       const t = r.enquiryId ? byId.get(r.enquiryId) : null;
+      const unread = Boolean(
+        t &&
+          t.lastMessageFrom === "event_manager" &&
+          t.lastMessageAt &&
+          (!t.customerSeenAt || t.lastMessageAt > t.customerSeenAt)
+      );
       return {
         ...conversationSummary(r),
         status: t && t.ticketStatus !== "closed" ? "open" : "resolved",
-        unread: Boolean(
-          t &&
-            t.lastMessageFrom === "event_manager" &&
-            t.lastMessageAt &&
-            (!t.customerSeenAt || t.lastMessageAt > t.customerSeenAt)
-        ),
+        unread,
+        // For the site's "Event Manager replied" popup: which reply it is
+        // (shown once per reply) and who sent it.
+        replyAt: unread ? t.lastMessageAt : null,
+        emName: unread ? t.assignedEmName || null : null,
       };
     });
     return res.json({ success: true, conversations });

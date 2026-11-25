@@ -11,6 +11,7 @@ import {
   serializeChat,
   serializeMessage,
 } from "../services/supportChatService.js";
+import { notifyVendorOfEmReply } from "../services/supportReplyNotifier.js";
 
 /**
  * Event Manager side of the vendor Help & Support chat, used by the admin
@@ -239,6 +240,8 @@ export const sendEmSupportMessage = async (req, res) => {
     );
     await SupportChat.updateOne({ _id: chat._id }, { $set: { updatedAt: new Date() } });
     emitToChat(req, chat.chatId, "message:new", saved);
+    // Not awaited: the vendor app's "replied" row and push, unless they're in the chat.
+    notifyVendorOfEmReply(req.app.get("io"), chat, saved);
     return res.status(201).json({ success: true, data: { message: saved } });
   } catch (error) {
     console.error("sendEmSupportMessage error:", error);
