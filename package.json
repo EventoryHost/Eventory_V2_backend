@@ -8,7 +8,9 @@
     "dev": "nodemon server.js",
     "sync-env:dev": "gh secret set V2_DEV_ENV < .env",
     "sync-env:prod": "gh secret set V2_PROD_ENV < .env.prod",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "test:variants": "node --test test/package-variants.test.mjs",
+    "migrate:package-groups": "node migrate_package_groups.mjs"
   },
   "keywords": [],
   "author": "",

@@ -8,9 +8,9 @@ import { recordCommercialEvent } from "../services/commercial/commercialEvents.j
 import { computeContactValidation, computeLinesValidation } from "../services/checkoutValidationService.js";
 import { computeAvailability } from "../utils/packageAvailability.js";
 import { resolveVendorRefId } from "../utils/resolveVendor.js";
-import { getEffectivePackagePrice } from "../utils/packagePrice.js";
-import { packageCoverImage } from "../utils/packageCoverImage.js";
-import { snapshotDeliverables } from "../utils/packageDeliverables.js";
+import { buildLineSnapshot, packageGroupIdOf } from "../utils/packageSnapshot.js";
+import { quoteLinesFromSession } from "../services/checkoutQuoteService.js";
+import { isSameVendor } from "../services/packageVariantService.js";
 import { hiddenVendorKeys, visibleVendorIdClause } from "../utils/customerVisibility.js";
 
 /**
@@ -77,29 +77,13 @@ async function buildLine({
     line: {
       vendorId: resolvedVendorId,
       packageId: pkg._id,
-      packageGroupId: pkg.packageGroupId,
+      packageGroupId: packageGroupIdOf(pkg),
       sourceCartItemId: sourceCartItemId || null,
-      packageSnapshot: {
-        name: pkg.step1_eventAndCrew?.packageName,
-        // getEffectivePackagePrice — see that util's comment: a plain read
-        // snapshots ₹0/null for every Caterer/Decorator package.
-        price: getEffectivePackagePrice(pkg),
-        billingUnit:
-          pkg.step3_policiesAndCharges?.packagePricing?.billingUnit ?? pkg.step3_policiesAndCharges?.teamAndEquipment?.billingUnit ?? null,
-        image: packageCoverImage(pkg),
-        vendorType: pkg.vendorType,
-        variantType: pkg.variantType,
-        // Full vendor-editable feature set (spaces/setups/menus/items/addOns,
-        // per vendor type — see packageDeliverables.js), frozen at the same
-        // moment price/name/image are, so a later vendor edit to any of
-        // these can never retroactively change what this line's booking
-        // says the customer actually booked. GST is intentionally NOT
-        // snapshotted here — it stays sourced from the live quote
-        // (quoteLine.gstRatePercent/gstInclusive, cartPricingService.js),
-        // matching this codebase's existing "price/tax re-verified at every
-        // quote lock, deliverables frozen at line-build time" split.
-        deliverables: snapshotDeliverables(pkg),
-      },
+      // Frozen here: name, price, variant label and the variant's own
+      // deliverables. A later vendor edit to the live variant can never change
+      // what this line's booking says was booked. GST stays sourced from the
+      // live quote (cartPricingService.js) — see buildLineSnapshot.
+      packageSnapshot: buildLineSnapshot(pkg),
       eventDetails: {
         eventType: eventType || null,
         date: date || null,
@@ -124,16 +108,7 @@ async function buildLine({
 // wording). Also slides expiresAt forward — see CheckoutSession.js for why
 // sliding rather than fixed-from-creation.
 async function lockQuote(session, discount = 0) {
-  const lines = session.lines.map((l) => ({
-    lineId: l._id,
-    vendorId: l.vendorId,
-    packageId: l.packageId,
-    quantity: l.quantity,
-    selectedAddOns: l.selectedAddOns,
-    selectedItems: l.selectedItems,
-    eventDetails: l.eventDetails,
-    packageSnapshot: l.packageSnapshot,
-  }));
+  const lines = quoteLinesFromSession(session);
   const quote = lines.length ? await computeQuoteForLines(lines, discount, { customerId: session.customerId }) : null;
   // Engine internals stay server-side (CheckoutSession's toJSON drops them).
   session.commercialSnapshots = quote?.commercialSnapshots ?? null;
@@ -431,7 +406,7 @@ export const updateCheckoutLine = async (req, res) => {
       // switch. newPkg is only read here, never saved, so lean is safe.
       const newPkg = await Package.findOne({ _id: packageId, packageStatus: "Live", ...(await visibleVendorIdClause()) }).lean();
       if (!newPkg) return res.status(404).json({ status: "FAILED", message: "Target package not found or not currently available" });
-      if (String(newPkg.packageGroupId) !== String(line.packageGroupId)) {
+      if (packageGroupIdOf(newPkg) !== String(line.packageGroupId ?? line.packageId)) {
         return res.status(400).json({
           status: "FAILED",
           message: "packageId must be a variant of the same package (matching packageGroupId) — use Cart to add a different package entirely",
@@ -441,19 +416,14 @@ export const updateCheckoutLine = async (req, res) => {
       if (!resolvedNewVendorId) {
         return res.status(500).json({ status: "ERROR", message: "This package's vendor could not be resolved — cannot switch variant" });
       }
+      // Every variant of a package belongs to one vendor; a sibling that
+      // doesn't is bad data and must not silently move the line to another vendor.
+      if (!(await isSameVendor(resolvedNewVendorId, line.vendorId))) {
+        return res.status(400).json({ status: "FAILED", message: "That variant belongs to a different vendor" });
+      }
       line.packageId = newPkg._id;
       line.vendorId = resolvedNewVendorId;
-      line.packageSnapshot = {
-        name: newPkg.step1_eventAndCrew?.packageName,
-        // getEffectivePackagePrice — see that util's comment.
-        price: getEffectivePackagePrice(newPkg),
-        billingUnit:
-          newPkg.step3_policiesAndCharges?.packagePricing?.billingUnit ?? newPkg.step3_policiesAndCharges?.teamAndEquipment?.billingUnit ?? null,
-        image: packageCoverImage(newPkg),
-        vendorType: newPkg.vendorType,
-        variantType: newPkg.variantType,
-        deliverables: snapshotDeliverables(newPkg),
-      };
+      line.packageSnapshot = buildLineSnapshot(newPkg);
     }
 
     if (guests !== undefined) {

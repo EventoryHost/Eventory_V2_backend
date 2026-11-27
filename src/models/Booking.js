@@ -386,10 +386,20 @@ const BookingSchema = new mongoose.Schema(
       required: true,
       index: true,
     },
+    // The booked VARIANT's own document _id (each variant is its own Package
+    // document). Kept as the field name every client already reads.
     packageId: {
       type: String,
       ref: "Package",
       required: true,
+    },
+    // The logical package (Package.packageGroupId) the booked variant belongs
+    // to, frozen at booking time — so history can still be grouped by package
+    // after the variant is renamed, deactivated or deleted. Null on bookings
+    // made before 2026-11; migrate_package_groups.mjs backfills them.
+    packageGroupId: {
+      type: String,
+      default: null,
     },
 
     // Reference to the logged-in customer account this booking belongs to.
@@ -733,6 +743,8 @@ BookingSchema.pre("save", function stampLifecycle() {
 
 // Compound indexes
 BookingSchema.index({ vendorId: 1, status: 1 });
+// Per-variant booking counts (PDP "Most booked", popular packages).
+BookingSchema.index({ packageId: 1, status: 1 });
 BookingSchema.index({ vendorId: 1, eventDate: 1 });
 // Supports the customer-facing "my bookings" dashboard (active/past/cancelled
 // tabs, sorted/filtered by status or event date) once that endpoint exists.

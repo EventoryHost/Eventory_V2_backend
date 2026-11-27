@@ -156,6 +156,9 @@ export async function createBookingsFromCheckoutSession(session, payment, option
       bookingId: generateISTId("EVT"),
       vendorId: line.vendorId,
       packageId: line.packageId,
+      // Frozen on the checkout line when it was built (customerCheckoutController
+      // buildLine) — the logical package this variant belongs to.
+      packageGroupId: line.packageGroupId ? String(line.packageGroupId) : String(line.packageId),
       customerId: session.customerId, // REAL customerId, direct — no phone-matching auto-link needed, this step's own wording
       customer: {
         name: session.contactDetails?.name || "Customer",

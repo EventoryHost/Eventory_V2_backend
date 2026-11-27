@@ -10,6 +10,7 @@ import { applyMilestonePaymentToBooking } from "../services/milestonePaymentServ
 import { normalizePhone } from "../utils/phone.js";
 import { generatePaymentId } from "../utils/generateId.js";
 import { bookingLookupQuery } from "./customerBookingController.js";
+import { findQuoteDrift } from "../services/checkoutQuoteService.js";
 
 /**
  * Cashfree Payment Gateway integration — Phase 4 Step 18. Researched from
@@ -75,7 +76,10 @@ async function reusableExistingPayment(existing) {
   if (existing.status === "PAID") return existing;
   try {
     const orderResponse = await cashfree.PGFetchOrder(existing.cfOrderId);
-    if (orderResponse?.data?.order_status === "ACTIVE") return existing;
+    // PAID at Cashfree but still PENDING here = the webhook hasn't landed yet.
+    // Marking it FAILED would make the webhook skip it (it only processes
+    // PENDING rows) and leave a paid customer with no booking — keep it.
+    if (["ACTIVE", "PAID"].includes(orderResponse?.data?.order_status)) return existing;
   } catch (err) {
     console.warn(`[customerPaymentController] Live re-check failed for order ${existing.cfOrderId}, minting a fresh order instead:`, err.message);
   }
@@ -120,6 +124,31 @@ function commercialBlockResponse(quote) {
     code: "COMMERCIAL_REVIEW_REQUIRED",
     message: "One or more items can't be booked at a fixed price right now — remove them or request a quote.",
     lines: blocked,
+  };
+}
+
+/**
+ * Never charge a stale quote: if a line's variant was deactivated/deleted or
+ * repriced since the quote was locked, re-lock it with the live prices and
+ * refuse this attempt (409) so the customer sees — and pays — the real total.
+ * Returns the response body to send, or null when the quote is still current.
+ */
+async function staleQuoteResponse(session) {
+  const { drift, freshQuote } = await findQuoteDrift(session);
+  if (!drift.length) return null;
+  session.commercialSnapshots = freshQuote.commercialSnapshots ?? null;
+  delete freshQuote.commercialSnapshots;
+  session.lockedQuote = freshQuote;
+  session.lockedAt = new Date();
+  await session.save();
+  return {
+    status: "FAILED",
+    code: "QUOTE_CHANGED",
+    message: drift.some((d) => d.reason === "UNAVAILABLE")
+      ? "A package in your checkout is no longer available — it has been taken out of your total. Please review and try again."
+      : "A price in your checkout has changed — please review the updated total and try again.",
+    drift,
+    lockedQuote: freshQuote,
   };
 }
 
@@ -184,6 +213,11 @@ export const createTokenPayment = async (req, res) => {
         paymentStatus: existing.status,
       });
     }
+
+    // Only now, about to mint a NEW order: never re-price the session while an
+    // order for it may still be paid at Cashfree (the reuse above returned it).
+    const stale = await staleQuoteResponse(session);
+    if (stale) return res.status(409).json(stale);
 
     const cfOrderId = generatePaymentId();
     const idempotencyKey = `${session._id}:Token:${cfOrderId}`;
@@ -605,6 +639,8 @@ export const confirmFreeCheckout = async (req, res) => {
       return res.status(400).json({ status: "FAILED", message: "Checkout session is not ready to confirm", validation: { contact, lines } });
     }
 
+    const stale = await staleQuoteResponse(session);
+    if (stale) return res.status(409).json(stale);
     const quote = session.lockedQuote;
     const blocked = commercialBlockResponse(quote);
     if (blocked) return res.status(409).json(blocked);
@@ -690,6 +726,8 @@ export const confirmOfflineCheckout = async (req, res) => {
     if (!quote) {
       return res.status(400).json({ status: "FAILED", message: "This session has no locked quote yet — add at least one line first" });
     }
+    const stale = await staleQuoteResponse(session);
+    if (stale) return res.status(409).json(stale);
 
     // Idempotency — same pattern/limitation as confirmFreeCheckout above:
     // idempotencyKey has a unique index, so a retry hits the 11000 catch

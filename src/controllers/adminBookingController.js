@@ -19,6 +19,8 @@ import {
   revertPackageAvailability,
 } from "./bookingController.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
+import { packageGroupIdOf } from "../utils/packageSnapshot.js";
+import { isSameVendor } from "../services/packageVariantService.js";
 import { contextFromDeal, notifyVendor } from "../services/vendorNotificationService.js";
 
 const SLA_HOURS = 4;
@@ -30,7 +32,7 @@ const getSlaThreshold = () => new Date(Date.now() - SLA_HOURS * 60 * 60 * 1000);
 // phone are fine here — this is the internal admin surface, not a
 // customer-facing read (see publicFields.js for that whitelist).
 const ADMIN_VENDOR_FIELDS = "_id id businessName city phone vendorType isVerified";
-const ADMIN_PACKAGE_FIELDS = "_id step1_eventAndCrew.packageName packageStatus variantType vendorType";
+const ADMIN_PACKAGE_FIELDS = "_id step1_eventAndCrew.packageName packageStatus variantType vendorType packageGroupId";
 const ADMIN_CUSTOMER_FIELDS = "_id id name phone email addresses";
 
 // Strict 24-hex check. mongoose's own isValid() also accepts ANY 12-character
@@ -102,7 +104,10 @@ const toPackageSummary = (pkg) =>
         _id: pkg._id,
         name: pkg.step1_eventAndCrew?.packageName ?? null,
         packageStatus: pkg.packageStatus ?? null,
+        // The variant's CURRENT name. What was booked is
+        // booking.packageSnapshot.variantType — they differ after a rename.
         variantType: pkg.variantType ?? null,
+        packageGroupId: pkg.packageGroupId != null ? String(pkg.packageGroupId) : null,
         vendorType: pkg.vendorType ?? null,
       }
     : null;
@@ -692,12 +697,23 @@ export const updateBooking = async (req, res) => {
 
     if (body.packageId !== undefined && body.packageId !== String(booking.packageId ?? "")) {
       const pkg = isObjectIdString(body.packageId)
-        ? await Package.findById(body.packageId).select("_id").lean()
+        ? await Package.findById(body.packageId).select("_id vendorId packageGroupId").lean()
         : null;
       if (!pkg) {
         return res.status(404).json({ success: false, message: "Package not found" });
       }
+      // A booking can only point at its own vendor's variants: packageSnapshot
+      // (what was booked) is immutable, so pointing it at another vendor's
+      // package would show one vendor's terms against another's listing. Use
+      // PUT /:bookingId/reassign to move a booking to a different vendor.
+      if (!(await isSameVendor(pkg.vendorId, booking.vendorId))) {
+        return res.status(400).json({
+          success: false,
+          message: "That package belongs to a different vendor — use reassign to move the booking",
+        });
+      }
       booking.packageId = String(pkg._id);
+      booking.packageGroupId = packageGroupIdOf(pkg);
     }
 
     for (const field of DIRECT_FIELDS) {

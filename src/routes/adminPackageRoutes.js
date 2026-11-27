@@ -14,6 +14,10 @@ import {
   updatePackageStatus,
   assignEmToPackage,
   adminGoLive,
+  addVariant,
+  renameVariant,
+  activateVariant,
+  deactivateVariant,
 } from "../controllers/adminPackageController.js";
 import { updatePackageStep } from "../controllers/packageController.js";
 
@@ -34,6 +38,8 @@ router.put("/group/:packageGroupId/request-fix", requestFix);
 router.put("/group/:packageGroupId/reject", rejectPackage);
 router.put("/group/:packageGroupId/assign-em", assignEmToPackage);
 router.put("/group/:packageGroupId/go-live", adminGoLive);
+// Variant management: add a variant to an existing package.
+router.post("/group/:packageGroupId/variants", addVariant);
 
 router.get("/:packageId", getPackageDetails);
 router.put("/:packageId/approve", approvePackage);
@@ -45,6 +51,10 @@ router.put("/:packageId/reject", rejectPackage);
 router.put("/:packageId/status", updatePackageStatus);
 router.put("/:packageId/assign-em", assignEmToPackage);
 router.put("/:packageId/go-live", adminGoLive);
+// Variant management — each acts on this one variant, never its siblings.
+router.put("/:packageId/variant-name", renameVariant);
+router.put("/:packageId/activate", activateVariant);
+router.put("/:packageId/deactivate", deactivateVariant);
 
 // Admin-side package step edit (bypasses editable status locks)
 router.put(

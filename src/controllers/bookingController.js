@@ -8,9 +8,8 @@ import Package from "../models/Package.js";
 import Vendor from "../models/Vendor.js";
 import CalendarBlock from "../models/CalendarBlock.js";
 import { generateISTId } from "../utils/idGenerator.js";
-import { snapshotDeliverables } from "../utils/packageDeliverables.js";
-import { packageCoverImage } from "../utils/packageCoverImage.js";
-import { getEffectivePackagePrice } from "../utils/packagePrice.js";
+import { buildPackageSnapshot, packageGroupIdOf } from "../utils/packageSnapshot.js";
+import { isSameVendor } from "../services/packageVariantService.js";
 import { releaseSlotIfUnused } from "../utils/releaseSlot.js";
 import { raiseBookingIssue } from "../services/bookingIssueService.js";
 import { resolveVendorActions } from "../services/vendorNotificationService.js";
@@ -248,6 +247,9 @@ export const createBooking = async (req, res) => {
 
     const pkg = await Package.findById(req.body.packageId);
     if (!pkg) return notFound(res, "Package not found");
+    if (!(await isSameVendor(pkg.vendorId, vendorId))) {
+      return res.status(400).json({ status: "FAILED", message: "That package belongs to a different vendor" });
+    }
 
     const conflictDetected = await detectConflict(vendorId, req.body.eventDate);
 
@@ -255,6 +257,7 @@ export const createBooking = async (req, res) => {
       bookingId: generateISTId("EVT"),
       vendorId,
       packageId: pkg._id,
+      packageGroupId: packageGroupIdOf(pkg),
       customer: {
         name: req.body.customer.name.trim(),
         phone: req.body.customer.phone || null,
@@ -272,20 +275,7 @@ export const createBooking = async (req, res) => {
       mapLink: req.body.mapLink || null,
       startTime: req.body.startTime,
       endTime: req.body.endTime,
-      packageSnapshot: {
-        name: pkg.step1_eventAndCrew?.packageName || "Untitled Package",
-        // getEffectivePackagePrice, not a plain read — see that util's
-        // comment: packagePricing.price is never set for Caterer/Decorator
-        // packages, which would otherwise snapshot a manually-created
-        // booking's price as ₹0.
-        price: getEffectivePackagePrice(pkg),
-        image: packageCoverImage(pkg),
-        vendorType: pkg.vendorType || null,
-        variantType: pkg.variantType || "Premium",
-        gstRatePercent: pkg.step3_policiesAndCharges?.gstRatePercent ?? null,
-        gstInclusive: pkg.step3_policiesAndCharges?.gstInclusive ?? false,
-        deliverables: snapshotDeliverables(pkg),
-      },
+      packageSnapshot: buildPackageSnapshot(pkg),
       paymentType: req.body.paymentType,
       status: "NewBooking",
       // The vendor typed this booking in, so there is nothing unread in it.

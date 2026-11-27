@@ -6,7 +6,7 @@ import Package from "../models/Package.js";
 import WishlistItem from "../models/WishlistItem.js";
 import { computeAvailability, validateTimeSlotSelection } from "../utils/packageAvailability.js";
 import { round2 } from "../utils/money.js";
-import { packageCoverImage } from "../utils/packageCoverImage.js";
+import { buildLineSnapshot } from "../utils/packageSnapshot.js";
 import { computeCartQuote } from "../services/cartPricingService.js";
 import { resolveVendorRefId } from "../utils/resolveVendor.js";
 import { getEffectivePackagePrice } from "../utils/packagePrice.js";
@@ -291,17 +291,9 @@ export const addCartItem = async (req, res) => {
       cartId: cart._id,
       vendorId: resolvedVendorId,
       packageId: pkg._id,
-      packageSnapshot: {
-        name: pkg.step1_eventAndCrew?.packageName,
-        // getEffectivePackagePrice — see that util's comment: a plain read
-        // here would snapshot ₹0/null for every Caterer/Decorator package.
-        price: getEffectivePackagePrice(pkg),
-        billingUnit:
-          pkg.step3_policiesAndCharges?.packagePricing?.billingUnit ?? pkg.step3_policiesAndCharges?.teamAndEquipment?.billingUnit ?? null,
-        image: packageCoverImage(pkg),
-        vendorType: pkg.vendorType,
-        variantType: pkg.variantType,
-      },
+      // CartItem's snapshot has no deliverables field — those are frozen when
+      // the checkout line is built from this item.
+      packageSnapshot: buildLineSnapshot(pkg, { withDeliverables: false }),
       eventDetails: {
         eventType: eventType || null,
         date: date || null,

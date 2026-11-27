@@ -286,13 +286,16 @@ export const updatePackageCommercial = async (req, res) => {
         Object.entries(set).filter(([k]) => GROUP_FIELDS.includes(k.replace("commercial.", "")))
       );
       if (Object.keys(groupSet).length) {
-        await Package.updateMany({ ...buildGroupFilter(pkg.packageGroupId), _id: { $ne: pkg._id } }, { $set: groupSet });
+        // buildGroupFilter is async — un-awaited, the spread produced {} and
+        // this wrote the group fields to EVERY package in the collection.
+        const groupFilter = await buildGroupFilter(pkg.packageGroupId);
+        await Package.updateMany({ $and: [groupFilter, { _id: { $ne: pkg._id } }] }, { $set: groupSet });
       }
     }
 
     let review = null;
     if (["Approved", "Live"].includes(pkg.packageStatus)) {
-      const groupFilter = pkg.packageGroupId ? buildGroupFilter(pkg.packageGroupId) : { _id: pkg._id };
+      const groupFilter = pkg.packageGroupId ? await buildGroupFilter(pkg.packageGroupId) : { _id: pkg._id };
       review = await reviewGroupCommercials(groupFilter, { by: req.body?.by ?? null });
     }
 
@@ -306,7 +309,7 @@ export const updatePackageCommercial = async (req, res) => {
 /** POST /api/admin/commercial/packages/group/:packageGroupId/review — re-run publication review. */
 export const reviewPackageGroup = async (req, res) => {
   try {
-    const results = await reviewGroupCommercials(buildGroupFilter(req.params.packageGroupId), { by: req.body?.by ?? null });
+    const results = await reviewGroupCommercials(await buildGroupFilter(req.params.packageGroupId), { by: req.body?.by ?? null });
     res.status(200).json({ success: true, data: results });
   } catch (error) {
     fail(res, error, "Failed to run commercial review");

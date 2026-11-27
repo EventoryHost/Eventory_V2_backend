@@ -11,7 +11,8 @@ import { serviceAreaRegexClauses } from "../utils/serviceAreas.js";
 import { findServiceArea, isKnownServiceArea } from "../data/serviceLocalities.js";
 import { round2 } from "../utils/money.js";
 import { resolveVendorForPackage } from "../utils/resolveVendor.js";
-import { buildGroupFilter } from "../utils/packageGroupFilter.js";
+import { buildGroupFilter, normalizeGroupId } from "../utils/packageGroup.js";
+import { groupAnchor, isSameVendor, loadGroupVariants } from "../services/packageVariantService.js";
 import { getPackageBasePrice } from "../utils/packagePrice.js";
 import { previewPackagePricing } from "../services/commercial/commercialService.js";
 import { getLiveEventCategories } from "../utils/liveEventCategoriesCache.js";
@@ -490,6 +491,33 @@ export const getPopularPackages = async (req, res) => {
   }
 };
 
+// Light per-variant summary carried on the PDP response, so the variant
+// picker is built from the same request as the page itself.
+const VARIANT_SUMMARY_FIELDS =
+  "vendorId vendorType variantType packageGroupId packageStatus createdAt " +
+  "step2_productsAndPricing.included step2_productsAndPricing.notIncluded " +
+  // setups: Decorator prices are derived from them (getPackageBasePrice).
+  "step2_productsAndPricing.setups " +
+  "step3_policiesAndCharges.packagePricing step3_policiesAndCharges.teamAndEquipment " +
+  "step3_policiesAndCharges.overallPriceOfPackage step3_policiesAndCharges.guestTiers " +
+  "step4_sampleMedia.media";
+
+const toVariantSummary = (variant) => {
+  normalizePackagePricing(variant);
+  const pricing = variant.step3_policiesAndCharges?.packagePricing || {};
+  return {
+    _id: variant._id,
+    packageGroupId: normalizeGroupId(variant.packageGroupId),
+    variantType: variant.variantType ?? null,
+    price: pricing.price ?? null,
+    originalPrice: pricing.originalPrice ?? null,
+    billingUnit: pricing.billingUnit ?? null,
+    included: variant.step2_productsAndPricing?.included ?? [],
+    notIncluded: variant.step2_productsAndPricing?.notIncluded ?? [],
+    image: variant.step4_sampleMedia?.media?.find((m) => m?.url && m.type !== "video")?.url ?? null,
+  };
+};
+
 /**
  * @desc PDP (package detail): the full Live package (event/crew details,
  * products & pricing incl. add-ons, policies, media) plus three computed
@@ -516,6 +544,15 @@ export const getPackageDetail = async (req, res) => {
     if (!pkg) {
       return res.status(404).json({ status: "FAILED", message: "Package not found or not currently available" });
     }
+
+    // Every Live sibling of the requested variant, same vendor only. Loaded
+    // BEFORE vendorId is replaced with the resolved vendor object below. The
+    // requested document is always the selected variant — never a default.
+    const { variants: siblingVariants } = await loadGroupVariants(pkg, {
+      extraFilter: { packageStatus: "Live", ...(await visibleVendorIdClause()) },
+      select: VARIANT_SUMMARY_FIELDS,
+    });
+
     // gstNumber added to the usual public projection ONLY to gate GST
     // below — stripped back off before this vendor object reaches the
     // response (publicFields.js deliberately excludes it from every
@@ -573,7 +610,11 @@ export const getPackageDetail = async (req, res) => {
 
     return res.status(200).json({
       status: "SUCCESS",
+      // `package` IS the selected variant (the document the customer opened).
       package: pkg,
+      packageGroupId: normalizeGroupId(pkg.packageGroupId) ?? String(pkg._id),
+      selectedVariantId: pkg._id,
+      variants: siblingVariants.map(toVariantSummary),
       availability,
       pricingPreview,
       reviews,
@@ -905,6 +946,11 @@ export const getPackageGroupVariants = async (req, res) => {
       "step2_productsAndPricing.setups step3_policiesAndCharges.packagePricing " +
       "step3_policiesAndCharges.teamAndEquipment step3_policiesAndCharges.overallPriceOfPackage " +
       "step3_policiesAndCharges.gstInclusive step3_policiesAndCharges.gstRatePercent " +
+      // Per-variant content for the variant cards (item counts, inclusions).
+      // Without these every non-Decorator card showed 0 items.
+      "step2_productsAndPricing.included step2_productsAndPricing.notIncluded " +
+      "step2_productsAndPricing.menus step2_productsAndPricing.spaces " +
+      "step2_productsAndPricing.packageItems step2_productsAndPricing.items " +
       "step4_sampleMedia.media createdAt";
 
     // buildGroupFilter (src/utils/packageGroupFilter.js) — NOT a plain
@@ -915,14 +961,32 @@ export const getPackageGroupVariants = async (req, res) => {
     // this endpoint was effectively 404-ing for every real package until
     // this was found and fixed while building the "Most booked" work below.
     const groupFilter = await buildGroupFilter(packageGroupId);
-    const packages = await Package.find({ ...groupFilter, packageStatus: "Live", ...(await visibleVendorIdClause()) })
+    const livePackages = await Package.find({ $and: [groupFilter, { packageStatus: "Live", ...(await visibleVendorIdClause()) }] })
       .select(PACKAGE_FIELDS)
-      .sort({ createdAt: 1 })
+      .sort({ createdAt: 1, _id: 1 })
       .lean();
+
+    // Every variant of a package belongs to one vendor. The group's founding
+    // document defines it; a sibling with another vendor is a data error and
+    // is left out rather than shown as part of this vendor's package.
+    const anchor = await groupAnchor(groupFilter);
+    const packages = [];
+    for (const pkg of livePackages) {
+      if (!anchor || (await isSameVendor(pkg.vendorId, anchor.vendorId))) packages.push(pkg);
+      else console.warn(`[getPackageGroupVariants] ${packageGroupId}: variant ${pkg._id} has a different vendor — excluded`);
+    }
 
     if (packages.length === 0) {
       return res.status(404).json({ status: "FAILED", message: "No Live variants found for this package group" });
     }
+
+    // ?variantId= echoes back which variant the caller opened, once confirmed
+    // to be a Live member of this group (null otherwise — never a default).
+    const requestedVariantId = req.query.variantId ? String(req.query.variantId) : null;
+    const selectedVariantId =
+      requestedVariantId && packages.some((p) => String(p._id) === requestedVariantId)
+        ? requestedVariantId
+        : null;
 
     await Promise.all(
       packages.map(async (pkg) => {
@@ -971,7 +1035,8 @@ export const getPackageGroupVariants = async (req, res) => {
     return res.status(200).json({
       status: "SUCCESS",
       count: packages.length,
-      packageGroupId,
+      packageGroupId: normalizeGroupId(packageGroupId),
+      selectedVariantId,
       mostBookedVariantId,
       packages,
     });
