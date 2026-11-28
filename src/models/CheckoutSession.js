@@ -207,4 +207,23 @@ const CheckoutSessionSchema = new mongoose.Schema(
 
 CheckoutSessionSchema.index({ customerId: 1, status: 1 });
 
+// Keeps the abandoned-checkout recovery record (CheckoutRecovery.js) in
+// step with every session write — create, line/contact edits, cancel, and
+// the server-only Completed set after payment verification — so no write
+// path can be missed. Fire-and-forget: a recovery failure must never fail
+// or slow a checkout/payment request. Imported lazily because the service
+// imports this model.
+CheckoutSessionSchema.post("save", function syncCheckoutRecovery(doc) {
+  import("../services/checkoutRecoveryService.js")
+    .then(({ syncFromCheckoutSession }) => syncFromCheckoutSession(doc))
+    .catch((err) => console.warn("[checkoutRecovery] sync failed:", err.message));
+  // Browsing-campaign conversion attribution (retargetingCampaignService.js)
+  // — same server-only Completed signal, same fire-and-forget rule.
+  if (doc.status === "Completed") {
+    import("../services/retargetingCampaignService.js")
+      .then(({ recordConversionFromCheckout }) => recordConversionFromCheckout(doc))
+      .catch((err) => console.warn("[retargeting] conversion not recorded:", err.message));
+  }
+});
+
 export default mongoose.model("CheckoutSession", CheckoutSessionSchema);

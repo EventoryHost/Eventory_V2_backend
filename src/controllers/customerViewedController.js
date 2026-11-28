@@ -21,19 +21,40 @@ const PACKAGE_CARD_FIELDS =
 /** Oldest rows beyond this are trimmed on write, so the list stays bounded. */
 const MAX_PER_CUSTOMER = 50;
 
+/** Repeat opens closer together than this are one visit (viewCount). */
+const VIEW_VISIT_GAP_MS = 30 * 60 * 1000;
+
 /**
  * @desc Record that the customer opened a package. Idempotent — a repeat
- *       view bumps viewedAt rather than inserting a second row.
+ *       view bumps viewedAt rather than inserting a second row, and bumps
+ *       viewCount only when it starts a new visit (see VIEW_VISIT_GAP_MS).
  */
 export const recordViewedItem = async (req, res) => {
   try {
     const { packageId } = req.body;
     const customerId = req.customer._id;
+    const now = new Date();
 
+    // Pipeline update so the visit check reads the row's own previous
+    // viewedAt atomically. customerId/packageId come from the (cast) filter
+    // on insert.
     const item = await ViewedItem.findOneAndUpdate(
       { customerId, packageId },
-      { $set: { viewedAt: new Date() }, $setOnInsert: { customerId, packageId } },
-      { new: true, upsert: true }
+      [
+        {
+          $set: {
+            viewCount: {
+              $cond: [
+                { $gte: [{ $subtract: [now, { $ifNull: ["$viewedAt", new Date(0)] }] }, VIEW_VISIT_GAP_MS] },
+                { $add: [{ $ifNull: ["$viewCount", 0] }, 1] },
+                { $ifNull: ["$viewCount", 1] },
+              ],
+            },
+            viewedAt: now,
+          },
+        },
+      ],
+      { returnDocument: "after", upsert: true, updatePipeline: true }
     ).lean();
 
     // Trim the tail rather than letting this grow without bound. Done after
