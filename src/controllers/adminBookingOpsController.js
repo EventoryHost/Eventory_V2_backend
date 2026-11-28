@@ -7,9 +7,7 @@ import Booking, {
 import Package from "../models/Package.js";
 import Customer from "../models/Customer.js";
 import { generateISTId } from "../utils/idGenerator.js";
-import { snapshotDeliverables } from "../utils/packageDeliverables.js";
-import { packageCoverImage } from "../utils/packageCoverImage.js";
-import { getEffectivePackagePrice } from "../utils/packagePrice.js";
+import { buildPackageSnapshot, packageGroupIdOf } from "../utils/packageSnapshot.js";
 import { releaseSlotIfUnused } from "../utils/releaseSlot.js";
 import { normalizePhone } from "../utils/phone.js";
 import { applyPricingBreakdown } from "../utils/pricingBreakdown.js";
@@ -307,6 +305,7 @@ const buildAdminBooking = async (input, { carry = {} } = {}) => {
     bookingId: generateISTId("EVT"),
     vendorId: vendorRef,
     packageId: String(pkg._id),
+    packageGroupId: packageGroupIdOf(pkg),
     customerId: customer?.id ?? null,
     customer: {
       name: input.customer.name.trim(),
@@ -322,16 +321,7 @@ const buildAdminBooking = async (input, { carry = {} } = {}) => {
     endTime: input.endTime,
     eventTiming: input.eventTiming || undefined,
     alternateCoordinator: input.alternateCoordinator || undefined,
-    packageSnapshot: {
-      name: pkg.step1_eventAndCrew?.packageName || "Untitled Package",
-      price: getEffectivePackagePrice(pkg),
-      image: packageCoverImage(pkg),
-      vendorType: pkg.vendorType || null,
-      variantType: pkg.variantType || "Premium",
-      gstRatePercent: pkg.step3_policiesAndCharges?.gstRatePercent ?? null,
-      gstInclusive: pkg.step3_policiesAndCharges?.gstInclusive ?? false,
-      deliverables: snapshotDeliverables(pkg),
-    },
+    packageSnapshot: buildPackageSnapshot(pkg),
     paymentType: input.paymentType,
     status,
     respondByAt: new Date(now.getTime() + RESPONSE_WINDOW_MS),

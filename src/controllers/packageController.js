@@ -3,6 +3,7 @@ import Vendor from "../models/Vendor.js";
 import { getModelForVendor } from "../utils/modelRegistry.js";
 import { upgradeLegacyDurationKeys } from "../utils/legacyDurationKeys.js";
 import { generateISTId } from "../utils/idGenerator.js";
+import { escapeRegex } from "../utils/escapeRegex.js";
 import { EDITABLE_PACKAGE_COMMERCIAL_KEYS } from "../models/schemas/commercialSchemas.js";
 import {
   contextFromPackage,
@@ -12,7 +13,18 @@ import {
 import {
   buildGroupFilter,
   buildGroupFilterFromPackageId,
+  normalizeGroupId,
 } from "../utils/packageGroup.js";
+import {
+  VariantError,
+  sendVariantError,
+  validateVariantName,
+  withinGroup,
+  assertVariantNameAvailable,
+  assertCanJoinGroup,
+  buildDuplicate,
+  createVariantFromSource,
+} from "../services/packageVariantService.js";
 import {
   submitGroup,
   goLiveGroup,
@@ -134,17 +146,30 @@ export const initializePackage = async (req, res) => {
     // tied to its siblings by a shared packageGroupId.
     const resolvedName =
       packageName && packageName.trim() ? packageName.trim() : "Untitled Package";
+    // The first variant of a package has historically defaulted to "Premium"
+    // (the schema default, which the vendor app relies on). It is only a
+    // display name — nothing downstream keys on it.
     const resolvedVariant =
-      variantType && variantType.trim() ? variantType.trim() : "Premium";
+      typeof variantType === "string" && variantType.trim()
+        ? validateVariantName(variantType)
+        : "Premium";
 
     // The client sends the group id it got back from the first variant so the
     // rest join that group. Reject a malformed one rather than quietly minting a
     // fresh id, which would split the group without any visible error.
-    const hasClientGroupId =
-      packageGroupId !== undefined && packageGroupId !== null && String(packageGroupId).trim() !== "";
-    const resolvedGroupId = hasClientGroupId
-      ? String(packageGroupId).trim()
+    const hasClientGroupId = normalizeGroupId(packageGroupId) !== null;
+    let resolvedGroupId = hasClientGroupId
+      ? normalizeGroupId(packageGroupId)
       : generateISTId("PKG_GRP");
+
+    // Joining an existing package: it must be this vendor's, of this vendor
+    // type. Without this a client could file a variant into any other
+    // vendor's package just by sending its group id.
+    const groupFilter = hasClientGroupId ? await buildGroupFilter(resolvedGroupId) : null;
+    if (groupFilter) {
+      const anchor = await assertCanJoinGroup(groupFilter, { vendorId, vendorType });
+      if (anchor?.packageGroupId) resolvedGroupId = normalizeGroupId(anchor.packageGroupId);
+    }
 
     // `newGroup: true` is the current app starting a brand-new package: its
     // first variant has no group yet. Nothing may be reused for it — matching on
@@ -162,11 +187,12 @@ export const initializePackage = async (req, res) => {
       ? null
       : await Model.findOne(
         hasClientGroupId
-          ? {
-            packageGroupId: resolvedGroupId,
+          ? withinGroup(groupFilter, {
             packageStatus: "Draft",
-            variantType: resolvedVariant,
-          }
+            // Same match as the duplicate-name rule: a retry sending
+            // "premium" reuses the "Premium" draft rather than hitting a 409.
+            variantType: { $regex: `^\\s*${escapeRegex(resolvedVariant)}\\s*$`, $options: "i" },
+          })
           : {
             vendorId: vendorId,
             packageStatus: "Draft",
@@ -179,9 +205,12 @@ export const initializePackage = async (req, res) => {
         status: "SUCCESS",
         message: "Existing draft package retrieved",
         packageId: existingDraft._id,
-        packageGroupId: existingDraft.packageGroupId,
+        packageGroupId: normalizeGroupId(existingDraft.packageGroupId),
       });
     }
+
+    // Two variants with the same name are indistinguishable to customers.
+    if (groupFilter) await assertVariantNameAvailable(groupFilter, resolvedVariant);
 
     const newPackage = new Model({
       vendorId: vendorId,
@@ -204,6 +233,7 @@ export const initializePackage = async (req, res) => {
       packageGroupId: newPackage.packageGroupId,
     });
   } catch (error) {
+    if (error instanceof VariantError) return sendVariantError(res, error);
     console.error("Initialize Package Error:", error);
     return res.status(500).json({
       status: "ERROR",
@@ -405,6 +435,24 @@ export const updatePackage = async (req, res) => {
       return res.status(404).json({ status: "FAILED", message: "Package not found" });
     }
 
+    // Rename: only the display name changes — _id and packageGroupId stay, so
+    // carts, checkout lines and bookings that reference this variant are
+    // untouched, and bookings keep the name frozen in their packageSnapshot.
+    if (updates.variantType !== undefined) {
+      updates.variantType = validateVariantName(updates.variantType);
+    }
+    // A rename, or a restore out of Deleted, must not leave two live variants
+    // of the package sharing a name.
+    const restoring = updates.packageStatus === "Draft" && basePkg.packageStatus === "Deleted";
+    if (updates.variantType !== undefined || restoring) {
+      const groupFilter = await buildGroupFilterFromPackageId(packageId);
+      await assertVariantNameAvailable(
+        groupFilter,
+        updates.variantType ?? basePkg.variantType,
+        { excludeId: basePkg._id }
+      );
+    }
+
     // Submitting is a whole-group decision, so a variant id resolves to its
     // group here exactly as it does in submitPackage.
     if (updates.packageStatus === SUBMIT_STATUS && Object.keys(updates).length === 1) {
@@ -438,6 +486,7 @@ export const updatePackage = async (req, res) => {
       package: updatedPackage,
     });
   } catch (error) {
+    if (error instanceof VariantError) return sendVariantError(res, error);
     return res.status(500).json({ status: "ERROR", message: "Failed to update package", error: error.message });
   }
 };
@@ -617,6 +666,24 @@ export const updatePackageGroup = async (req, res) => {
     // Soft delete and restore are a status change across the whole group.
     if (packageStatus !== undefined) {
       set.packageStatus = packageStatus;
+    }
+
+    // Restoring brings soft-deleted variants back; refuse if that would leave
+    // two of them sharing a name (one was recreated after the other was deleted).
+    if (packageStatus === "Draft") {
+      const docs = await Package.find(groupFilter).select("variantType").lean();
+      const seen = new Map();
+      for (const doc of docs) {
+        const key = String(doc.variantType ?? "").trim().toLowerCase();
+        if (seen.has(key)) {
+          return res.status(409).json({
+            status: "FAILED",
+            message: `Restoring would leave two variants named "${doc.variantType}" — rename one first`,
+            conflictingVariantIds: [seen.get(key), doc._id],
+          });
+        }
+        seen.set(key, doc._id);
+      }
     }
 
     const update = {};
@@ -890,44 +957,7 @@ export const deletePackage = async (req, res) => {
   }
 };
 
-/**
- * Recursively deletes every `_id` in a lean document so a duplicate gets fresh
- * ones. Mutates in place.
- */
-const stripIds = (node) => {
-  if (Array.isArray(node)) {
-    node.forEach(stripIds);
-  } else if (node && typeof node === "object" && !(node instanceof Date)) {
-    delete node._id;
-    Object.values(node).forEach(stripIds);
-  }
-  return node;
-};
-
 const copyName = (name) => `${name || "Untitled Package"} (Copy)`;
-
-/**
- * Lean document → unsaved copy: fresh subdocument ids, no timestamps, back to
- * Draft. `completedSteps` is kept on purpose — the copy holds all of the
- * source's data, so wiping its progress would show a finished package as an
- * empty draft.
- */
-const buildDuplicate = (leanPkg, { packageGroupId, variantType, packageName }) => {
-  const copy = stripIds(leanPkg);
-  delete copy.createdAt;
-  delete copy.updatedAt;
-  delete copy.__v;
-
-  copy.packageGroupId = packageGroupId;
-  copy.packageStatus = "Draft";
-  if (variantType) copy.variantType = variantType;
-
-  if (!copy.step1_eventAndCrew) copy.step1_eventAndCrew = {};
-  if (packageName !== undefined) {
-    copy.step1_eventAndCrew.packageName = packageName;
-  }
-  return copy;
-};
 
 /**
  * @desc Duplicate a package — every variant of it.
@@ -947,8 +977,10 @@ export const duplicatePackage = async (req, res) => {
 
     // Documents predating packageGroupId have no siblings to find — copy the
     // one document rather than failing the whole request.
+    // buildGroupFilter, not a raw { packageGroupId } match: on a legacy
+    // ObjectId group the raw match found nothing and variants[0] threw.
     const variants = originalPkg.packageGroupId
-      ? await Package.find({ packageGroupId: originalPkg.packageGroupId })
+      ? await Package.find(await buildGroupFilter(originalPkg.packageGroupId))
           .sort({ createdAt: 1 })
           .lean()
       : [originalPkg];
@@ -993,55 +1025,30 @@ export const duplicatePackage = async (req, res) => {
 export const duplicateVariant = async (req, res) => {
   try {
     const { packageId } = req.params;
-    const { variantType } = req.body;
-
-    if (typeof variantType !== "string" || !variantType.trim()) {
-      return res.status(400).json({
-        status: "FAILED",
-        message: "variantType must be a non-empty string",
-      });
-    }
-    const newVariant = variantType.trim();
+    const newVariant = validateVariantName(req.body?.variantType);
 
     const source = await Package.findById(packageId).lean();
     if (!source) {
       return res.status(404).json({ status: "FAILED", message: "Package not found" });
     }
 
-    // Backfill documents predating packageGroupId, so the pair stays one package.
-    let groupId = source.packageGroupId;
-    if (!groupId) {
-      groupId = generateISTId("PKG_GRP");
-      await Package.updateOne({ _id: source._id }, { $set: { packageGroupId: groupId } });
-    }
+    // Legacy-safe and case-insensitive: "premium" clashes with "Premium".
+    const groupFilter = source.packageGroupId
+      ? await buildGroupFilter(source.packageGroupId)
+      : { _id: source._id };
+    await assertVariantNameAvailable(groupFilter, newVariant);
 
-    // Two variants with the same name are indistinguishable to the client.
-    const clash = await Package.findOne({
-      packageGroupId: groupId,
-      variantType: newVariant,
-      packageStatus: { $ne: "Deleted" },
-    }).select("_id");
-    if (clash) {
-      return res.status(409).json({
-        status: "FAILED",
-        message: `Variant "${newVariant}" already exists in this package`,
-      });
-    }
-
-    const Model = getModelForVendor(source.vendorType);
-    const duplicatedVariant = new Model(
-      buildDuplicate(source, { packageGroupId: groupId, variantType: newVariant })
-    );
-    await duplicatedVariant.save();
+    const duplicatedVariant = await createVariantFromSource(source, newVariant);
 
     return res.status(201).json({
       status: "SUCCESS",
       message: "Variant duplicated",
       packageId: duplicatedVariant._id,
-      packageGroupId: groupId,
+      packageGroupId: duplicatedVariant.packageGroupId,
       variantType: duplicatedVariant.variantType,
     });
   } catch (error) {
+    if (error instanceof VariantError) return sendVariantError(res, error);
     return res.status(500).json({
       status: "ERROR",
       message: "Failed to duplicate variant",

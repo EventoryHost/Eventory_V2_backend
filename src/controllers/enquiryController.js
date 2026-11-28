@@ -13,9 +13,8 @@ import {
   notifyVendor,
   resolveVendorActions,
 } from "../services/vendorNotificationService.js";
-import { snapshotDeliverables } from "../utils/packageDeliverables.js";
-import { packageCoverImage } from "../utils/packageCoverImage.js";
-import { getEffectivePackagePrice } from "../utils/packagePrice.js";
+import { buildPackageSnapshot, packageGroupIdOf } from "../utils/packageSnapshot.js";
+import { isSameVendor } from "../services/packageVariantService.js";
 import {
   applyPricingBreakdown,
   withPricingBreakdown,
@@ -114,17 +113,7 @@ const normaliseAttachments = (attachments) => {
 };
 
 /** Freeze a package onto the enquiry the same way a booking freezes it. */
-const snapshotPackage = (pkg) => ({
-  name: pkg.step1_eventAndCrew?.packageName || "Untitled Package",
-  // getEffectivePackagePrice — see that util's comment.
-  price: getEffectivePackagePrice(pkg),
-  image: packageCoverImage(pkg),
-  vendorType: pkg.vendorType || null,
-  variantType: pkg.variantType || "Premium",
-  gstRatePercent: pkg.step3_policiesAndCharges?.gstRatePercent ?? null,
-  gstInclusive: pkg.step3_policiesAndCharges?.gstInclusive ?? false,
-  deliverables: snapshotDeliverables(pkg),
-});
+const snapshotPackage = buildPackageSnapshot;
 
 /**
  * Shape an enquiry for the wire: the derived pricing breakdown, plus the
@@ -171,6 +160,9 @@ export const createEnquiry = async (req, res) => {
     if (req.body.packageId) {
       pkg = await Package.findById(req.body.packageId);
       if (!pkg) return notFound(res, "Package not found");
+      if (!(await isSameVendor(pkg.vendorId, vendorId))) {
+        return res.status(400).json({ status: "FAILED", message: "That package belongs to a different vendor" });
+      }
     }
 
     const enquiry = new Enquiry({
@@ -620,13 +612,19 @@ export const convertEnquiryToBooking = async (req, res) => {
 
     const pkg = await Package.findById(packageId);
     if (!pkg) return notFound(res, "Package not found");
+    if (!(await isSameVendor(pkg.vendorId, enquiry.vendorId))) {
+      return res.status(400).json({ status: "FAILED", message: "That package belongs to a different vendor" });
+    }
 
-    // The enquiry's own snapshot is the one the customer agreed to; re-snapshot
-    // only when the enquiry never named a package.
+    // The enquiry's own snapshot is the one the customer agreed to — but only
+    // for the variant the enquiry was about. Converting onto a different
+    // variant re-snapshots it, otherwise the booking would point at one
+    // variant while describing another.
+    const sameVariantAsEnquiry =
+      enquiry.packageId && String(enquiry.packageId) === String(pkg._id);
+    const enquirySnapshot = enquiry.packageSnapshot?.toObject?.() ?? enquiry.packageSnapshot;
     const packageSnapshot =
-      enquiry.packageSnapshot?.toObject?.() ??
-      enquiry.packageSnapshot ??
-      snapshotPackage(pkg);
+      sameVariantAsEnquiry && enquirySnapshot ? enquirySnapshot : snapshotPackage(pkg);
 
     // Claim the enquiry before creating anything, so a double tap (or two
     // devices) cannot turn one enquiry into two bookings: only the request
@@ -648,6 +646,7 @@ export const convertEnquiryToBooking = async (req, res) => {
       bookingId: generateISTId("EVT"),
       vendorId: enquiry.vendorId,
       packageId: pkg._id,
+      packageGroupId: packageGroupIdOf(pkg),
       customer: enquiry.customer,
       eventType: enquiry.eventType,
       eventDate: enquiry.eventDate,

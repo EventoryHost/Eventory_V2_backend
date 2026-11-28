@@ -10,7 +10,17 @@ import {
 import {
   buildGroupFilter,
   buildGroupFilterFromPackageId,
+  normalizeGroupId,
 } from "../utils/packageGroup.js";
+import {
+  VariantError,
+  sendVariantError,
+  validateVariantName,
+  withinGroup,
+  assertVariantNameAvailable,
+  isSameVendor,
+  createVariantFromSource,
+} from "../services/packageVariantService.js";
 import {
   approveGroup,
   getGroupAction,
@@ -19,6 +29,8 @@ import {
   raiseActionGroup,
   rejectGroup,
   goLiveGroup,
+  pauseGroup,
+  resumeGroup,
   ReviewTransitionError,
 } from "../services/packageReviewService.js";
 import { escapeRegex } from "../utils/escapeRegex.js";
@@ -578,6 +590,94 @@ export const getPackageGroup = async (req, res) => {
   }
 };
 
+/**
+ * Admin library, paginated by LOGICAL PACKAGE rather than by document.
+ * Paginating documents split a package's variants across pages; here a page
+ * holds N whole packages, and each lists every one of its variants — also the
+ * ones that don't match the filters (a package matches when any variant does).
+ */
+const sendGroupedPackages = async (res, query, { page, limit }) => {
+  const pageN = Math.max(1, parseInt(page) || 1);
+  const limitN = Math.min(100, Math.max(1, parseInt(limit) || 10));
+  const groupKey = { $toString: { $ifNull: ["$packageGroupId", "$_id"] } };
+
+  const [facet] = await Package.aggregate([
+    { $match: query },
+    { $group: { _id: groupKey, lastUpdated: { $max: "$updatedAt" } } },
+    { $sort: { lastUpdated: -1, _id: 1 } },
+    {
+      $facet: {
+        page: [{ $skip: (pageN - 1) * limitN }, { $limit: limitN }],
+        total: [{ $count: "n" }],
+      },
+    },
+  ]);
+  const groupIds = facet.page.map((g) => g._id);
+  const total = facet.total[0]?.n ?? 0;
+
+  // aggregate() does not cast, so legacy ObjectId group ids (and pre-group
+  // documents, keyed by their own _id) are matched in both BSON forms.
+  const objectIds = groupIds
+    .filter((id) => mongoose.isValidObjectId(id) && /^[0-9a-f]{24}$/i.test(id))
+    .map((id) => new mongoose.Types.ObjectId(id));
+  const docs = groupIds.length
+    ? await Package.aggregate([
+        {
+          $match: {
+            $or: [
+              { packageGroupId: { $in: [...groupIds, ...objectIds] } },
+              { _id: { $in: objectIds }, packageGroupId: { $in: [null] } },
+            ],
+          },
+        },
+        { $sort: { createdAt: 1, _id: 1 } },
+      ])
+    : [];
+
+  const vendorIds = [...new Set(docs.map((p) => String(p.vendorId || "")).filter(Boolean))];
+  const vendorObjectIds = vendorIds.filter((v) => mongoose.isValidObjectId(v));
+  const vendors = await Vendor.find({
+    $or: [{ id: { $in: vendorIds } }, ...(vendorObjectIds.length ? [{ _id: { $in: vendorObjectIds } }] : [])],
+  })
+    .select("id businessName pocName isIndividual")
+    .lean();
+  const vendorMap = {};
+  vendors.forEach((v) => {
+    vendorMap[v.id] = v;
+    vendorMap[String(v._id)] = v;
+  });
+
+  const byGroup = new Map(groupIds.map((id) => [id, []]));
+  for (const doc of docs) {
+    const key = normalizeGroupId(doc.packageGroupId) ?? String(doc._id);
+    byGroup.get(key)?.push({ ...doc, vendorId: vendorMap[String(doc.vendorId || "")] || doc.vendorId });
+  }
+
+  const data = groupIds.map((id) => {
+    const variants = byGroup.get(id) || [];
+    const anchor = variants[0] || {};
+    const vendorRefs = new Set(variants.map((v) => String(v.vendorId?.id ?? v.vendorId ?? "")));
+    return {
+      packageGroupId: id,
+      packageName: anchor.step1_eventAndCrew?.packageName ?? null,
+      vendorType: anchor.vendorType ?? null,
+      vendorId: anchor.vendorId ?? null,
+      variantCount: variants.length,
+      liveVariantCount: variants.filter((v) => v.packageStatus === "Live").length,
+      // Flags data that needs the migration's manual-review list, so the
+      // admin sees it rather than a silently merged package.
+      integrityWarnings: vendorRefs.size > 1 ? ["VARIANTS_HAVE_DIFFERENT_VENDORS"] : [],
+      variants,
+    };
+  });
+
+  return res.status(200).json({
+    success: true,
+    data,
+    pagination: { total, page: pageN, pages: Math.ceil(total / limitN), groupedBy: "package" },
+  });
+};
+
 // GET /api/admin/packages/all
 export const getAllPackages = async (req, res) => {
   try {
@@ -594,6 +694,10 @@ export const getAllPackages = async (req, res) => {
       query["commercial.publicationOutcome"] = { $in: ["QUOTE_ONLY", "PRICE_REVIEW_REQUIRED"] };
     } else if (commercialOutcome) {
       query["commercial.publicationOutcome"] = commercialOutcome;
+    }
+
+    if (req.query.groupBy === "package") {
+      return sendGroupedPackages(res, query, { page, limit });
     }
 
     // Admin reads include the (select:false) commercial block.
@@ -676,6 +780,16 @@ export const updatePackageStatus = async (req, res) => {
       });
     }
 
+    // Bringing a soft-deleted variant back must not leave two live variants
+    // of the package sharing a name.
+    if (packageStatus !== "Deleted") {
+      const current = await Package.findById(req.params.packageId).select("packageStatus variantType").lean();
+      if (current?.packageStatus === "Deleted") {
+        const groupFilter = await buildGroupFilterFromPackageId(req.params.packageId);
+        await assertVariantNameAvailable(groupFilter, current.variantType, { excludeId: current._id });
+      }
+    }
+
     const event = STATUS_WRITE_EVENT[packageStatus];
     const update = { $set: { packageStatus } };
     if (event) {
@@ -689,9 +803,125 @@ export const updatePackageStatus = async (req, res) => {
 
     res.status(200).json({ success: true, data: pkg });
   } catch (error) {
+    if (error instanceof VariantError) return sendVariantError(res, error, "success");
     res.status(500).json({ success: false, message: error.message });
   }
 };
+
+// ─── Variant management ─────────────────────────────────────────────────────
+//
+// A package is every document sharing a packageGroupId; each variant keeps its
+// own _id. These endpoints act on ONE variant (or add one to a group) and never
+// touch its siblings. Bookings are unaffected by any of them: a booking holds
+// the variant's _id plus an immutable packageSnapshot taken when it was booked.
+
+/**
+ * POST /api/admin/packages/group/:packageGroupId/variants
+ * Body: { variantType, sourceVariantId?, by? }
+ * Adds a variant to an existing package by copying one of its variants
+ * (sourceVariantId, else the oldest live one). The new variant reuses the
+ * group's packageGroupId, vendorId and vendorType, gets a new _id, and starts
+ * as a Draft — it goes through review before customers can see it.
+ */
+export const addVariant = async (req, res) => {
+  try {
+    const name = validateVariantName(req.body?.variantType);
+    const groupFilter = await buildGroupFilter(req.params.packageGroupId);
+
+    const { sourceVariantId } = req.body || {};
+    if (sourceVariantId !== undefined && !mongoose.isValidObjectId(sourceVariantId)) {
+      return res.status(400).json({ success: false, message: "Invalid sourceVariantId" });
+    }
+    const source = sourceVariantId
+      ? await Package.findOne(withinGroup(groupFilter, { _id: sourceVariantId })).lean()
+      : (await Package.findOne(withinGroup(groupFilter, { packageStatus: { $ne: "Deleted" } }))
+          .sort({ createdAt: 1, _id: 1 })
+          .lean()) ||
+        (await Package.findOne(groupFilter).sort({ createdAt: 1, _id: 1 }).lean());
+    if (!source) {
+      return res.status(404).json({
+        success: false,
+        message: sourceVariantId ? "That variant is not part of this package" : "Package group not found",
+      });
+    }
+
+    await assertVariantNameAvailable(groupFilter, name);
+    // A new variant starts with its own clean review state (no inherited
+    // EM action, submission count or audit rows from the source).
+    const variant = await createVariantFromSource(source, name, { resetReview: true });
+
+    res.status(201).json({
+      success: true,
+      data: {
+        packageId: variant._id,
+        packageGroupId: variant.packageGroupId,
+        vendorId: variant.vendorId,
+        variantType: variant.variantType,
+        packageStatus: variant.packageStatus,
+      },
+    });
+  } catch (error) {
+    if (error instanceof VariantError) return sendVariantError(res, error, "success");
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+/**
+ * PUT /api/admin/packages/:packageId/variant-name
+ * Body: { variantType }
+ * Renames one variant. Only the display name changes: _id and packageGroupId
+ * stay, and existing bookings keep the name frozen in their packageSnapshot.
+ * Unlike the vendor rename, allowed in any review state (admin correction).
+ */
+export const renameVariant = async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.packageId)) {
+      return res.status(400).json({ success: false, message: "Invalid packageId" });
+    }
+    const name = validateVariantName(req.body?.variantType);
+    const groupFilter = await buildGroupFilterFromPackageId(req.params.packageId);
+    if (!groupFilter) return res.status(404).json({ success: false, message: "Package not found" });
+
+    await assertVariantNameAvailable(groupFilter, name, { excludeId: req.params.packageId });
+    const pkg = await Package.findByIdAndUpdate(
+      req.params.packageId,
+      { $set: { variantType: name } },
+      { new: true, runValidators: true }
+    )
+      .select("_id packageGroupId variantType packageStatus vendorId")
+      .lean();
+
+    res.status(200).json({ success: true, data: pkg });
+  } catch (error) {
+    if (error instanceof VariantError) return sendVariantError(res, error, "success");
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+const variantVisibilityHandler = (run, verb) => async (req, res) => {
+  try {
+    if (!mongoose.isValidObjectId(req.params.packageId)) {
+      return res.status(400).json({ success: false, message: "Invalid packageId" });
+    }
+    // A single-document filter: only this variant moves, never its siblings.
+    const result = await run({ _id: new mongoose.Types.ObjectId(req.params.packageId) }, {
+      by: req.body?.by || "Admin",
+    });
+    res.status(200).json({ success: true, message: `Variant ${verb}`, packageStatus: result.to });
+  } catch (error) {
+    sendReviewError(res, error, `Failed to ${verb === "deactivated" ? "deactivate" : "activate"} variant`);
+  }
+};
+
+/**
+ * PUT /api/admin/packages/:packageId/deactivate — Live → Paused, this variant
+ * only. It leaves the marketplace (and the PDP variant picker) but keeps its
+ * approval; open carts/checkouts holding it are refused at the next quote.
+ */
+export const deactivateVariant = variantVisibilityHandler(pauseGroup, "deactivated");
+
+/** PUT /api/admin/packages/:packageId/activate — Paused → Live, this variant only. */
+export const activateVariant = variantVisibilityHandler(resumeGroup, "activated");
 
 
 
