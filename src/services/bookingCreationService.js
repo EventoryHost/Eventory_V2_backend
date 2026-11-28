@@ -5,6 +5,7 @@ import { round2 } from "../utils/money.js";
 import { applyPricingBreakdown } from "../utils/pricingBreakdown.js";
 import { recordVendorMilestoneDue } from "./vendorPayoutService.js";
 import { contextFromDeal, notifyVendor } from "./vendorNotificationService.js";
+import { sendMetaPurchaseEvent } from "./metaCapiService.js";
 
 /**
  * Turns a paid CheckoutSession into real Booking documents — Phase 4 Step
@@ -127,6 +128,10 @@ export async function createBookingsFromCheckoutSession(session, payment, option
   const { assumeFullyPaid = false } = options;
   const quoteLines = session.lockedQuote?.lines || [];
   const createdBookingIds = [];
+  // For the server-side Meta Purchase sent after the loop: the same grandTotal sum
+  // the /booking-success page reports (totalAmount + convenienceFee, per booking).
+  let purchaseValue = 0;
+  const purchasePackageIds = [];
 
   for (const line of session.lines) {
     const quoteLine = quoteLines.find((q) => String(q.lineId) === String(line._id));
@@ -306,6 +311,8 @@ export async function createBookingsFromCheckoutSession(session, payment, option
     notifyIfDoubleBooked(booking);
 
     createdBookingIds.push(booking._id);
+    purchaseValue += round2((booking.totalAmount || 0) + (booking.convenienceFee || 0));
+    if (line.packageId) purchasePackageIds.push(String(line.packageId));
 
     // NO slot reservation here (removed 2026-09-25). This used to call
     // reserveSlot() the instant payment landed, which marked the package's
@@ -331,6 +338,27 @@ export async function createBookingsFromCheckoutSession(session, payment, option
   // bookings sets this, not just the real-Cashfree one.
   payment.createdBookingIds = createdBookingIds;
   await payment.save();
+
+  // Server-side Meta Conversions API Purchase (de-duplicated against the browser
+  // Pixel by event_id). This is the ONLY place it is sent: every way bookings get
+  // created (Cashfree webhook, the status-poll recheck, free checkout and offline
+  // confirmation) funnels through this function, and each caller only reaches it
+  // when Payment.bookingCreated is still false, so one Payment can never send it
+  // twice. Fire-and-forget — it never throws and never delays or fails booking creation.
+  if (createdBookingIds.length > 0) {
+    void sendMetaPurchaseEvent({
+      bookingIds: createdBookingIds,
+      value: round2(purchaseValue),
+      customer: {
+        id: session.customerId,
+        email: session.contactDetails?.email,
+        phone: session.contactDetails?.phone,
+      },
+      tracking: session.tracking || {},
+      eventSourceUrl: process.env.FRONTEND_URL ? `${process.env.FRONTEND_URL.replace(/\/$/, "")}/booking-success` : undefined,
+      contentIds: purchasePackageIds,
+    });
+  }
 
   return createdBookingIds;
 }

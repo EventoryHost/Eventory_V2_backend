@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { SUPPORT_CHAT_TOPICS } from "../models/SupportChat.js";
+import { PROFILE_FIELDS } from "../services/supportFlows/businessProfileHelpFlows.js";
+import { DOCUMENT_FIELDS } from "../services/supportFlows/documentHelpFlows.js";
 
 const label = z.string().trim().max(200);
 
@@ -42,10 +44,12 @@ const chatContext = z
     stepName: label.nullish(),
     variantName: label.nullish(),
     booking: bookingFacts.nullish(),
+    profileField: z.enum(PROFILE_FIELDS).nullish(),
+    documentField: z.enum(DOCUMENT_FIELDS).nullish(),
   })
   .default({});
 
-/** Vendor opens Help on a Package Setup step, the publish screen or a booking. */
+/** Vendor opens Help on a Package Setup step, the publish screen, a booking, a Business profile screen or a personal document screen. */
 export const openSupportChatSchema = z
   .object({
     topic: z.enum(SUPPORT_CHAT_TOPICS).default("package_setup"),
@@ -61,6 +65,14 @@ export const openSupportChatSchema = z
   .refine((body) => body.topic !== "booking" || (body.bookingId != null && body.context.booking != null), {
     message: "bookingId and the booking details are required for booking help",
     path: ["bookingId"],
+  })
+  .refine((body) => body.topic !== "business_profile" || body.context.profileField != null, {
+    message: "context.profileField is required for business profile help",
+    path: ["context", "profileField"],
+  })
+  .refine((body) => body.topic !== "personal_documents" || body.context.documentField != null, {
+    message: "context.documentField is required for personal document help",
+    path: ["context", "documentField"],
   });
 
 /** The vendor tapped one of the quick replies the server offered. */
@@ -100,11 +112,28 @@ export const emResolveSchema = z.object({
   emName: z.string().trim().max(60).optional(),
 });
 
+/**
+ * Admin panel assigns a handed-over chat to an Event Manager (V1 em_id +
+ * name, as EmAssignDropdown sends them). An empty emId removes the
+ * assignment, like the booking / vendor / package assign-em routes.
+ */
+export const emAssignSchema = z
+  .object({
+    emId: z.string().trim().max(64).default(""),
+    emName: z.string().trim().max(60).default(""),
+    // Who made the change in the admin panel, for the record.
+    assignedBy: z.string().trim().max(100).optional(),
+  })
+  .refine((b) => !b.emId || b.emName.length > 0, { message: "emName is required with emId", path: ["emName"] });
+
+// No "automated": a chat only the bot handled is not the Event Manager side's.
 export const adminSupportChatListSchema = z.object({
-  status: z.enum(["automated", "call_requested", "waiting_for_em", "with_em", "resolved"]).optional(),
+  status: z.enum(["call_requested", "waiting_for_em", "with_em", "resolved"]).optional(),
   topic: z.enum(SUPPORT_CHAT_TOPICS).optional(),
   ticket: z.string().trim().max(20).optional(),
   emId: z.string().trim().max(64).optional(),
+  // An em_id, or "unassigned".
+  assignedEmId: z.string().trim().max(64).optional(),
   page: z.coerce.number().int().min(1).default(1),
   limit: z.coerce.number().int().min(1).max(100).default(20),
 });

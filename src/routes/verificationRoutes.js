@@ -256,7 +256,7 @@ verificationRoutes.get("/digilocker/document/:verificationId", getDigilockerDocu
  *                 description: Optional unique ID for the request
  *               threshold:
  *                 type: string
- *                 description: Optional threshold between 0 and 1 (default 0.75)
+ *                 description: Optional threshold between 0 and 1 (default 0.70)
  *     parameters:
  *       - in: query
  *         name: vendor_id

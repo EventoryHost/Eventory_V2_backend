@@ -156,8 +156,8 @@ router.patch("/session/:sessionId/contact", validateRequest(updateContactDetails
  *     description: |
  *       One set for the whole order (not per line) — told to vendors so they
  *       can plan arrival/setup. Deliberately separate from each line's booked
- *       timeSlot. Only fields sent are touched; when both startTime and
- *       endTime end up set, endTime must be after startTime.
+ *       timeSlot. Only fields sent are touched; an endTime earlier than startTime
+ *       means an overnight event (ends next day); identical times are rejected.
  *     tags: [Customer Checkout]
  *     parameters:
  *       - in: path

@@ -1,7 +1,7 @@
 import { Server } from "socket.io";
 import { vendorIdFromToken } from "../middlewares/vendorAuth.js";
 import SupportChat from "../models/SupportChat.js";
-import { chatRoom, QUEUE_ROOM } from "../services/supportChatService.js";
+import { chatRoom, HANDED_OVER_FILTER, QUEUE_ROOM } from "../services/supportChatService.js";
 
 /**
  * Phase 6 Step 27ish — Anonymous Chat / lead-gen chatbot. Real-time layer,
@@ -75,7 +75,7 @@ export function initSocket(httpServer) {
  * the rooms and events). The vendor app connects with
  * `auth: { token: <vendor JWT> }` and may only join its own chats. The admin
  * panel connects with `auth: { role: "em" }` — the same access model as its
- * /api/admin routes — and may join any chat and the waiting-chats queue.
+ * /api/admin routes — and may join any handed-over chat and the waiting-chats queue.
  */
 function registerSupportChat(socket) {
   const auth = socket.handshake.auth ?? {};
@@ -90,6 +90,9 @@ function registerSupportChat(socket) {
       if (!isEm) {
         if (!vendorId) return reply(ack, { ok: false, error: "Authentication required" });
         if (!(await SupportChat.exists({ chatId: id, vendorId }))) return reply(ack, { ok: false, error: "Chat not found" });
+      } else if (!(await SupportChat.exists({ chatId: id, ...HANDED_OVER_FILTER }))) {
+        // The EM side only follows chats the vendor handed to a person.
+        return reply(ack, { ok: false, error: "Chat not found" });
       }
       socket.join(chatRoom(id));
       return reply(ack, { ok: true });

@@ -878,7 +878,7 @@ export const faceMatch = async (req, res) => {
     const secondImage = req.files.second_image[0];
 
     const actualVerificationId = verification_id || `fm_${Date.now()}`;
-    const actualThreshold = threshold || "0.75";
+    const actualThreshold = threshold || "0.70";
 
     const clientId = process.env.CASHFREE_CLIENT_ID;
     const clientSecret = process.env.CASHFREE_CLIENT_SECRET;

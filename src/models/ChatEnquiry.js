@@ -128,6 +128,13 @@ const ChatEnquirySchema = new mongoose.Schema(
     bookingRefs: { type: [String], default: undefined },
     topic: { type: String, default: null },
     assignedEmName: { type: String, default: null },
+    // The Event Manager the ticket is assigned to: the booking's EM when it
+    // is raised from a booking, or whoever the admin panel picks
+    // (PUT /api/admin/help-requests/:id/assign-em). em_id from V1
+    // event_managers; null on old tickets that only have a name.
+    assignedEmId: { type: String, default: null },
+    assignedAt: { type: Date, default: null },
+    assignedBy: { type: String, default: null },
     // "report" = an event-day problem report (GRV ref); else a request.
     kind: { type: String, enum: ["request", "report", null], default: null },
     // Event-day report details: issue key, booking it's about, urgency.
@@ -192,5 +199,6 @@ ChatEnquirySchema.index({ source: 1, customerId: 1, createdAt: -1 });
 ChatEnquirySchema.index({ source: 1, anonId: 1, createdAt: -1 });
 ChatEnquirySchema.index({ conversationId: 1 }, { sparse: true });
 ChatEnquirySchema.index({ ticket: 1 }, { sparse: true });
+ChatEnquirySchema.index({ source: 1, assignedEmId: 1, createdAt: -1 });
 
 export default mongoose.model("ChatEnquiry", ChatEnquirySchema);

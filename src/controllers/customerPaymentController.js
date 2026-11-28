@@ -527,6 +527,22 @@ export const getPaymentStatus = async (req, res) => {
           payment.status = "FAILED";
           payment.failureReason = `Cashfree order status: ${orderStatus}`;
           await payment.save();
+        } else if (orderStatus === "ACTIVE") {
+          // The customer came back from Cashfree but the order is still open:
+          // either a payment is genuinely in flight (UPI collect awaiting
+          // approval), or they closed/cancelled the Cashfree page without
+          // paying. Cashfree never moves an abandoned order off ACTIVE, so
+          // without this the return page polled "pending" until it timed out.
+          // Look at the order's payment attempts: if none is succeeding or
+          // still pending, the customer cancelled.
+          const attemptsResponse = await cashfree.PGOrderFetchPayments(payment.cfOrderId);
+          const attempts = Array.isArray(attemptsResponse?.data) ? attemptsResponse.data : [];
+          const inFlight = attempts.some((a) => ["SUCCESS", "PENDING"].includes(a.payment_status));
+          if (!inFlight) {
+            payment.status = "CANCELLED";
+            payment.failureReason = "Payment was cancelled before it was completed";
+            await payment.save();
+          }
         }
       } catch (cfError) {
         // Don't fail the whole status check just because the live re-check

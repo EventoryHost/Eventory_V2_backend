@@ -23,6 +23,20 @@ const randomSuffix = () => crypto.randomBytes(3).toString("hex");
 export const newChatId = () => `${generateISTId("SC")}-${randomSuffix()}`;
 const newMessageId = () => `${generateISTId("SM")}-${randomSuffix()}`;
 
+/**
+ * Chats the vendor handed to a person: open ones that asked for a call or a
+ * ticket, and closed ones that ever did. A chat only the bot handled — or a
+ * business profile / documents chat restarted into the bot — is not here,
+ * so the Event Manager side never sees it.
+ */
+export const HANDED_OVER_STATUSES = ["call_requested", "waiting_for_em", "with_em"];
+export const HANDED_OVER_FILTER = {
+  $or: [
+    { status: { $in: HANDED_OVER_STATUSES } },
+    { status: "resolved", $or: [{ handedOverAt: { $ne: null } }, { callRequestedAt: { $ne: null } }] },
+  ],
+};
+
 /** "TKT-1001", "TKT-1002"… from this system's own counter. */
 export async function nextTicketNumber() {
   const doc = await mongoose.connection
@@ -54,7 +68,12 @@ export const serializeChat = (c) => ({
   ticketNumber: c.ticketNumber ?? null,
   emId: c.emId ?? null,
   emName: c.emName ?? null,
-  transcript: (c.transcript ?? []).map(({ from, text, at }) => ({ from, text, at })),
+  transcript: (c.transcript ?? []).map(({ from, text, at, tutorialId }) => ({
+    from,
+    text,
+    at,
+    ...(tutorialId ? { tutorialId } : {}),
+  })),
   options: (c.options ?? []).map(({ id, label }) => ({ id, label })),
   context: c.context ?? {},
   handedOverAt: c.handedOverAt ?? null,
@@ -66,9 +85,10 @@ export const serializeChat = (c) => ({
 
 export async function addMessage(
   chatId,
-  { sender, text = "", imageUrls = [], senderId = null, senderName = null, event = null }
+  { sender, text = "", imageUrls = [], senderId = null, senderName = null, event = null, createdAt }
 ) {
   return SupportMessage.create({
+    ...(createdAt ? { createdAt } : {}),
     messageId: newMessageId(),
     chatId,
     sender,

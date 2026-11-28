@@ -2,8 +2,11 @@ import mongoose from "mongoose";
 
 /**
  * A vendor's Help & Support chat with the Event Manager team, opened from a
- * Package Setup step (topic package_setup) or the publish screen
- * (topic publish_package) or a booking (topic booking) in the vendor app.
+ * Package Setup step (topic package_setup), the publish screen
+ * (topic publish_package), a booking (topic booking), a Business profile
+ * setup screen (topic business_profile) or a personal document screen
+ * (topic personal_documents) in the vendor app. A vendor has one chat for each
+ * of the last two; Help on another screen of the same kind restarts it there.
  *
  * Lifecycle (status):
  *   automated       — the server is running the quick-reply flow
@@ -18,13 +21,14 @@ import mongoose from "mongoose";
  * what the app showed when Help was opened (step name, booking facts…).
  */
 export const SUPPORT_CHAT_STATUSES = ["automated", "call_requested", "waiting_for_em", "with_em", "resolved"];
-export const SUPPORT_CHAT_TOPICS = ["package_setup", "publish_package", "booking"];
+export const SUPPORT_CHAT_TOPICS = ["package_setup", "publish_package", "booking", "business_profile", "personal_documents"];
 
 const TranscriptLineSchema = new mongoose.Schema(
   {
     from: { type: String, enum: ["bot", "vendor"], required: true },
     text: { type: String, required: true },
     at: { type: Date, required: true },
+    tutorialId: { type: String, default: undefined },
   },
   { _id: false }
 );
@@ -49,8 +53,19 @@ const SupportChatSchema = new mongoose.Schema(
     status: { type: String, enum: SUPPORT_CHAT_STATUSES, default: "automated" },
     ticketNumber: { type: String, default: undefined },
 
+    // The EM who joined the chat (join endpoint). Shown to the vendor.
     emId: { type: String, default: null },
     emName: { type: String, default: null },
+
+    // The EM the admin panel assigned the ticket to (assign-em endpoint),
+    // only once the vendor asked for a person (call_requested /
+    // waiting_for_em). Separate from emId/emName above, which say who
+    // actually joined. assignedEmId is the V1 event_managers em_id; the
+    // name is kept as it was then, so a removed EM still reads correctly.
+    assignedEmId: { type: String, default: null },
+    assignedEmName: { type: String, default: null },
+    assignedAt: { type: Date, default: null },
+    assignedBy: { type: String, default: null },
 
     context: { type: mongoose.Schema.Types.Mixed, default: {} },
     transcript: { type: [TranscriptLineSchema], default: [] },
@@ -70,5 +85,6 @@ const SupportChatSchema = new mongoose.Schema(
 SupportChatSchema.index({ vendorId: 1, topic: 1, packageId: 1, step: 1, bookingId: 1, status: 1 });
 SupportChatSchema.index({ status: 1, updatedAt: -1 });
 SupportChatSchema.index({ ticketNumber: 1 }, { unique: true, sparse: true });
+SupportChatSchema.index({ assignedEmId: 1, updatedAt: -1 });
 
 export default mongoose.model("SupportChat", SupportChatSchema);

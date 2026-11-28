@@ -12,6 +12,7 @@ import {
   getPackageSlots,
   getPopularPackages,
   getServiceableCities,
+  suggestLocations,
   getVendorDetail,
   getVendorReviews,
   getVendorsTotalCount,
@@ -154,6 +155,24 @@ router.get("/reviews/featured", publicBrowseLimiter, validateRequest(featuredRev
  *       200: { description: Sorted list of city/district labels }
  */
 router.get("/location/cities", publicBrowseLimiter, getServiceableCities);
+
+/**
+ * @swagger
+ * /api/customer/location/suggest:
+ *   get:
+ *     summary: Locality / pincode suggestions for the PDP event-location box
+ *     description: |
+ *       Public, read-only. Up to 8 localities or pincodes from the serviceable
+ *       Delhi NCR dataset matching `q` (at least 2 characters), each with its
+ *       pincode, so a customer can pick "Karol Bagh, CENTRAL DELHI, 110005"
+ *       without knowing the pincode.
+ *     tags: [Customer Discovery]
+ *     parameters:
+ *       - { in: query, name: q, required: true, schema: { type: string } }
+ *     responses:
+ *       200: { description: Matching suggestions }
+ */
+router.get("/location/suggest", publicBrowseLimiter, suggestLocations);
 
 /**
  * @swagger
