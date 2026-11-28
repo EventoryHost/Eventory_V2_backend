@@ -21,6 +21,11 @@ const ViewedItemSchema = new mongoose.Schema(
     customerId: { type: String, ref: "Customer", required: true, index: true },
     packageId: { type: String, ref: "Package", required: true },
     viewedAt: { type: Date, default: Date.now, index: true },
+    // Distinct visits, not page loads: a repeat open within VIEW_VISIT_GAP_MS
+    // of the last one (customerViewedController.js) doesn't count again.
+    // Feeds the retargeting interest score (retargetingPolicy.js viewWeight).
+    // Rows written before this field existed read as 1.
+    viewCount: { type: Number, default: 1, min: 1 },
   },
   {
     timestamps: true,
