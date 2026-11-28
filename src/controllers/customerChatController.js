@@ -482,7 +482,11 @@ export const createBookingHelpRequest = async (req, res) => {
     }
 
     const first = bookings[0];
-    const emName = bookings.map((x) => x.assignedEmName).find(Boolean) || null;
+    // Name and id from the same booking, so the admin panel's assignment
+    // dropdown shows who it is.
+    const emBooking = bookings.find((x) => x.assignedEmName);
+    const emName = emBooking?.assignedEmName || null;
+    const emId = emBooking?.assignedEmId || null;
     // Event-day problem reports carry their own GRV refs.
     const report = b.report ?? null;
     const ticket = report ? await nextGrievance() : await nextTicket();
@@ -499,6 +503,7 @@ export const createBookingHelpRequest = async (req, res) => {
       bookingRefs: bookings.map((x) => x.bookingId),
       topic: b.topic,
       assignedEmName: emName,
+      assignedEmId: emId,
       eventType: first.eventType || null,
       eventDateRaw: first.eventDate ? new Date(first.eventDate).toDateString() : null,
       city: first.location || null,

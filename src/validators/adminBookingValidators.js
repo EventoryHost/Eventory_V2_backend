@@ -249,4 +249,215 @@ export const adminUpdateBookingSchema = z.object({
   allowConflict: z.boolean().optional(),
 });
 
+// ─── Admin booking operations (adminBookingOpsController.js) ───
+
+const requiredTime = time;
+const reason = z.string().trim().max(1000);
+
+// A customisation line the admin enters or decides. `price` is what the line
+// adds (add / change) or takes off (remove) — stored on the request's note and
+// summed into pricing.itemsAdded / itemsRemoved (requests carry no price).
+const adminCustomizeLineSchema = z.object({
+  setupId: z.string().trim().max(200).optional(),
+  itemId: z.string().trim().max(200).optional(),
+  requestType: z.enum(["change", "add", "remove"]),
+  label: z.string().trim().min(1).max(200),
+  quantity: z.number().min(0).nullable().optional(),
+  type: nullableString(100).optional(),
+  colours: z.array(z.string().trim().max(50)).max(20).optional(),
+  volume: nullableString(50).optional(),
+  status: z.enum(CHANGE_REQUEST_STATUSES).optional(),
+  price: amount.optional(),
+  note: nullableString(400).optional(),
+});
+
+// An add-on: one of the package's own (addOnId set) or a custom one.
+const adminAddOnSchema = z.object({
+  addOnId: nullableString(200).optional(),
+  name: z.string().trim().min(1).max(200),
+  price: amount,
+  quantity: z.number().int().min(1).optional(),
+  category: nullableString(100).optional(),
+  subCategory: nullableString(100).optional(),
+  color: nullableString(50).optional(),
+  image: nullableString(2000).optional(),
+  custom: z.boolean().optional(),
+});
+
+const selectedItemSchema = z.object({
+  groupKey: z.string().trim().min(1).max(200),
+  itemId: nullableString(200).optional(),
+  itemName: z.string().trim().min(1).max(200),
+  price: amount.optional(),
+  isChargeable: z.boolean().optional(),
+});
+
+const adminPricingInputSchema = z.object({
+  basePrice: amount.nullable().optional(),
+  substituteItemsAdded: amount.optional(),
+  additionalCharges: amount.optional(),
+  additionalChargesLabel: z.string().trim().max(100).optional(),
+  discountAmount: amount.optional(),
+  discountLabel: z.string().trim().max(100).optional(),
+  taxRatePct: z.number().min(0).max(100).optional(),
+  taxLabel: z.string().trim().max(50).optional(),
+});
+
+const newMilestoneSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  percentage: z.number().min(0).max(100).nullable().optional(),
+  amount,
+  dueDate: nullableDate.optional(),
+  status: z.enum(MILESTONE_STATUSES).optional(),
+  receivedDate: nullableDate.optional(),
+});
+
+const bookingTargetFields = {
+  vendorId: z.string().trim().min(1).max(100),
+  packageId: objectId,
+};
+
+const eventFields = {
+  eventType: nullableString(100).optional(),
+  eventDate: isoDate,
+  startTime: requiredTime,
+  endTime: requiredTime,
+  eventTiming: eventTimingSchema.optional(),
+  guestRange: guestRangeSchema.optional(),
+  location: nullableString(500).optional(),
+  mapLink: nullableString(2000).optional(),
+};
+
+/** POST /api/admin/bookings — admin books a package for a customer. */
+export const adminCreateBookingSchema = z.object({
+  customer: z.object({
+    name: z.string().trim().min(1, "customer.name is required").max(200),
+    phone: z
+      .string()
+      .trim()
+      .refine((v) => v.replace(/\D/g, "").length >= 10, "customer.phone must be a 10-digit mobile number"),
+    email: nullableString(320).optional(),
+  }),
+  ...bookingTargetFields,
+  ...eventFields,
+  alternateCoordinator: z
+    .object({ name: nullableString(200).optional(), phone: nullableString(30).optional() })
+    .optional(),
+  selectedItems: z.array(selectedItemSchema).max(100).optional(),
+  customizeRequests: z.array(adminCustomizeLineSchema).max(100).optional(),
+  addOns: z.array(adminAddOnSchema).max(100).optional(),
+  pricing: adminPricingInputSchema.optional(),
+  paymentType: z.enum(PAYMENT_TYPES),
+  paymentMilestones: z.array(newMilestoneSchema).max(20).optional(),
+  status: z.enum(["NewBooking", "Confirmed"]).optional(),
+  notes: nullableString(5000).optional(),
+  eventNote: nullableString(5000).optional(),
+  calendarNote: nullableString(5000).optional(),
+  allowConflict: z.boolean().optional(),
+});
+
+/** POST /api/admin/bookings/:id/respond — admin answers the requests, applied directly. */
+export const adminRespondSchema = z.object({
+  decisions: z
+    .array(
+      z.object({
+        id: objectId,
+        kind: z.enum(["customize", "change"]),
+        status: z.enum(["Accepted", "Rejected"]),
+        qty: z.number().min(1).optional(),
+        price: amount.optional(),
+        note: nullableString(400).optional(),
+      })
+    )
+    .max(200)
+    .optional(),
+  newItems: z.array(adminCustomizeLineSchema).max(100).optional(),
+  addOns: z
+    .object({
+      add: z.array(adminAddOnSchema).max(50).optional(),
+      remove: z.array(z.string().trim().min(1).max(200)).max(50).optional(),
+    })
+    .optional(),
+  pricing: adminPricingInputSchema.optional(),
+  confirm: z.boolean().optional(),
+  allowConflict: z.boolean().optional(),
+});
+
+/** PUT /api/admin/bookings/:id/details — date / venue / time change. */
+export const adminChangeDetailsSchema = z.object({
+  eventDate: isoDate.optional(),
+  startTime: requiredTime.optional(),
+  endTime: requiredTime.optional(),
+  eventTiming: eventTimingSchema.optional(),
+  location: nullableString(500).optional(),
+  mapLink: nullableString(2000).optional(),
+  guestRange: guestRangeSchema.optional(),
+  reason: reason.min(1, "reason is required"),
+  allowConflict: z.boolean().optional(),
+});
+
+export const adminDeclineSchema = z.object({ reason: reason.optional() });
+
+export const adminCancelSchema = z.object({
+  cancelledBy: z.enum(["Vendor", "Customer"]),
+  reason: reason.min(1, "reason is required"),
+});
+
+export const adminReassignSchema = z.object({
+  newVendorId: z.string().trim().min(1).max(100),
+  newPackageId: objectId,
+  reason: reason.min(1, "reason is required"),
+  keepDecisions: z.boolean().optional(),
+  allowConflict: z.boolean().optional(),
+});
+
+export const adminCompleteSchema = z.object({ force: z.boolean().optional() });
+
+export const adminEventDayStepSchema = z.object({
+  photos: z.array(z.string().trim().url().max(2000)).max(10).optional(),
+  // When it actually happened, if the admin is back-filling.
+  at: nullableDate.optional(),
+});
+
+export const adminGroundContactSchema = z.object({
+  name: z.string().trim().min(1).max(60),
+  phone: z.string().trim().min(10).max(20),
+});
+
+export const adminDayRequestSchema = z.object({ text: z.string().trim().min(1).max(500) });
+
+export const adminDayRequestUpdateSchema = z
+  .object({
+    message: nullableString(1000).optional(),
+    photos: z.array(z.string().trim().url().max(2000)).max(10).optional(),
+  })
+  .refine((v) => Boolean(v.message) || (v.photos?.length ?? 0) > 0, {
+    message: "Send a message or at least one photo",
+  });
+
+export const adminIssueUpdateSchema = z.object({ status: z.enum(["Open", "Resolved"]) });
+
+// ─── Vendor payouts recorded by the team (adminPayoutController.js) ───
+// Payouts are made offline; these are the payment details stored on the
+// Transaction (amount, transferMode, transferId = UTR / reference, receivedDate).
+export const PAYOUT_MODES = ["neft", "imps", "rtgs", "upi", "cash", "cheque", "other"];
+
+const payoutPaymentFields = {
+  amount: z.number().positive("amount must be more than 0"),
+  transferMode: z.enum(PAYOUT_MODES),
+  transferId: z.string().trim().min(1, "Enter the UTR / payment reference").max(100),
+  paidAt: isoDate.optional(),
+  force: z.boolean().optional(),
+};
+
+/** POST /api/admin/payouts/:transactionId/record — settle a due record. */
+export const adminRecordPayoutSchema = z.object(payoutPaymentFields);
+
+/** POST /api/admin/payouts — a payout for a booking with no due record. */
+export const adminCreatePayoutSchema = z.object({
+  bookingId: z.string().trim().min(1).max(100),
+  milestoneTitle: z.string().trim().max(200).optional(),
+  ...payoutPaymentFields,
+});
+
 export default { adminUpdateBookingSchema };

@@ -31,11 +31,13 @@ import vendorNotificationRoutes from "./vendorNotificationRoutes.js";
 import adminVendorRoutes from "./adminVendorRoutes.js";
 import adminPackageRoutes from "./adminPackageRoutes.js";
 import adminBookingRoutes from "./adminBookingRoutes.js";
+import adminPayoutRoutes from "./adminPayoutRoutes.js";
 import adminTemplateRoutes from "./adminTemplateRoutes.js";
 import adminDashboardRoutes from "./adminDashboardRoutes.js";
 import adminHelpRequestRoutes from "./adminHelpRequestRoutes.js";
 import adminCommercialRoutes from "./adminCommercialRoutes.js";
 import adminSupportChatRoutes from "./adminSupportChatRoutes.js";
+import adminEmReplyTemplateRoutes from "./adminEmReplyTemplateRoutes.js";
 import supportChatRoutes from "./supportChatRoutes.js";
 import { slackEvents, slackInteractions } from "../controllers/slackController.js";
 
@@ -123,11 +125,13 @@ router.use("/ground", groundRoutes);
 router.use("/admin/vendors", adminVendorRoutes);
 router.use("/admin/packages", adminPackageRoutes);
 router.use("/admin/bookings", adminBookingRoutes);
+router.use("/admin/payouts", adminPayoutRoutes);
 router.use("/admin/templates", adminTemplateRoutes);
 router.use("/admin/dashboard", adminDashboardRoutes);
 router.use("/admin/help-requests", adminHelpRequestRoutes);
 router.use("/admin/commercial", adminCommercialRoutes);
 router.use("/admin/support-chats", adminSupportChatRoutes);
+router.use("/admin/em-reply-templates", adminEmReplyTemplateRoutes);
 router.use("/support/chats", supportChatRoutes);
 
 // Slack's Interactivity Request URL ("Mark resolved" on help ticket posts):

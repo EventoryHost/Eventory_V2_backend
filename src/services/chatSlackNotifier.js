@@ -434,6 +434,17 @@ export async function notifyHelpMessage(enquiry, text, { reopened = false } = {}
   await post(`💬 *New message on help request ${enquiry.ticket || enquiry.enquiryId}*${reopened ? " (reopened)" : ""}\n> ${quote}`);
 }
 
+/** @desc The admin panel assigned the ticket to an Event Manager (or cleared it). */
+export async function notifyHelpAssigned(enquiry) {
+  const ref = enquiry.ticket || enquiry.enquiryId;
+  await postToTicket(
+    enquiry,
+    enquiry.assignedEmName
+      ? `👤 *${ref} assigned to ${enquiry.assignedEmName}*${enquiry.assignedBy ? ` by ${enquiry.assignedBy}` : ""} in the admin panel.`
+      : `👤 *${ref} is unassigned*${enquiry.assignedBy ? ` (${enquiry.assignedBy})` : ""}: any Event Manager can pick it up.`
+  );
+}
+
 /** @desc The customer marked their ticket resolved in the help panel. */
 export async function notifyHelpResolvedByCustomer(enquiry) {
   await postToTicket(enquiry, `✅ *${enquiry.ticket || enquiry.enquiryId}: the customer marked this resolved* in the help panel.`);
@@ -457,4 +468,5 @@ export default {
   notifyVendorContact,
   notifyHelpSorted,
   notifyHelpResolvedByCustomer,
+  notifyHelpAssigned,
 };

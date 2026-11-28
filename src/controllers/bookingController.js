@@ -34,7 +34,7 @@ import {
 // ─── Constants ──────────────────────────────────────────────
 
 /** Default vendor response window when the caller does not supply one. */
-const RESPONSE_WINDOW_MS = 24 * 60 * 60 * 1000;
+export const RESPONSE_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 // ─── Helpers ────────────────────────────────────────────────
 // findBooking and the response helpers are exported for the other vendor
@@ -140,7 +140,7 @@ export const revertPackageAvailability = async (packageId, eventDate) =>
  * instalment as a share, so the amounts are resolved against this booking's
  * own total rather than the package's list price.
  */
-const milestonesFromPackage = (pkg, total) => {
+export const milestonesFromPackage = (pkg, total) => {
   const planned = pkg.paymentMilestones?.milestones ?? [];
   if (!planned.length) return [];
 
@@ -193,7 +193,7 @@ const scheduleExtra = (booking, unattributed) => {
   return Math.min(Math.max(0, gap), (booking.convenienceFee || 0) + 100);
 };
 
-const syncTotalReceived = (booking, unattributed = 0) => {
+export const syncTotalReceived = (booking, unattributed = 0) => {
   booking.totalReceived = receivedMilestonesTotal(booking) + unattributed;
 };
 
@@ -202,7 +202,7 @@ const allRequests = (booking) => [
   ...(booking.customizeRequests || []),
 ];
 
-const pendingRequestCount = (booking) =>
+export const pendingRequestCount = (booking) =>
   allRequests(booking).filter((request) => request.status === "Pending").length;
 
 /**
@@ -587,7 +587,7 @@ export const requestPackageChanges = async (req, res) => {
 };
 
 // Title of the milestone added when a repriced booking is already fully paid.
-const REVISED_PRICE_LABEL = "Revised Price Balance";
+export const REVISED_PRICE_LABEL = "Revised Price Balance";
 // Same, for the convenience fee when every instalment is already paid.
 const CONVENIENCE_FEE_LABEL = "Convenience Fee";
 

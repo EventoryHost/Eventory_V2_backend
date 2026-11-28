@@ -1,5 +1,6 @@
 import express from "express";
 import {
+  assignSupportChat,
   getSupportChat,
   joinSupportChat,
   listSupportChats,
@@ -9,6 +10,7 @@ import {
 import { validateRequest } from "../middlewares/validateRequest.js";
 import {
   adminSupportChatListSchema,
+  emAssignSchema,
   emJoinSchema,
   emMessageSchema,
   emResolveSchema,
@@ -25,5 +27,6 @@ router.get("/:chatId", getSupportChat);
 router.post("/:chatId/join", validateRequest(emJoinSchema), joinSupportChat);
 router.post("/:chatId/messages", validateRequest(emMessageSchema), sendEmSupportMessage);
 router.post("/:chatId/resolve", validateRequest(emResolveSchema), resolveSupportChatByEm);
+router.put("/:chatId/assign-em", validateRequest(emAssignSchema), assignSupportChat);
 
 export default router;
